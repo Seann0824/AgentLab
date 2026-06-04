@@ -2,9 +2,8 @@ use std::env;
 use anyhow;
 use dotenvy;
 use reqwest;
-use serde;
 use serde_json;
-
+use futures_util::StreamExt;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -25,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
     .bearer_auth(api_key)
     .json(&serde_json::json!({
         "model": "deepseek-v4-flash",
+        "stream": true,
         "messages": [
             {
                 "role": "user",
@@ -35,10 +35,14 @@ async fn main() -> anyhow::Result<()> {
     .send()
     .await?;
 
-    let status = res.status();
-    let body = res.text().await?;
-    println!("Status: {}", status);
-    println!("Body: {}", body);
+    let mut stream = res.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        let text = String::from_utf8_lossy(&chunk);
+
+        print!("{}", text);
+    }
 
     Ok(())
 }
