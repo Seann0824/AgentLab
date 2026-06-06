@@ -5,7 +5,7 @@ use reqwest;
 use serde_json;
 use futures_util::StreamExt;
 
-use crate::model::ChatMessage;
+use crate::model::{ChatMessage, ModelEvent};
 
 mod model;
 
@@ -15,10 +15,25 @@ async fn main() -> anyhow::Result<()> {
     let messages = vec![
         ChatMessage {
             role: "user".to_string(),
-            content: "直接输出\n换行，是字符".to_string(),
+            content: "写一百字表白".to_string(),
         }
     ];
-    query_client.stream_chat(messages).await?;
+
+    let mut stream = query_client.stream_chat(messages);
+
+    while let Some(model_event)  = stream.next().await {
+        match model_event {
+            ModelEvent::Text(content) => {
+                print!("{}", content);
+                std::io::Write::flush(&mut std::io::stdout())?;
+            },
+            ModelEvent::Thinking(content) => {
+                print!("\x1b[90m{}\x1b[0m", content);
+                std::io::Write::flush(&mut std::io::stdout())?;
+            },
+            _ => ()
+        }
+    }
     Ok(())
 }
 

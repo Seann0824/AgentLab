@@ -1,3 +1,6 @@
+use std::pin::Pin;
+
+use futures_util::Stream;
 use serde::Serialize;
 
 
@@ -29,7 +32,8 @@ pub enum ModelEvent {
     Error(String),
 }
 
-#[async_trait::async_trait]
 pub trait ModelAdapter {
-    async fn stream_chat(&self, messages: Vec<ChatMessage>) -> anyhow::Result<()>;
+    fn stream_chat(&self, messages: Vec<ChatMessage>) -> ModelStream;
 }
+
+pub type ModelStream = Pin<Box<dyn Stream<Item = ModelEvent> + Send + 'static>>;
