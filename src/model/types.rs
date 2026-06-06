@@ -25,11 +25,11 @@ enum Role {
 pub enum ModelEvent {
     Text(String),
     Thinking(String),
-    // ToolCallDelta {
-    //     id: String,
-    //     name: Option<String>,
-    //     arguments_delta: String,
-    // },
+    ToolCallBlock {
+        id: String, // model 分配，需要回复的时候返回
+        name: String,
+        arguments: String,
+    },
     Done,
     Error(String),
 }

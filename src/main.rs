@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
     let messages = vec![
         ChatMessage {
             role: "user".to_string(),
-            content: "你能看见有什么工具吗".to_string(),
+            content: "读取一下 src/main.rs 和 src/agent.ts 文件, 你能同时读取吗？".to_string(),
         }
     ];
 
@@ -33,6 +33,10 @@ async fn main() -> anyhow::Result<()> {
             },
             ModelEvent::Thinking(content) => {
                 print!("\x1b[90m{}\x1b[0m", content);
+                std::io::Write::flush(&mut std::io::stdout())?;
+            },
+            ModelEvent::ToolCallBlock { id, name, arguments } => {
+                println!("id: {id} | name: {name} | arguments: {arguments}");
                 std::io::Write::flush(&mut std::io::stdout())?;
             },
             _ => ()
