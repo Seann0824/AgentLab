@@ -3,6 +3,8 @@ use std::pin::Pin;
 use futures_util::Stream;
 use serde::Serialize;
 
+use crate::tools::types::Tool;
+
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
@@ -33,7 +35,7 @@ pub enum ModelEvent {
 }
 
 pub trait ModelAdapter {
-    fn stream_chat(&self, messages: Vec<ChatMessage>) -> ModelStream;
+    fn stream_chat(&self, messages: Vec<ChatMessage>, tools: Option<Vec<Box<dyn Tool>>>) -> ModelStream;
 }
 
 pub type ModelStream = Pin<Box<dyn Stream<Item = ModelEvent> + Send + 'static>>;

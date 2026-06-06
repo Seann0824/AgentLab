@@ -5,9 +5,10 @@ use reqwest;
 use serde_json;
 use futures_util::StreamExt;
 
-use crate::model::{ChatMessage, ModelEvent};
+use crate::{model::{ChatMessage, ModelEvent}, tools::{read_file::ReadFile, types::Tool}};
 
 mod model;
+mod tools;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -15,11 +16,14 @@ async fn main() -> anyhow::Result<()> {
     let messages = vec![
         ChatMessage {
             role: "user".to_string(),
-            content: "写一百字表白".to_string(),
+            content: "你能看见有什么工具吗".to_string(),
         }
     ];
 
-    let mut stream = query_client.stream_chat(messages);
+    let tools: Vec<Box<dyn Tool>> = vec![
+        Box::new(ReadFile {})
+    ];
+    let mut stream = query_client.stream_chat(messages, Some(tools));
 
     while let Some(model_event)  = stream.next().await {
         match model_event {

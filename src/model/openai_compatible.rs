@@ -3,7 +3,7 @@ use futures_util::StreamExt;
 use serde_json::json;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::model::{ModelEvent, types::ModelStream};
+use crate::{model::{ModelEvent, types::ModelStream}, tools};
 
 use super::{ChatMessage, ModelAdapter};
 
@@ -26,20 +26,33 @@ impl OpenAiCompatibleAdapter {
 }
 
 impl ModelAdapter for OpenAiCompatibleAdapter {
-    fn stream_chat(&self, messages: Vec<ChatMessage>) -> ModelStream {
+    fn stream_chat(&self, messages: Vec<ChatMessage>, tools: Option<Vec<Box<dyn tools::types::Tool>>>) -> ModelStream {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        
         let (tx, rx) = mpsc::channel(100);
+
+        let mut params = json!({
+            "model": &self.model,
+            "stream": true,
+            "messages": &messages,
+        });
+
+        if let Some(tools) = tools {
+            let tools_schema = tools
+                .iter()
+                .map(|tool| {
+                   tool.parameters_schema()
+                })
+                .collect::<Vec<serde_json::Value>>();
+
+            params["tools"] = serde_json::json!(tools_schema);
+            params["tool_choice"] = serde_json::json!("auto");
+        }
 
         // 感觉应该先将 messages 做转换，不过这里看着如果所有模型格式都统一的话无所
         let query_model = self.client
             .post(url)
             .bearer_auth(&self.api_key)
-            .json(&json!({
-                "model": &self.model,
-                "stream": true,
-                "messages": &messages,
-            }))
+            .json(&params)
             .send();
 
         tokio::spawn(async move {
