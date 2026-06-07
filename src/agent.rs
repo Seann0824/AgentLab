@@ -8,7 +8,8 @@ use futures_util::{StreamExt, stream::FuturesUnordered};
 
 use crate::cli::CommandRegistry;
 use crate::context::{ContextManager, ContextStrategy, TokenEstimator};
-use crate::model::{ChatMessage, ModelAdapter, ModelEvent, ToolCall};
+use crate::model::{ChatMessage, ModelEvent, ToolCall};
+use crate::model::{ModelManager, ModelConfig};
 use crate::investigate::ErrorSnapshotManager;
 use crate::session::SessionManager;
 use crate::task::TaskManager;
@@ -96,7 +97,7 @@ impl AgentHandle {
 
 /// AgentBuilder — 链式构建 Agent
 pub struct AgentBuilder {
-    model: Option<Box<dyn ModelAdapter>>,
+    model_manager: Option<ModelManager>,
     tool_manager: Option<ToolManager>,
     config: AgentConfig,
     current_dir: String,
@@ -105,7 +106,7 @@ pub struct AgentBuilder {
 impl Default for AgentBuilder {
     fn default() -> Self {
         Self {
-            model: None,
+            model_manager: None,
             tool_manager: None,
             config: AgentConfig::default(),
             current_dir: std::env::current_dir()
@@ -122,9 +123,9 @@ impl AgentBuilder {
         Self::default()
     }
 
-    /// 设置模型适配器
-    pub fn model(mut self, model: Box<dyn ModelAdapter>) -> Self {
-        self.model = Some(model);
+    /// 设置模型管理器（支持多模型注册与切换）
+    pub fn model_manager(mut self, mm: ModelManager) -> Self {
+        self.model_manager = Some(mm);
         self
     }
 
@@ -148,13 +149,13 @@ impl AgentBuilder {
 
     /// 构建 Agent
     pub fn build(self) -> anyhow::Result<Agent> {
-        let model = self.model.ok_or_else(|| anyhow::anyhow!("Model is required"))?;
+        let model_manager = self.model_manager.ok_or_else(|| anyhow::anyhow!("ModelManager is required. Call .model_manager(mm) to set it."))?;
         let tool_manager = self.tool_manager.unwrap_or_else(default_tool_manager);
         let strategy = self.config.to_strategy();
 
         Ok(Agent {
             config: self.config,
-            model,
+            model_manager,
             tool_manager,
             context_manager: ContextManager::new("".to_string(), strategy),
             task_manager: TaskManager::new(&self.current_dir),
@@ -172,7 +173,8 @@ impl AgentBuilder {
 /// Agent — 持有所有状态，运行主循环
 pub struct Agent {
     config: AgentConfig,
-    model: Box<dyn ModelAdapter>,
+    /// 模型管理器（支持多模型注册与动态切换）
+    model_manager: ModelManager,
     tool_manager: ToolManager,
     context_manager: ContextManager,
     task_manager: TaskManager,
@@ -187,29 +189,6 @@ impl Agent {
         AgentBuilder::new()
     }
 
-    /// 使用默认配置和工具创建一个新的 Agent
-    ///
-    /// 注意：这只是一个便捷方法。要完整控制，请使用 `Agent::builder()`
-    pub fn new(model: Box<dyn ModelAdapter>) -> Self {
-        let current_dir = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .display()
-            .to_string();
-        let config = AgentConfig::default();
-        let strategy = config.to_strategy();
-        let tool_manager = default_tool_manager();
-
-        Self {
-            config,
-            model,
-            tool_manager,
-            context_manager: ContextManager::new("".to_string(), strategy),
-            task_manager: TaskManager::new(&current_dir),
-            session_manager: SessionManager::new(&current_dir, &current_dir),
-            command_registry: CommandRegistry::new(),
-            current_dir,
-        }
-    }
 
     /// 将 Agent 派发到 tokio 任务中运行
     ///
@@ -235,7 +214,8 @@ impl Agent {
     pub async fn run(&mut self) -> anyhow::Result<()> {
         // ⭐ 初始化全局 DAG 上下文（供 pipeline_execute 工具使用）
         let _ = crate::tools::dag_tools::store::init_dag_context(
-            self.model.clone_box(),
+            self.model_manager.clone_active_adapter()
+                .expect("当前模型适配器不可用"),
             // 创建一个独立的 ToolManager 供 DAG Worker 使用
             // 注意：需要 clone 现有的工具。由于 ToolManager 不支持 clone，
             // 我们创建一个新的并用相同的工具注册。
@@ -384,7 +364,10 @@ impl Agent {
         self.context_manager = ContextManager::new(system_prompt, self.config.to_strategy());
 
         // ⭐ 启动异步摘要后台任务
-        self.context_manager.setup_summary_channel(Some(self.model.clone_box()));
+        self.context_manager.setup_summary_channel(Some(
+            self.model_manager.clone_active_adapter()
+                .expect("当前模型适配器不可用"),
+        ));
 
         // ⭐ 初始化任务管理器
         self.task_manager = TaskManager::new(&self.current_dir);
@@ -504,6 +487,12 @@ impl Agent {
                             continue;
                         }
 
+                        // /model 命令：模型管理与切换
+                        if cmd_name == "model" {
+                            handle_model_command(&trimmed, &mut self.model_manager);
+                            continue;
+                        }
+
                         if self.command_registry.is_known(cmd_name) {
                             if let Some(cmd) = self.command_registry.get(cmd_name) {
                                 self.command_registry.print_command_help(cmd);
@@ -563,7 +552,9 @@ impl Agent {
                 let _ = self.context_manager.prune_tool_calls();
             }
 
-            let mut stream_chat = self.model.stream_chat(
+            let current_adapter = self.model_manager.current_adapter()
+                .expect("当前没有可用的模型适配器");
+            let mut stream_chat = current_adapter.stream_chat(
                 &self.context_manager.get_messages(),
                 self.tool_manager.get_tools_scehma(),
             );
@@ -1010,6 +1001,83 @@ fn generate_tools_description(tm: &ToolManager) -> String {
         lines.push(format!("- {}: {}", t.name, t.description));
     }
     lines.join("\n")
+}
+
+/// ⭐ 处理 /model 命令：模型管理与切换
+///
+/// 支持子命令：
+///   /model list    — 列出所有已注册的模型
+///   /model current — 显示当前活跃的模型
+///   /model switch <name> — 切换到指定模型
+fn handle_model_command(input: &str, model_manager: &mut ModelManager) {
+    let parts: Vec<&str> = input.trim().split_whitespace().collect();
+    if parts.len() < 2 {
+        print_model_help();
+        return;
+    }
+
+    let subcommand = parts[1];
+    match subcommand {
+        "list" | "ls" => {
+            let models = model_manager.list_models();
+            let active = model_manager.active_name().to_string();
+            println!("\x1b[36m━━━ 🤖 已注册模型 (共 {}) ━━━\x1b[0m", models.len());
+            for cfg in &models {
+                let indicator = if cfg.name == active { "→ " } else { "  " };
+                let active_mark = if cfg.name == active { " \x1b[32m(当前)\x1b[0m" } else { "" };
+                println!(
+                    "  {}\x1b[33m{:<12}\x1b[0m {} {}{}",
+                    indicator,
+                    cfg.name,
+                    cfg.model_name,
+                    cfg.provider,
+                    active_mark,
+                );
+            }
+        }
+        "current" | "cur" | "active" => {
+            if let Some(cfg) = model_manager.current() {
+                println!("\x1b[36m━━━ 🤖 当前活跃模型 ━━━\x1b[0m");
+                println!("  \x1b[33m名称:\x1b[0m     {}", cfg.name);
+                println!("  \x1b[33m模型:\x1b[0m     {}", cfg.model_name);
+                println!("  \x1b[33m提供商:\x1b[0m   {}", cfg.provider);
+                println!("  \x1b[33mAPI Base:\x1b[0m {}", cfg.base_url);
+            } else {
+                println!("\x1b[33m⚠️  当前没有活跃的模型\x1b[0m");
+            }
+        }
+        "switch" | "use" | "set" => {
+            if parts.len() < 3 {
+                println!("\x1b[33m⚠️  用法: /model switch <模型名称>\x1b[0m");
+                return;
+            }
+            let target = parts[2..].join(" ");
+            match model_manager.switch(&target) {
+                Ok(_) => {
+                    println!("\x1b[32m━━━ ✅ 已切换到模型 '{}{}' ━━━\x1b[0m", '\'', &target);
+                }
+                Err(e) => {
+                    println!("\x1b[31m━━━ ❌ 切换失败: {}\x1b[0m", e);
+                }
+            }
+        }
+        "help" | "-h" | "--help" => {
+            print_model_help();
+        }
+        _ => {
+            println!("\x1b[33m⚠️  未知的子命令: {}\x1b[0m", subcommand);
+            print_model_help();
+        }
+    }
+}
+
+/// 打印 /model 命令帮助
+fn print_model_help() {
+    println!("\x1b[36m━━━ 🤖 模型管理命令 ━━━\x1b[0m");
+    println!("  \x1b[33m/model list\x1b[0m              列出所有已注册模型");
+    println!("  \x1b[33m/model current\x1b[0m           显示当前活跃模型");
+    println!("  \x1b[33m/model switch <名称>\x1b[0m      切换到指定模型");
+    println!("  \x1b[33m/model help\x1b[0m               显示此帮助");
 }
 
 /// 创建默认的工具管理器

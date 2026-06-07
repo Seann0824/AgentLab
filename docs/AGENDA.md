@@ -81,3 +81,23 @@
 📋 任务: DAG 系统接入完整 Agent 主循环 + 真正并行执行
 📌 当前步骤: ✅ Step 7 — 已完成（功能验证通过）
 📈 进度: 7/7 ✅
+
+---
+
+## 新任务：Multi-Provider 模型接入 + /model 命令支持
+
+**进度**: 0% (0/9)
+**当前步骤**: Phase 1 — 创建 ModelConfig 结构体
+
+| 步骤 | 状态 |
+|------|------|
+| 0. 输出技术方案 | ✅ 已完成 |
+| 1. 创建 ModelConfig 结构体 | ⬜ |
+| 2. 创建 ModelManager | ⬜ |
+| 3. 创建 providers 工厂函数 | ⬜ |
+| 4. 更新 model/mod.rs 导出 | ⬜ |
+| 5. 修改 Agent 集成 ModelManager | ⬜ |
+| 6. cli/mod.rs 注册 /model 命令 | ⬜ |
+| 7. agent.rs 主循环添加 /model 处理 | ⬜ |
+| 8. 更新 main.rs | ⬜ |
+| 9. cargo check 验证 | ⬜ |

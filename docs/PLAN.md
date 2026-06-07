@@ -156,3 +156,23 @@
 - [x] Step 5: 改造 `engine.rs` — 补充 `on_node_failed()` 方法支持真实执行
 - [x] Step 6: 编译验证 — `cargo check` ✅
 - [x] Step 7: 功能验证 — 通过 spawn_agent 派生子 agent 测试 DAG 执行流程 ✅
+
+---
+
+## 新任务：Multi-Provider 模型接入 + /model 命令支持
+
+> **目标**: 支持多个 LLM 提供商接入，支持通过 `/model` 命令运行时切换模型
+> **设计文档**: [multi-provider-model.md](./designs/multi-provider-model.md)
+
+### 步骤
+
+- [x] **0. 输出技术方案** → `docs/designs/multi-provider-model.md`
+- [ ] **1. 创建 ModelConfig 结构体** (src/model/config.rs)
+- [ ] **2. 创建 ModelManager** (src/model/manager.rs) — 管理多模型注册与切换
+- [ ] **3. 创建 providers 工厂函数** (src/model/providers.rs) — build_adapter()
+- [ ] **4. 更新 model/mod.rs** 导出新模块
+- [ ] **5. 修改 Agent 结构体集成 ModelManager** (agent.rs)
+- [ ] **6. 在 cli/mod.rs 注册 /model 命令**
+- [ ] **7. 在 agent.rs 主循环添加 /model 命令处理**
+- [ ] **8. 更新 main.rs 使用 ModelManager 初始化**
+- [ ] **9. cargo check 验证编译通过**
