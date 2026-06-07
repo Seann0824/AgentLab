@@ -141,3 +141,18 @@
 - ✅ Agent 能正确使用 read/shell/edit 等工具
 - ✅ Agent 能输出有实际价值的分析内容
 - ✅ 整个过程无编译错误或崩溃
+
+# DAG 系统与 Agent 核心集成 — 实现计划
+
+## 目标
+按照技术分析文档，将 DAG 系统接入完整的 Agent 主循环（带工具调用），并实现真正的并行执行。
+
+## 步骤
+
+- [x] Step 1: 改造 `runtime.rs` — 新增 `call_llm_with_tools()` 支持工具调用的 ReAct 循环；`DAGContext.tool_manager` 改为 `Arc<ToolManager>` 以支持共享
+- [x] Step 2: 改造 `worker.rs` — Worker Agent 接入工具能力，使用 `call_llm_with_tools()`
+- [x] Step 3: 改造 `supervisor.rs` — 传递 `tool_manager` 到 WorkerConfig（无需改动，ctx 已含 tool_manager）
+- [x] Step 4: 重写 `execute.rs` — 实现真正的 DAG 并行执行（基于 DAGEngine 调度 + tokio::spawn）
+- [x] Step 5: 改造 `engine.rs` — 补充 `on_node_failed()` 方法支持真实执行
+- [x] Step 6: 编译验证 — `cargo check` ✅
+- [x] Step 7: 功能验证 — 通过 spawn_agent 派生子 agent 测试 DAG 执行流程 ✅

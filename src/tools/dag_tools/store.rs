@@ -1,10 +1,40 @@
 // src/tools/dag_tools/store.rs
-// PipelineStore — 全局 Pipeline 存储
+// PipelineStore — 全局 Pipeline 存储 + DAG 执行上下文
 
 use std::sync::{LazyLock, Mutex};
 
 use crate::dag::engine::DAGEngine;
 use crate::dag::pipeline::PipelineDef;
+use crate::dag::runtime::DAGContext;
+use crate::model::ModelAdapter;
+use crate::tools::ToolManager;
+
+// =====================================================================
+// 全局 DAG 执行上下文
+// =====================================================================
+
+/// 全局 DAG 上下文，用于 pipeline_execute 工具获取 Model 和 ToolManager
+static GLOBAL_DAG_CTX: LazyLock<Mutex<Option<DAGContext>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// 初始化全局 DAG 上下文（在 Agent 启动时调用）
+pub fn init_dag_context(model: Box<dyn ModelAdapter>, tool_manager: ToolManager) -> Result<(), String> {
+    let mut ctx = GLOBAL_DAG_CTX.lock().map_err(|e| e.to_string())?;
+    *ctx = Some(DAGContext::new(model, tool_manager));
+    Ok(())
+}
+
+/// 获取全局 DAG 上下文的克隆
+pub fn get_dag_context() -> Result<DAGContext, String> {
+    let ctx = GLOBAL_DAG_CTX.lock().map_err(|e| e.to_string())?;
+    ctx.as_ref()
+        .cloned()
+        .ok_or_else(|| "DAG 上下文未初始化，请先调用 init_dag_context".to_string())
+}
+
+// =====================================================================
+// Pipeline 存储
+// =====================================================================
 
 /// 全局 Pipeline 存储
 static PIPELINE_STORE: LazyLock<Mutex<Vec<PipelineDef>>> =

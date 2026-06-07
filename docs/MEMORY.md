@@ -477,3 +477,14 @@ src/tools/dag_tools/
 - 支持：启动标题、节点状态变更（带颜色和 emoji）、完成摘要、进度条
 - **log_engine_status()** — 快速输出 engine 当前状态摘要
 - **新文件**: `src/dag/logger.rs`
+
+#### 4.5 DAG 集成功能验证成功 ✅
+
+**验证结果**:
+- **pipeline_build**: ✅ 成功 — 正确解析 JSON 字段名 `id`（非 `pipeline_id`），节点用 `instruction`
+- **pipeline_list**: ✅ 成功 — 列出所有已注册 Pipeline
+- **pipeline_execute**: ✅ 成功 — Pipeline 执行完成，1/1 节点成功，0 失败
+- **pipeline_status**: ✅ 成功 — 状态 `Completed`，耗时约 4.33 秒
+
+**已应用的修复**:
+- `src/tools/dag_tools/execute.rs`: 在 task spawn 前增加 `instance.transition_to(NodeStatus::Working)`，确保节点状态正确经过 `Working` → `Completed` 序列

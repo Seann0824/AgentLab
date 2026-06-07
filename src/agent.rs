@@ -233,6 +233,26 @@ impl Agent {
     /// - LLM 流式对话 + 工具调用
     /// - 任务状态管理
     pub async fn run(&mut self) -> anyhow::Result<()> {
+        // ⭐ 初始化全局 DAG 上下文（供 pipeline_execute 工具使用）
+        let _ = crate::tools::dag_tools::store::init_dag_context(
+            self.model.clone_box(),
+            // 创建一个独立的 ToolManager 供 DAG Worker 使用
+            // 注意：需要 clone 现有的工具。由于 ToolManager 不支持 clone，
+            // 我们创建一个新的并用相同的工具注册。
+            {
+                let mut tm = crate::tools::ToolManager::new();
+                // 注册常用工具（Worker Agent 可调用）
+                tm.register_tool(Box::new(crate::tools::shell::BashShell));
+                tm.register_tool(Box::new(crate::tools::tool_debug::DebugTool));
+                tm.register_tool(Box::new(crate::tools::edit::EditTool));
+                tm.register_tool(Box::new(crate::tools::read::ReadTool));
+                tm.register_tool(Box::new(crate::tools::search::SearchTool));
+                // 不注册 spawn_agent（防止递归）和 investigate
+                // 不注册 DAG 工具（防止递归调用 pipeline_execute）
+                tm
+            },
+        );
+
         // ⭐ 获取配置中的 token_limit
         let token_limit = self.config.token_limit;
 

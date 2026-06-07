@@ -40,6 +40,7 @@
 | 文件 | 用途 |
 |------|------|
 | [上下文管理分析](./analyses/context-management-analysis.md) | 上下文管理方案的深度分析 |
+| [DAG 与 Agent 集成状态分析](./analyses/dag-agent-integration-status.md) | DAG 系统与 Agent 核心的集成现状、并行能力评估与打通路线 |
 
 ---
 

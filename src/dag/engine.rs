@@ -139,6 +139,37 @@ impl DAGEngine {
         })
     }
 
+    /// 当节点失败时，标记失败状态并通知下游
+    pub fn on_node_failed(&mut self, node_id: &str, error: String) {
+        // 标记节点失败
+        if let Some(instance) = self.nodes.get_mut(node_id) {
+            instance.transition_to(NodeStatus::Failed { error: error.clone() });
+        }
+
+        // 记录事件
+        self.events.push(DAGEvent::NodeStatusChanged {
+            node_id: node_id.to_string(),
+            old_status: NodeStatus::Working,
+            new_status: NodeStatus::Failed { error },
+        });
+
+        // 检查是否所有节点都已终态
+        if self.all_terminal() {
+            let failed_nodes: Vec<String> = self.nodes.values()
+                .filter(|n| n.status.is_failed())
+                .map(|n| n.node_id.clone())
+                .collect();
+            self.status = PipelineStatus::Failed { failed_nodes };
+
+            let duration = crate::dag::utils::now_secs() - self.started_at;
+            self.events.push(DAGEvent::PipelineFailed {
+                id: self.pipeline.id.clone(),
+                error: format!("节点 '{}' 执行失败", node_id),
+                failed_node: node_id.to_string(),
+            });
+        }
+    }
+
     /// 当节点完成时，更新下游节点的输入并重新计算 Ready 状态
     pub fn on_node_completed(
         &mut self,
