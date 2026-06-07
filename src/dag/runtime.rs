@@ -166,6 +166,15 @@ pub struct NodeRuntime;
 
 impl NodeRuntime {
     /// 执行一个节点，返回最终输出
+    ///
+    /// 返回值结构：
+    /// ```json
+    /// {
+    ///   "content": "节点输出的文本内容",
+    ///   "worker_output": "Worker 原始输出",
+    ///   "review": { "passed": true, "score": 0.9, "feedback": "xxx", ... }
+    /// }
+    /// ```
     pub async fn execute_node(
         &self,
         ctx: &DAGContext,
@@ -177,8 +186,18 @@ impl NodeRuntime {
         let result = NodeSupervisor::execute_with_retry(ctx, node_def, input, max_retries).await?;
 
         match result {
-            crate::dag::types::NodeResult::Success { output, .. } => {
-                Ok(serde_json::json!({ "content": output }))
+            crate::dag::types::NodeResult::Success { output, review } => {
+                // ReviewResult 结构使用 details 字段名，而非 check_results
+                Ok(serde_json::json!({
+                    "content": output,
+                    "worker_output": output,
+                    "review": {
+                        "passed": review.passed,
+                        "score": review.score,
+                        "feedback": review.feedback,
+                        "details": review.check_results,
+                    },
+                }))
             }
             crate::dag::types::NodeResult::FailedAfterRetries { last_review, retries, .. } => {
                 Err(crate::dag::types::DAGError::Internal(

@@ -171,13 +171,33 @@ impl DAGEngine {
     }
 
     /// 当节点完成时，更新下游节点的输入并重新计算 Ready 状态
+    ///
+    /// output 结构：
+    /// ```json
+    /// { "content": "...", "worker_output": "...", "review": { ... } }
+    /// ```
+    /// review 和 worker_output 会被提取并存储到 NodeInstance 中。
     pub fn on_node_completed(
         &mut self,
         node_id: &str,
         output: serde_json::Value,
     ) {
-        // Step 1: 更新当前节点状态
+        // Step 1: 更新当前节点状态（提取 review 和 worker_output）
         if let Some(instance) = self.nodes.get_mut(node_id) {
+            // 提取 worker_output
+            if let Some(wo) = output.get("worker_output").and_then(|v| v.as_str()) {
+                instance.worker_output = Some(wo.to_string());
+            }
+            // 提取 content（作为 fallback worker_output）
+            if instance.worker_output.is_none() {
+                if let Some(c) = output.get("content").and_then(|v| v.as_str()) {
+                    instance.worker_output = Some(c.to_string());
+                }
+            }
+            // 提取 review_result
+            if let Some(review) = output.get("review") {
+                instance.review_result = serde_json::from_value(review.clone()).ok();
+            }
             instance.final_output = Some(output.clone());
             instance.transition_to(NodeStatus::Completed);
         }

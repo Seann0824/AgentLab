@@ -25,3 +25,29 @@
 - `agent.rs` 中所有 `self.model` 引用已替换为 `self.model_manager.current_adapter()` 调用
 - `ModelManager` 提供了丰富的查询方法：`current_adapter()`, `list_models()`, `switch()`, `add_model()`, `clone_active_adapter()`
 - 编译验证通过（仅 warnings，无 errors）
+
+## [2025-06-13] DAG Pipeline 可观测性全面改进
+
+### 问题
+DAG Pipeline 执行过程是个黑盒：执行后只返回计数摘要（成功/失败/运行数），无法观测每个节点的具体输出和审核结果。
+
+### 改动文件
+1. **`src/tools/dag_tools/execute.rs`** — pipeline_execute 工具
+   - 执行过程中输出实时进度到 stderr（🚀 开始、▶️ 节点执行、⏳ Worker/Reviewer 执行中、✅ 完成/❌ 失败）
+   - 返回结果新增 `nodes` 字段，包含每个节点的完整信息：`worker_output`、`review_result`、`final_output`、`status`、`retry_count`、`logs`、`started_at`、`completed_at`
+
+2. **`src/dag/runtime.rs`** — NodeRuntime 执行器
+   - `execute_node()` 返回结构从 `{ "content": output }` 扩展为 `{ "content", "worker_output", "review": { "passed", "score", "feedback", "details" } }`
+   - 修复了 `FailedAfterRetries` 模式匹配中 `last_worker_output` 未使用的警告
+
+3. **`src/dag/engine.rs`** — DAGEngine 引擎
+   - `on_node_completed()` 新增提取 `worker_output` 和 `review_result` 的逻辑，存储到 `NodeInstance`
+
+4. **`src/tools/dag_tools/status.rs`** — pipeline_status 工具
+   - 新增返回完整 `nodes` 细节（与 execute 返回的结构一致）
+   - 可从引擎存储中读取已执行完成的 Pipeline 节点详细信息
+
+### 效果
+- **执行中**：stderr 实时输出每个节点的进度（开始→执行中→完成/失败）
+- **执行后**：pipeline_execute 返回每个节点的 `worker_output`（Worker 完整输出）、`review_result`（审查评分/反馈/分项检查）、`final_output`（最终输出）
+- **事后查询**：pipeline_status 可查看已执行 Pipeline 的完整节点细节

@@ -54,10 +54,30 @@ impl PipelineStatus {
         // 尝试从引擎存储中获取状态
         if let Ok(engine) = store::get_engine(pipeline_id) {
             let summary = engine.status_summary();
+
+            // 构建详细节点信息
+            let nodes_detail: serde_json::Map<String, serde_json::Value> = engine.nodes.iter()
+                .map(|(id, instance)| {
+                    let detail = serde_json::json!({
+                        "node_id": instance.node_id,
+                        "status": format!("{:?}", instance.status),
+                        "worker_output": instance.worker_output,
+                        "review_result": instance.review_result,
+                        "final_output": instance.final_output,
+                        "retry_count": instance.retry_count,
+                        "logs": instance.logs,
+                        "started_at": instance.started_at,
+                        "completed_at": instance.completed_at,
+                    });
+                    (id.clone(), detail)
+                })
+                .collect();
+
             return ToolEvent::Done(serde_json::json!({
                 "ok": true,
                 "pipeline_id": pipeline_id,
                 "status": summary,
+                "nodes": nodes_detail,
                 "events": engine.events.iter().map(|e| format!("{:?}", e)).collect::<Vec<_>>(),
             }));
         }
