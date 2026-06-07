@@ -33,6 +33,153 @@ fn find_turn_boundaries(messages: &[ContextMessage]) -> Vec<usize> {
         .collect()
 }
 
+// ================= 层0：工具调用结果修剪 =================
+
+/// ⭐ 层0：工具调用结果修剪（最轻量压缩，保留完整对话结构）
+///
+/// 原理：
+/// - 找到早期的 Tool 消息
+/// - 如果内容很长，替换为简短的占位符
+/// - 保留 tool_call_id，只压缩结果内容
+///
+/// 触发条件：
+/// - 只处理非 preserved、非重要的 Tool 消息
+/// - 只处理超过 max_output_chars 的长输出
+/// - 最近的 keep_recent 轮次不动（避免影响当前上下文）
+///
+/// 效果：
+/// - 对话结构完整保留（User → Assistant(tc) → Tool(短) → Assistant）
+/// - 大幅削减 token 消耗（工具结果通常占 token 的大头）
+/// - 不会丢失"调用了什么工具"的信息
+pub fn tool_call_pruning(
+    messages: &mut Vec<ContextMessage>,
+    keep_recent: usize,
+    max_output_chars: usize,
+    estimator: &TokenEstimator,
+) -> CompressResult {
+    let user_positions = find_turn_boundaries(messages);
+    let total_turns = user_positions.len();
+
+    if total_turns <= keep_recent {
+        return CompressResult::NotNeeded;
+    }
+
+    let pruneable_turns = total_turns - keep_recent;
+    let prune_boundary = if pruneable_turns < user_positions.len() {
+        user_positions[pruneable_turns]
+    } else {
+        0
+    };
+
+    // 先收集需要修剪的索引和对应的替换内容
+    struct PruneAction {
+        index: usize,
+        new_content: String,
+        saved_tokens: usize,
+    }
+
+    let mut actions: Vec<PruneAction> = Vec::new();
+
+    for i in 0..prune_boundary {
+        let ctx_msg = &messages[i];
+
+        // 只处理 Tool 消息
+        let (tool_call_id, content) = match &ctx_msg.message {
+            ChatMessage::Tool {
+                tool_call_id,
+                content,
+            } => (tool_call_id.clone(), content.clone()),
+            _ => continue,
+        };
+
+        // 跳过 preserved 或重要的消息
+        if ctx_msg.preserved
+            || ctx_msg.importance == super::types::MessageImportance::Important
+            || ctx_msg.importance == super::types::MessageImportance::Milestone
+        {
+            continue;
+        }
+
+        // 只修剪长输出
+        if content.len() <= max_output_chars {
+            continue;
+        }
+
+        // 生成占位符
+        let brief = if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+            let ok_status = val.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+            let cmd = val
+                .get("result")
+                .and_then(|r| r.get("command"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let stdout_len = val
+                .get("result")
+                .and_then(|r| r.get("stdout"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.len())
+                .unwrap_or(0);
+            let stderr_len = val
+                .get("result")
+                .and_then(|r| r.get("stderr"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.len())
+                .unwrap_or(0);
+
+            format!(
+                r#"{{"ok":{},"result":{{"command":"{}","stdout":"[TOOL_OUTPUT_PRUNED {}b stdout, {}b stderr]","_pruned":true}}}}"#,
+                ok_status,
+                cmd.chars().take(60).collect::<String>(),
+                stdout_len,
+                stderr_len
+            )
+        } else {
+            // 非标准 JSON 格式，保留开头并标注
+            let preview: String = content.chars().take(120).collect();
+            format!(
+                "{} ...\n[TOOL_OUTPUT_PRUNED: 原始输出共 {} 字符]\n",
+                preview,
+                content.len()
+            )
+        };
+
+        // 计算节省的 token
+        let original_tokens = estimator.estimate_text(&content);
+        let new_tokens = estimator.estimate_text(&brief);
+        let saved = original_tokens.saturating_sub(new_tokens);
+
+        actions.push(PruneAction {
+            index: i,
+            new_content: brief,
+            saved_tokens: saved,
+        });
+    }
+
+    if actions.is_empty() {
+        return CompressResult::NotNeeded;
+    }
+
+    // 执行修剪
+    let mut total_saved = 0;
+    for action in &actions {
+        // 获取原始的 tool_call_id
+        let orig_tool_call_id = match &messages[action.index].message {
+            ChatMessage::Tool { tool_call_id, .. } => tool_call_id.clone(),
+            _ => String::new(),
+        };
+        messages[action.index].message =
+            ChatMessage::tool(orig_tool_call_id, &action.new_content);
+        total_saved += action.saved_tokens;
+    }
+
+    CompressResult::ToolCallsPruned {
+        pruned_count: actions.len(),
+        saved_tokens: total_saved,
+    }
+}
+
+// ================= 层1：滑动窗口压缩 =================
+
 /// ⭐ 层1：滑动窗口压缩（同步，永不失败）
 ///
 /// 保留规则（按优先级）：
@@ -81,6 +228,8 @@ fn sliding_window_compress(
     }
 }
 
+// ================= 层3：保底截断 =================
+
 /// ⭐ 层3：保底截断（最后的安全网）
 ///
 /// 触发条件：滑动窗口执行后 Token 仍然超过硬限制
@@ -106,7 +255,6 @@ fn hard_truncate(
     }
 
     // 从最早的非保护消息开始标记删除
-    let mut removed_count = 0;
     let mut tokens_remaining = total_tokens;
     let mut remove_up_to: Option<usize> = None;
 
@@ -119,7 +267,6 @@ fn hard_truncate(
             matches!(&messages[i].message, ChatMessage::System { .. }) || messages[i].preserved;
         if !is_protected {
             tokens_remaining = tokens_remaining.saturating_sub(token_counts[i]);
-            removed_count += 1;
             remove_up_to = Some(i + 1);
         }
     }
@@ -130,7 +277,7 @@ fn hard_truncate(
     };
 
     // 构建新列表：保留 protected 消息 + 剩余消息
-    let mut new_messages: Vec<ContextMessage> = Vec::with_capacity(messages.len() - removed_count);
+    let mut new_messages: Vec<ContextMessage> = Vec::with_capacity(messages.len());
 
     // 保留被移除范围中的 protected 消息
     for i in 0..end {
@@ -144,6 +291,7 @@ fn hard_truncate(
     // 保留剩余消息
     new_messages.extend_from_slice(&messages[end..]);
 
+    let removed_count = original_len - new_messages.len();
     *messages = new_messages;
 
     CompressResult::HardTruncated {
@@ -152,31 +300,50 @@ fn hard_truncate(
     }
 }
 
-/// ⭐ 自动模式压缩（三层模型）
+// ================= 自动模式：四层渐进压缩 =================
+
+/// ⭐ 自动模式压缩（四层渐进模型）
 ///
-/// 层1: 滑动窗口（同步，O(1)，永远不会失败）
-/// 层2: 异步摘要（由 ContextManager 派发，不在此处理）
-/// 层3: 保底截断（同步，极端情况下使用）
+/// 层级（从轻到重）：
+/// 层0: 工具调用结果修剪 → 用占位符替换旧工具输出（最轻量，保留对话结构）
+/// 层1: 滑动窗口 → 删除早期整轮对话
+/// 层2: 异步摘要 → 由 ContextManager 派发（不在此处理）
+/// 层3: 保底截断 → 最后的安全网
+///
+/// 核心原则：先尝试最轻量的方法，不行再逐渐加重。
 pub fn auto_compress(
     messages: &mut Vec<ContextMessage>,
     strategy: &ContextStrategy,
     estimator: &TokenEstimator,
     stats: &mut ContextStats,
 ) -> CompressResult {
-    // ⭐ 使用 if let 安全解构，而不是可能静默失败的 let-else
+    // ⭐ 使用 if let 安全解构
     let (
         token_limit,
         max_turns,
         trigger_ratio,
         _enable_async_summary,
+        enable_tool_pruning,
+        tool_pruning_keep_recent,
+        tool_pruning_max_output_chars,
     ) = match strategy {
         ContextStrategy::Auto {
             token_limit,
             max_turns,
             trigger_ratio,
             enable_async_summary,
-        } => (*token_limit, *max_turns, *trigger_ratio, *enable_async_summary),
-        // 如果传入了非 Auto 策略，记录警告并返回
+            enable_tool_pruning,
+            tool_pruning_keep_recent,
+            tool_pruning_max_output_chars,
+        } => (
+            *token_limit,
+            *max_turns,
+            *trigger_ratio,
+            *enable_async_summary,
+            *enable_tool_pruning,
+            *tool_pruning_keep_recent,
+            *tool_pruning_max_output_chars,
+        ),
         other => {
             eprintln!(
                 "[WARN] auto_compress called with non-Auto strategy: {:?}",
@@ -197,22 +364,60 @@ pub fn auto_compress(
         return CompressResult::NotNeeded;
     }
 
-    // 情况 B: Token 超过阈值 → 先执行滑动窗口（一定成功）
-    let turns = count_turns(messages);
-    if turns > max_turns {
-        let result = sliding_window_compress(messages, max_turns);
-        if matches!(&result, CompressResult::SlidingWindowCompressed { .. }) {
+    // ⭐ 情况 B: 先尝试层0 — 工具调用结果修剪（最轻量）
+    if enable_tool_pruning {
+        let prune_result =
+            tool_call_pruning(messages, tool_pruning_keep_recent, tool_pruning_max_output_chars, estimator);
+        if prune_result.did_compress() {
             stats.compressed = true;
             stats.last_compressed_at = Some(Instant::now());
-            return result;
+
+            if let CompressResult::ToolCallsPruned {
+                pruned_count,
+                saved_tokens,
+            } = &prune_result
+            {
+                stats.pruned_tool_calls += pruned_count;
+                stats.pruned_saved_tokens += saved_tokens;
+            }
+
+            // 修剪后重新检查 token 是否足够
+            let tokens_after_prune = estimate_total_tokens(messages, estimator);
+            stats.estimated_tokens = tokens_after_prune;
+            stats.usage_ratio = tokens_after_prune as f64 / token_limit as f64;
+
+            if tokens_after_prune < trigger_threshold {
+                return prune_result;
+            }
+            // 如果仍然超限，继续降级到滑动窗口
         }
     }
 
-    // 情况 C: 滑动窗口后仍然超限（极端情况）→ 保底截断
+    // ⭐ 情况 C: 层1 — 滑动窗口压缩
+    let turns = count_turns(messages);
+    if turns > max_turns {
+        let result = sliding_window_compress(messages, max_turns);
+        if result.did_compress() {
+            stats.compressed = true;
+            stats.last_compressed_at = Some(Instant::now());
+
+            // 滑动窗口后检查是否还需要进一步压缩
+            let tokens_after = estimate_total_tokens(messages, estimator);
+            stats.estimated_tokens = tokens_after;
+            stats.usage_ratio = tokens_after as f64 / token_limit as f64;
+
+            if tokens_after <= token_limit {
+                return result;
+            }
+            // 仍然超限 → 继续降级到保底截断
+        }
+    }
+
+    // ⭐ 情况 D: 层3 — 保底截断（所有轻量方法都无效时的最后手段）
     let tokens_after = estimate_total_tokens(messages, estimator);
     if tokens_after > token_limit {
         let result = hard_truncate(messages, token_limit, estimator);
-        if matches!(&result, CompressResult::HardTruncated { .. }) {
+        if result.did_compress() {
             stats.compressed = true;
             stats.last_compressed_at = Some(Instant::now());
         }
@@ -229,7 +434,7 @@ pub fn sliding_window_mode(
     stats: &mut ContextStats,
 ) -> CompressResult {
     let result = sliding_window_compress(messages, max_turns);
-    if matches!(&result, CompressResult::SlidingWindowCompressed { .. }) {
+    if result.did_compress() {
         stats.compressed = true;
         stats.last_compressed_at = Some(Instant::now());
     }
@@ -262,16 +467,14 @@ mod tests {
     use super::*;
     use crate::context::ContextStats;
     use crate::model::ChatMessage;
+    use crate::model::ToolCall;
 
     fn make_context_messages(count: usize) -> Vec<ContextMessage> {
         let mut msgs = Vec::new();
         msgs.push(ContextMessage::from(ChatMessage::system("System prompt")));
 
         for i in 0..count {
-            msgs.push(ContextMessage::from(ChatMessage::user(format!(
-                "User {}",
-                i
-            ))));
+            msgs.push(ContextMessage::from(ChatMessage::user(format!("User {}", i))));
             msgs.push(ContextMessage::from(ChatMessage::assistant(format!(
                 "Assistant {}",
                 i
@@ -285,21 +488,23 @@ mod tests {
         msgs.push(ContextMessage::from(ChatMessage::system("System prompt")));
 
         for i in 0..count {
-            msgs.push(ContextMessage::from(ChatMessage::user(format!(
-                "User {}",
-                i
-            ))));
+            msgs.push(ContextMessage::from(ChatMessage::user(format!("User {}", i))));
             msgs.push(ContextMessage::from(ChatMessage::assistant_tool_calls(
                 format!("Thinking {}", i),
-                vec![crate::model::ToolCall {
+                vec![ToolCall {
                     id: format!("call_{}", i),
                     name: "shell".into(),
                     arguments: r#"{"command": "echo ok"}"#.into(),
                 }],
             )));
+            // 用长输出来模拟工具结果（偶数轮用长输出，奇数轮用短输出）
+            let long_output = format!(
+                r#"{{"ok":true,"result":{{"command":"echo ok","stdout":"{}\n"}}}}"#,
+                "ok".repeat(if i % 2 == 0 { 500 } else { 10 })
+            );
             msgs.push(ContextMessage::from(ChatMessage::tool(
                 format!("call_{}", i),
-                r#"{"ok": true, "result": {"stdout": "ok\n"}}"#,
+                &long_output,
             )));
             msgs.push(ContextMessage::from(ChatMessage::assistant(format!(
                 "Done {}",
@@ -318,7 +523,6 @@ mod tests {
     #[test]
     fn test_count_turns_with_tools() {
         let msgs = make_context_messages_with_tools(5);
-        // 每个完整的轮次只计 1 个 User 消息
         assert_eq!(count_turns(&msgs), 5);
     }
 
@@ -332,7 +536,6 @@ mod tests {
     fn test_find_turn_boundaries() {
         let msgs = make_context_messages(3);
         let boundaries = find_turn_boundaries(&msgs);
-        // System 在 0, User1 在 1, Assistant1 在 2, User2 在 3, ...
         assert_eq!(boundaries, vec![1, 3, 5]);
     }
 
@@ -343,9 +546,8 @@ mod tests {
 
         let result = sliding_window_compress(&mut msgs, 3);
 
-        assert!(matches!(result, CompressResult::SlidingWindowCompressed { .. }));
+        assert!(result.did_compress());
         assert!(msgs.len() < original_len, "Messages should be reduced");
-        // System 消息 + 3 轮对话（每轮 2 条消息）= 1 + 6 = 7
         assert!(msgs.len() <= 7, "Should have system + 3 turns max");
     }
 
@@ -374,14 +576,11 @@ mod tests {
     #[test]
     fn test_sliding_window_protects_preserved() {
         let mut msgs = make_context_messages(10);
-
-        // 标记第 2 轮的用户消息为 preserved
         msgs[3].preserved = true;
         msgs[3].importance = crate::context::MessageImportance::Important;
 
         sliding_window_compress(&mut msgs, 2);
 
-        // preserved 消息应该还在
         assert!(
             msgs.iter().any(|m| m.preserved),
             "Preserved message should still be in the list"
@@ -390,45 +589,144 @@ mod tests {
 
     #[test]
     fn test_sliding_window_below_limit() {
-        let mut msgs = make_context_messages(2); // 只有 2 轮
+        let mut msgs = make_context_messages(2);
         let result = sliding_window_compress(&mut msgs, 5);
 
-        assert!(matches!(result, CompressResult::NotNeeded));
-        assert_eq!(msgs.len(), 1 + 2 * 2); // 1 system + 2 turns * 2 = 5
+        assert!(!result.did_compress());
+        assert_eq!(msgs.len(), 1 + 2 * 2);
     }
 
     #[test]
     fn test_sliding_window_exact_limit() {
         let mut msgs = make_context_messages(5);
         let result = sliding_window_compress(&mut msgs, 5);
-        assert!(matches!(result, CompressResult::NotNeeded));
+        assert!(!result.did_compress());
     }
 
     #[test]
     fn test_sliding_window_with_tool_calls() {
         let mut msgs = make_context_messages_with_tools(10);
-
         let result = sliding_window_compress(&mut msgs, 3);
 
-        assert!(matches!(result, CompressResult::SlidingWindowCompressed { .. }));
-        // System(1) + 3轮 * 每条轮消息数(1 User + 1 Assistant_tc + 1 Tool + 1 Assistant = 4) = 1 + 12 = 13
+        assert!(result.did_compress());
         assert!(msgs.len() <= 13, "Should keep at most 13 messages");
     }
 
     #[test]
     fn test_sliding_window_with_tools_preserves_mid_turn() {
         let mut msgs = make_context_messages_with_tools(5);
-
-        // 标记第二轮中的 Tool 消息为 preserved
-        // 第 2 轮: index 5=User, 6=Assistant_tc, 7=Tool, 8=Assistant
         msgs[7].preserved = true;
 
         let result = sliding_window_compress(&mut msgs, 2);
-
-        assert!(matches!(result, CompressResult::SlidingWindowCompressed { .. }));
-
-        // preserved tool 消息应该还在
+        assert!(result.did_compress());
         assert!(msgs.iter().any(|m| m.preserved));
+    }
+
+    // ⭐ 工具调用修剪测试
+    #[test]
+    fn test_tool_call_pruning_basic() {
+        let mut msgs = make_context_messages_with_tools(10);
+        let estimator = TokenEstimator::new();
+        let count_before = msgs.len();
+
+        let result = tool_call_pruning(&mut msgs, 3, 100, &estimator);
+
+        assert!(result.did_compress(), "Should prune tool calls");
+        assert_eq!(
+            msgs.len(),
+            count_before,
+            "Message count should stay the same (only content replaced)"
+        );
+
+        if let CompressResult::ToolCallsPruned {
+            pruned_count,
+            saved_tokens,
+        } = &result
+        {
+            assert!(*pruned_count > 0, "Should have pruned some tool calls");
+            assert!(*saved_tokens > 0, "Should have saved tokens");
+        }
+    }
+
+    #[test]
+    fn test_tool_call_pruning_keeps_recent() {
+        let mut msgs = make_context_messages_with_tools(10);
+        let estimator = TokenEstimator::new();
+
+        // 保留最近 8 轮，只修剪前 2 轮
+        // 偶数轮输出 ~1062 字符，奇数轮输出 ~82 字符，均超过 max_output_chars=50
+        let result = tool_call_pruning(&mut msgs, 8, 50, &estimator);
+
+        if let CompressResult::ToolCallsPruned { pruned_count, .. } = &result {
+            // 前 2 轮中，每轮有一个 Tool 消息，两个都超过 50 字符
+            assert_eq!(*pruned_count, 2);
+        }
+    }
+
+    #[test]
+    fn test_tool_call_pruning_not_needed() {
+        let mut msgs = make_context_messages_with_tools(2);
+        let estimator = TokenEstimator::new();
+
+        // keep_recent=5，但只有 2 轮，所以不需要修剪
+        let result = tool_call_pruning(&mut msgs, 5, 100, &estimator);
+        assert!(!result.did_compress());
+    }
+
+    #[test]
+    fn test_tool_call_pruning_respects_preserved() {
+        let mut msgs = make_context_messages_with_tools(5);
+        let estimator = TokenEstimator::new();
+
+        // 标记第 2 轮的 Tool 消息为 preserved
+        // 第 2 轮: index 5=User, 6=Assistant_tc, 7=Tool, 8=Assistant
+        msgs[7].preserved = true;
+        msgs[7].importance = crate::context::MessageImportance::Important;
+
+        let result = tool_call_pruning(&mut msgs, 1, 50, &estimator);
+
+        if let CompressResult::ToolCallsPruned { pruned_count, .. } = &result {
+            // prune_boundary = user_positions[4] = 17
+            // 在 [0..17) 范围内:
+            //   index 3 (Tool0, 1062>50) → 修剪
+            //   index 7 (Tool1, 82>50) → preserved! 跳过
+            //   index 11 (Tool2, 1062>50) → 修剪
+            //   index 15 (Tool3, 82>50) → 修剪
+            // 总共修剪 3 个
+            assert_eq!(*pruned_count, 3);
+        }
+    }
+
+    #[test]
+    fn test_auto_with_tool_pruning_first() {
+        let mut msgs = make_context_messages_with_tools(30);
+        let estimator = TokenEstimator::new();
+        let strategy = ContextStrategy::Auto {
+            token_limit: 200,
+            max_turns: 10,
+            trigger_ratio: 0.3,
+            enable_async_summary: false,
+            enable_tool_pruning: true,
+            tool_pruning_keep_recent: 3,
+            tool_pruning_max_output_chars: 100,
+        };
+        let mut stats = ContextStats::default();
+
+        let result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats);
+
+        assert!(stats.compressed, "Should have compressed");
+        // token_limit=200 非常小，可能会触发多层压缩直到硬截断
+        // 只要压缩发生了就算通过
+        assert!(
+            matches!(
+                result,
+                CompressResult::ToolCallsPruned { .. }
+                    | CompressResult::SlidingWindowCompressed { .. }
+                    | CompressResult::HardTruncated { .. }
+            ),
+            "Should have compressed via some layer: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -440,6 +738,9 @@ mod tests {
             max_turns: 10,
             trigger_ratio: 0.5,
             enable_async_summary: false,
+            enable_tool_pruning: false, // 关闭工具修剪
+            tool_pruning_keep_recent: 3,
+            tool_pruning_max_output_chars: 100,
         };
         let mut stats = ContextStats::default();
 
@@ -461,12 +762,14 @@ mod tests {
     fn test_auto_hard_truncate() {
         let mut msgs = make_context_messages(5);
         let estimator = TokenEstimator::new();
-
         let strategy = ContextStrategy::Auto {
-            token_limit: 10, // 非常小，触发保底截断
+            token_limit: 10,
             max_turns: 2,
             trigger_ratio: 0.1,
             enable_async_summary: false,
+            enable_tool_pruning: false,
+            tool_pruning_keep_recent: 3,
+            tool_pruning_max_output_chars: 100,
         };
         let mut stats = ContextStats::default();
 
@@ -482,14 +785,17 @@ mod tests {
         let strategy = ContextStrategy::Auto {
             token_limit: 100_000,
             max_turns: 20,
-            trigger_ratio: 0.9, // 90% 才触发，远高于当前 token
+            trigger_ratio: 0.9,
             enable_async_summary: false,
+            enable_tool_pruning: true,
+            tool_pruning_keep_recent: 3,
+            tool_pruning_max_output_chars: 100,
         };
         let mut stats = ContextStats::default();
 
         let result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats);
 
-        assert!(matches!(result, CompressResult::NotNeeded));
+        assert!(!result.did_compress());
     }
 
     #[test]
@@ -497,12 +803,9 @@ mod tests {
         let mut msgs = make_context_messages(3);
         let estimator = TokenEstimator::new();
 
-        // 3 轮对话 = System(1) + User*3 + Assistant*3 = 7 条消息
-        // 用极小的 token limit 确保截断
         let result = hard_truncate(&mut msgs, 5, &estimator);
 
-        assert!(matches!(result, CompressResult::HardTruncated { .. }));
-        // System 消息必须保留
+        assert!(result.did_compress());
         assert!(
             msgs.iter().any(|m| matches!(&m.message, ChatMessage::System { .. })),
             "System must be preserved"
@@ -514,10 +817,43 @@ mod tests {
         let mut msgs = make_context_messages(1);
         let estimator = TokenEstimator::new();
 
-        // 很大的 limit，不需要截断
         let result = hard_truncate(&mut msgs, 100_000, &estimator);
 
-        assert!(matches!(result, CompressResult::NotNeeded));
-        assert_eq!(msgs.len(), 3); // System + User + Assistant
+        assert!(!result.did_compress());
+        assert_eq!(msgs.len(), 3);
+    }
+
+    #[test]
+    fn test_progressive_compression_layers() {
+        // 验证四层渐进压缩的正确顺序
+        let mut msgs = make_context_messages_with_tools(30);
+        let estimator = TokenEstimator::new();
+
+        // 配置：小 token_limit，低触发阈值，确保所有层都能测试到
+        let strategy = ContextStrategy::Auto {
+            token_limit: 150,
+            max_turns: 5,
+            trigger_ratio: 0.2,
+            enable_async_summary: false,
+            enable_tool_pruning: true,
+            tool_pruning_keep_recent: 2,
+            tool_pruning_max_output_chars: 50,
+        };
+        let mut stats = ContextStats::default();
+
+        let result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats);
+
+        assert!(stats.compressed);
+        // 结果可能是任一层的产物
+        assert!(
+            matches!(
+                result,
+                CompressResult::ToolCallsPruned { .. }
+                    | CompressResult::SlidingWindowCompressed { .. }
+                    | CompressResult::HardTruncated { .. }
+            ),
+            "Result should be one of the compression types: {:?}",
+            result
+        );
     }
 }

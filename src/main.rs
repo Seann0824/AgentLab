@@ -30,6 +30,9 @@ async fn main() -> anyhow::Result<()> {
         max_turns: 20,
         trigger_ratio: 0.7,
         enable_async_summary: true,
+        enable_tool_pruning: true,
+        tool_pruning_keep_recent: 3,
+        tool_pruning_max_output_chars: 200,
     };
     let token_limit = strategy.token_limit().unwrap_or(128_000);
 

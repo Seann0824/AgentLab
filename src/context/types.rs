@@ -2,6 +2,19 @@ use std::time::Instant;
 
 use crate::model::ChatMessage;
 
+/// 工具调用修剪记录（用于调试和统计）
+#[derive(Debug, Clone)]
+pub struct PrunedToolCall {
+    /// 工具名称
+    pub tool_name: String,
+    /// 原始工具输出的长度（字符数）
+    pub original_len: usize,
+    /// 修剪后占位符的长度（字符数）
+    pub placeholder_len: usize,
+    /// 节省的 token 估算
+    pub saved_tokens: usize,
+}
+
 /// 消息重要性标签
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageImportance {
@@ -95,6 +108,9 @@ pub struct ContextStats {
     pub usage_ratio: f64,
     /// 被保留的重要消息数
     pub preserved_count: usize,
+    /// ⭐ 工具调用修剪统计
+    pub pruned_tool_calls: usize,
+    pub pruned_saved_tokens: usize,
 }
 
 impl Default for ContextStats {
@@ -107,6 +123,8 @@ impl Default for ContextStats {
             last_compressed_at: None,
             usage_ratio: 0.0,
             preserved_count: 0,
+            pruned_tool_calls: 0,
+            pruned_saved_tokens: 0,
         }
     }
 }
@@ -116,6 +134,11 @@ impl Default for ContextStats {
 pub enum CompressResult {
     /// 无需压缩
     NotNeeded,
+    /// ⭐ 工具调用结果已用占位符替换（最轻量，保留对话结构）
+    ToolCallsPruned {
+        pruned_count: usize,
+        saved_tokens: usize,
+    },
     /// 已通过滑动窗口压缩
     SlidingWindowCompressed {
         removed_count: usize,
@@ -130,6 +153,24 @@ pub enum CompressResult {
         removed_count: usize,
         kept_count: usize,
     },
+}
+
+impl CompressResult {
+    /// 是否实际发生了压缩
+    pub fn did_compress(&self) -> bool {
+        !matches!(self, CompressResult::NotNeeded)
+    }
+
+    /// 简要描述
+    pub fn description(&self) -> &'static str {
+        match self {
+            CompressResult::NotNeeded => "无需压缩",
+            CompressResult::ToolCallsPruned { .. } => "工具调用结果修剪",
+            CompressResult::SlidingWindowCompressed { .. } => "滑动窗口压缩",
+            CompressResult::AsyncSummaryDispatched { .. } => "异步摘要已派发",
+            CompressResult::HardTruncated { .. } => "保底截断",
+        }
+    }
 }
 
 /// 异步摘要任务
@@ -220,5 +261,19 @@ mod tests {
         let ctx_msg = ContextMessage::from(msg);
         assert!(!ctx_msg.preserved);
         assert_eq!(ctx_msg.importance, MessageImportance::Normal);
+    }
+
+    #[test]
+    fn test_compress_result_did_compress() {
+        assert!(!CompressResult::NotNeeded.did_compress());
+        assert!(CompressResult::ToolCallsPruned { pruned_count: 1, saved_tokens: 100 }.did_compress());
+        assert!(CompressResult::SlidingWindowCompressed { removed_count: 5, removed_turns: 2 }.did_compress());
+        assert!(CompressResult::HardTruncated { removed_count: 3, kept_count: 10 }.did_compress());
+    }
+
+    #[test]
+    fn test_compress_result_description() {
+        assert_eq!(CompressResult::NotNeeded.description(), "无需压缩");
+        assert_eq!(CompressResult::ToolCallsPruned { pruned_count: 1, saved_tokens: 100 }.description(), "工具调用结果修剪");
     }
 }

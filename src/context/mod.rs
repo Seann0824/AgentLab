@@ -8,10 +8,11 @@ pub use config::{ContextConfig, ContextStrategy};
 pub use summarizer::{rule_based_summary, AsyncSummarizer};
 pub use tokenizer::TokenEstimator;
 pub use types::{
-    CompressResult, ContextMessage, ContextStats, MessageImportance, SummaryResult, SummaryScope,
-    SummaryTask, is_stdout_structural,
+    CompressResult, ContextMessage, ContextStats, MessageImportance, PrunedToolCall,
+    SummaryResult, SummaryScope, SummaryTask, is_stdout_structural,
 };
 
+use std::time::Instant;
 use tokio::sync::mpsc;
 
 use crate::model::ChatMessage;
@@ -21,7 +22,7 @@ use crate::model::ChatMessage;
 /// 职责：
 /// 1. 管理消息列表的生命周期
 /// 2. ⭐ 估算 Token 消耗（增量式缓存，避免 O(n) 全量遍历）
-/// 3. 根据策略自动压缩上下文
+/// 3. 根据策略自动压缩上下文（四层渐进：修剪→滑动窗口→摘要→截断）
 /// 4. 保护系统提示词 + 标记为 preserve 的消息
 /// 5. 派发异步摘要任务
 ///
@@ -141,9 +142,11 @@ impl ContextManager {
                 );
                 let compressed = self.handle_compress_result(&result);
 
-                // 如果启用了异步摘要且压缩发生，派发摘要任务
+                // 如果触发了滑动窗口压缩，并且启用了异步摘要，派发摘要任务
                 if compressed {
-                    self.maybe_dispatch_summary();
+                    if matches!(&result, CompressResult::SlidingWindowCompressed { .. }) {
+                        self.maybe_dispatch_summary();
+                    }
                 }
 
                 compressed
@@ -155,7 +158,9 @@ impl ContextManager {
     fn handle_compress_result(&mut self, result: &CompressResult) -> bool {
         match result {
             CompressResult::NotNeeded => false,
-            CompressResult::SlidingWindowCompressed { .. }
+            // ⭐ ToolCallsPruned 只替换了内容，消息数量不变，token 缓存需要重算
+            CompressResult::ToolCallsPruned { .. }
+            | CompressResult::SlidingWindowCompressed { .. }
             | CompressResult::HardTruncated { .. } => {
                 // ⭐ 缓存失效，需要全量重算 token
                 self.recalculate_token_cache();
@@ -337,6 +342,40 @@ impl ContextManager {
     pub fn set_max_preserved(&mut self, max: usize) {
         self.max_preserved = max;
     }
+
+    /// ⭐ 手动触发工具调用修剪（层0压缩）
+    ///
+    /// 可以在检测到 token 接近上限时主动调用。
+    /// 比滑动窗口更温和——只压缩工具结果，不删除对话结构。
+    pub fn prune_tool_calls(&mut self) -> CompressResult {
+        if !self.strategy.tool_pruning_enabled() {
+            return CompressResult::NotNeeded;
+        }
+
+        let result = strategy::tool_call_pruning(
+            &mut self.messages,
+            self.strategy.tool_pruning_keep_recent(),
+            self.strategy.tool_pruning_max_output_chars(),
+            &self.tokenizer,
+        );
+
+        if result.did_compress() {
+            self.recalculate_token_cache();
+            self.stats.compressed = true;
+            self.stats.last_compressed_at = Some(Instant::now());
+
+            if let CompressResult::ToolCallsPruned {
+                pruned_count,
+                saved_tokens,
+            } = &result
+            {
+                self.stats.pruned_tool_calls += pruned_count;
+                self.stats.pruned_saved_tokens += saved_tokens;
+            }
+        }
+
+        result
+    }
 }
 
 #[cfg(test)]
@@ -511,6 +550,9 @@ mod tests {
                 max_turns: 20,
                 trigger_ratio: 0.7,
                 enable_async_summary: false,
+                enable_tool_pruning: true,
+                tool_pruning_keep_recent: 3,
+                tool_pruning_max_output_chars: 200,
             },
         );
 
@@ -565,5 +607,74 @@ mod tests {
             "After injection + compression, message count should be bounded: {}",
             ctx.messages.len()
         );
+    }
+
+    // ⭐ 测试手动调用工具修剪
+    #[test]
+    fn test_prune_tool_calls_manual() {
+        let mut ctx = ContextManager::new(
+            "System",
+            ContextStrategy::Auto {
+                token_limit: 100_000,
+                max_turns: 20,
+                trigger_ratio: 0.9,
+                enable_async_summary: false,
+                enable_tool_pruning: true,
+                tool_pruning_keep_recent: 2,
+                tool_pruning_max_output_chars: 50,
+            },
+        );
+
+        // 添加一些包含长工具输出的消息
+        use crate::model::ToolCall;
+        for i in 0..10 {
+            ctx.add_message(ChatMessage::user(format!("User {}", i)));
+            ctx.add_message(ChatMessage::assistant_tool_calls(
+                format!("Thinking {}", i),
+                vec![ToolCall {
+                    id: format!("call_{}", i),
+                    name: "shell".into(),
+                    arguments: r#"{"command": "echo ok"}"#.into(),
+                }],
+            ));
+            let long_output = format!(
+                r#"{{"ok":true,"result":{{"command":"echo ok","stdout":"{}\n"}}}}"#,
+                "ok".repeat(500)
+            );
+            ctx.add_message(ChatMessage::tool(format!("call_{}", i), &long_output));
+            ctx.add_message(ChatMessage::assistant(format!("Done {}", i)));
+        }
+
+        let count_before = ctx.messages.len();
+
+        let result = ctx.prune_tool_calls();
+
+        assert!(result.did_compress(), "Should prune some tool calls");
+        // 消息数量不变（只替换内容）
+        assert_eq!(ctx.messages.len(), count_before);
+
+        if let CompressResult::ToolCallsPruned {
+            pruned_count,
+            saved_tokens,
+        } = &result
+        {
+            assert!(*pruned_count > 0, "Should have pruned some calls");
+            assert!(*saved_tokens > 0, "Should have saved tokens");
+            assert!(
+                ctx.stats().pruned_tool_calls >= *pruned_count,
+                "Stats should track pruned calls"
+            );
+        }
+    }
+
+    #[test]
+    fn test_prune_tool_calls_disabled() {
+        let mut ctx = ContextManager::new(
+            "System",
+            ContextStrategy::SlidingWindow { max_turns: 5 },
+        );
+
+        let result = ctx.prune_tool_calls();
+        assert!(!result.did_compress(), "SlidingWindow mode has no pruning");
     }
 }
