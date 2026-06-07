@@ -6,6 +6,7 @@ use crate::{model::{ChatMessage, ToolCall}, tools::types::{Tool, ToolEvent}};
 
 pub mod types;
 pub mod base_shell;
+pub mod permission;
 
 
 pub struct ToolManager {

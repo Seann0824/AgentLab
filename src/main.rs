@@ -3,7 +3,14 @@ use anyhow;
 use dotenvy;
 use futures_util::{StreamExt, stream::FuturesUnordered};
 
-use crate::{model::{ChatMessage, ModelEvent, ToolCall}, tools::{ToolManager, base_shell::BashShell}};
+use crate::{
+    model::{ChatMessage, ModelEvent, ToolCall},
+    tools::{
+        ToolManager,
+        base_shell::BashShell,
+        permission::{PermissionWrapper, PermissionChecker, PermissionConfigLoader},
+    },
+};
 
 mod model;
 mod tools;
@@ -12,12 +19,25 @@ mod tools;
 async fn main() -> anyhow::Result<()> {
     let query_client = initial_model()?;
     let tool_manager = initial_tool_manager();
+
+    // 生成权限规则摘要并注入系统提示词
+    let checker = PermissionChecker::new(
+        PermissionConfigLoader::load("/Users/sean/Desktop/repo/agent-lab"),
+    );
+    let policy_summary = checker.generate_policy_summary();
+
     let mut messages: Vec<ChatMessage> = vec![
-        ChatMessage::system("你当前工作的目录为 /Users/sean/Desktop/repo/agent-lab。这个目录是你模型的Agent架子，它构建你和外部世界沟通的 bridege。如果你需要什么能力自己修改agent代码补充。"),
+        ChatMessage::system(format!(
+            "你当前工作的目录为 /Users/sean/Desktop/repo/agent-lab。\
+             \n这个目录是你模型的Agent架子，它构建你和外部世界沟通的 bridge。\
+             \n如果你需要什么能力自己修改agent代码补充。\
+             \n\n{}",
+            policy_summary
+        )),
     ];
     let mut is_auto = false;
     let mut terminal_line_dirty = false;
-   
+
     loop {
         if !is_auto {
             let mut user_input = String::new();
@@ -118,6 +138,13 @@ fn initial_model() -> anyhow::Result<Box<dyn model::ModelAdapter>> {
 
 fn initial_tool_manager() -> ToolManager {
     let mut tool_manager = ToolManager::new();
-    tool_manager.register_tool(Box::new(BashShell));
+
+    // 使用权限沙箱包装 BashShell
+    let checker = PermissionChecker::new(
+        PermissionConfigLoader::load("/Users/sean/Desktop/repo/agent-lab"),
+    );
+    let shell = PermissionWrapper::new(Box::new(BashShell), checker);
+    tool_manager.register_tool(Box::new(shell));
+
     tool_manager
 }
