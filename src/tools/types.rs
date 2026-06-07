@@ -14,7 +14,7 @@ pub enum ToolEvent {
     Err(String),
 }
 
-pub trait Tool {
+pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> serde_json::Value;

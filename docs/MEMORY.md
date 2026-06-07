@@ -348,3 +348,35 @@ effective_max_turns = 15, turns 15 > 15? false → 滑动窗口不触发
 - `cargo check`: ✅ 编译通过
 - `cargo test`: ✅ 全部 94 个测试通过
 - 文档结构清晰，状态文件统一在 docs/
+
+## 2024-06-07: 🔧 修复编译错误 — SpawnAgent Send + borrow after move
+
+### 问题描述
+cargo check 报三个编译错误：
+1. `SpawnAgent` 中 `Box<dyn ModelAdapter>` 不满足 `Send` trait bound
+2. `ChatMessage` 枚举的变体包含 `dyn ToolResultRenderer` 不满足 `Send`
+3. `AgentBuilder::build()` 中 `self.config` 在 `to_strategy()` 调用后被 move
+
+### 修复方案
+
+**错误1: ChatMessage 不是 Send**
+- 给 `ToolResultRenderer` trait 加上 `Send` bound
+- 给 `ModelAdapter` trait 加上 `Send` bound
+- 修改 `SpawnAgent` 字段类型为 `Arc<Mutex<Box<dyn ModelAdapter + Send>>>`
+- 修改所有引用处适配 `Arc<Mutex<...>>` 模式（lock/unlock）
+
+**错误2: SpawnAgent 的 model 字段类型**
+- 同上，改为 `Arc<Mutex<Box<dyn ModelAdapter + Send>>>`
+
+**错误3: AgentBuilder::build() borrow after move**
+- 将 `self.config.to_strategy()` 提取到局部变量 `strategy`，在 move `self.config` 到 struct 之前调用
+
+### 修改文件
+- `src/tools/subagent/mod.rs` — `SpawnAgent` 字段类型 + ModelAdapter Send bound
+- `src/context/mod.rs` — `ToolResultRenderer` Send bound
+- `src/model/mod.rs` — `ModelAdapter` Send bound
+- `src/tools/subagent/spawn.rs` — 适配 `Arc<Mutex<...>>`
+- `src/agent.rs` — `build()` 中提前提取 strategy
+
+### 验证
+- `cargo check` 通过（0 errors, 19 warnings）

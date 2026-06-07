@@ -59,3 +59,26 @@
 
 - [x] **4.1** 创建 src/lib.rs 库入口
 - [ ] **4.2** 从 main.rs 提取 Agent 核心循环到 agent.rs（待后续）
+
+---
+
+## 新任务：提取 Agent 主循环到 agent.rs + 多 Agent 支持
+
+> **目标**: 将 main.rs 中的主循环提取到 agent.rs，支持多 Agent 并行运行
+> **设计文档**: [MULTI_AGENT_ARCHITECTURE.md](./designs/MULTI_AGENT_ARCHITECTURE.md)
+
+### 步骤
+
+- [x] **1. 输出技术方案文档** → `docs/designs/MULTI_AGENT_ARCHITECTURE.md`
+- [ ] **2. 实现 AgentConfig + AgentBuilder + Agent struct (agent.rs)**
+  - AgentConfig 结构体（上下文策略配置）
+  - AgentBuilder 构建器模式
+  - Agent 结构体（持有所有状态）
+  - 将 main.rs 的循环体移到 `Agent::run()`
+  - 将辅助函数（session handling, render, etc.）移到 agent.rs
+- [ ] **3. 实现 AgentHandle + spawn() 多 Agent 支持**
+  - AgentHandle 结构体
+  - `Agent::spawn()` 静态方法
+- [ ] **4. 更新 lib.rs** → 添加 `pub mod agent;`
+- [ ] **5. 精简 main.rs** → 只保留 CLI 参数解析和 Agent 创建
+- [ ] **6. 验证** → cargo check + cargo test

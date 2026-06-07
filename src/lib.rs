@@ -1,6 +1,7 @@
 // Agent Lab — 自我进化的 AI Agent 框架
 // 库入口：公开所有公共模块，便于集成测试和模块可见性控制
 
+pub mod agent;
 pub mod cli;
 pub mod context;
 pub mod debug;
