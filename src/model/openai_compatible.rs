@@ -5,9 +5,9 @@ use futures_util::StreamExt;
 use serde_json::json;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::{model::{ModelEvent, types::ModelStream}, tools};
+use crate::model::{ModelEvent, types::ModelStream};
 
-use super::{ChatMessage, ModelAdapter};
+use super::{ChatMessage, ModelAdapter, ToolCall};
 
 pub struct OpenAiCompatibleAdapter {
     pub base_url: String,
@@ -28,27 +28,18 @@ impl OpenAiCompatibleAdapter {
 }
 
 impl ModelAdapter for OpenAiCompatibleAdapter {
-    fn stream_chat(&self, messages: Vec<ChatMessage>, tools: Option<Vec<Box<dyn tools::types::Tool>>>) -> ModelStream {
+    fn stream_chat(&self, messages: &Vec<ChatMessage>, tools_schema: serde_json::Value) -> ModelStream {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let (tx, rx) = mpsc::channel(100);
+        let messages = openai_messages(messages);
 
-        let mut params = json!({
+        let params = json!({
             "model": &self.model,
             "stream": true,
-            "messages": &messages,
+            "messages": messages,
+            "tools": tools_schema,
+            "tool_choice": "auto",
         });
-
-        if let Some(tools) = tools {
-            let tools_schema = tools
-                .iter()
-                .map(|tool| {
-                   tool.parameters_schema()
-                })
-                .collect::<Vec<serde_json::Value>>();
-
-            params["tools"] = serde_json::json!(tools_schema);
-            params["tool_choice"] = serde_json::json!("auto");
-        }
 
         // 感觉应该先将 messages 做转换，不过这里看着如果所有模型格式都统一的话无所
         let query_model = self.client
@@ -62,8 +53,8 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                 Result::Ok(stream) => {
                     let mut stream = stream.bytes_stream();
                     let mut buffer = String::new();
-
                     let mut tool_map: HashMap<usize, ModelEvent> = HashMap::new();
+                    let mut assistant_message = String::new();
 
                     while let Some(chunck) = stream.next().await {
                         if let Result::Ok(bytes) = chunck {
@@ -84,12 +75,14 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                             
                             data = data.trim();
                             if data == "[DONE]" {
+                                tx.send(ModelEvent::Done(assistant_message)).await;
                                 return;
                             }
 
                             match serde_json::from_str::<serde_json::Value>(data) {
                                 Result::Ok(value) => {
                                     if let Some(content) = value["choices"][0]["delta"]["content"].as_str() && !content.is_empty() {
+                                        assistant_message.push_str(content);
                                         tx.send(ModelEvent::Text(content.to_string())).await;
                                     }
 
@@ -155,4 +148,69 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
         
         Box::pin(ReceiverStream::new(rx))
     }
+}
+
+fn openai_messages(messages: &Vec<ChatMessage>) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .map(|message| {
+            match message {
+                ChatMessage::User { content } => {
+                    json!({
+                        "role": "user",
+                        "content": content,
+                    })
+                }
+                ChatMessage::Assistant {
+                    content,
+                    tool_calls,
+                } => {
+                    if tool_calls.len() == 0 {
+                        json!({
+                            "role": "assistant",
+                            "content": content,
+                        })
+                    } else {
+                        let content = if content.is_empty() {
+                            serde_json::Value::Null
+                        } else {
+                            json!(content)
+                        };
+
+                        json!({
+                            "role": "assistant",
+                            "content": content,
+                            "tool_calls": openai_tool_calls(tool_calls),
+                        })
+                    }
+                }
+                ChatMessage::Tool {
+                    tool_call_id,
+                    content,
+                } => {
+                    json!({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": content,
+                    })
+                }
+            }
+        })
+        .collect()
+}
+
+fn openai_tool_calls(tool_calls: &Vec<ToolCall>) -> Vec<serde_json::Value> {
+    tool_calls
+        .iter()
+        .map(|tool_call| {
+            json!({
+                "id": tool_call.id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                }
+            })
+        })
+        .collect()
 }
