@@ -64,3 +64,21 @@
 - DAG: Pipeline 注册成功 → 执行后节点状态正确
 - Session: 保存/加载/列出会话正常工作
 - 代码编译无错误
+# 删除整个 DAG（任务编排）系统
+
+## 目标
+从项目中完全移除 DAG 任务编排系统相关的所有代码，包括核心 dag 模块、dag_tools 工具集、及其在入口文件中的引用。
+
+## 执行步骤
+
+- [x] 步骤1：删除 `src/dag/` 整个目录（核心 DAG 模块）
+- [x] 步骤2：删除 `src/tools/dag_tools/` 整个目录（DAG 工具集）
+- [x] 步骤3：编辑 `src/lib.rs`，移除 `pub mod dag;`
+- [x] 步骤4：编辑 `src/tools/mod.rs`，移除 `pub mod dag_tools;`
+- [x] 步骤5：编辑 `src/agent.rs`，移除 DAG 上下文初始化和工具注册代码
+- [x] 步骤6：删除 DAG 相关文档
+- [x] 步骤7：运行 `cargo check` 验证编译通过
+
+## 验证标准
+- `cargo check` 通过，无报错
+- 所有 DAG 相关引用已清除

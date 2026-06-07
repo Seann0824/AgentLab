@@ -212,27 +212,6 @@ impl Agent {
     /// - LLM 流式对话 + 工具调用
     /// - 任务状态管理
     pub async fn run(&mut self) -> anyhow::Result<()> {
-        // ⭐ 初始化全局 DAG 上下文（供 pipeline_execute 工具使用）
-        let _ = crate::tools::dag_tools::store::init_dag_context(
-            self.model_manager.clone_active_adapter()
-                .expect("当前模型适配器不可用"),
-            // 创建一个独立的 ToolManager 供 DAG Worker 使用
-            // 注意：需要 clone 现有的工具。由于 ToolManager 不支持 clone，
-            // 我们创建一个新的并用相同的工具注册。
-            {
-                let mut tm = crate::tools::ToolManager::new();
-                // 注册常用工具（Worker Agent 可调用）
-                tm.register_tool(Box::new(crate::tools::shell::BashShell));
-                tm.register_tool(Box::new(crate::tools::tool_debug::DebugTool));
-                tm.register_tool(Box::new(crate::tools::edit::EditTool));
-                tm.register_tool(Box::new(crate::tools::read::ReadTool));
-                tm.register_tool(Box::new(crate::tools::search::SearchTool));
-                // 不注册 spawn_agent（防止递归）和 investigate
-                // 不注册 DAG 工具（防止递归调用 pipeline_execute）
-                tm
-            },
-        );
-
         // ⭐ 获取配置中的 token_limit
         let token_limit = self.config.token_limit;
 
@@ -330,12 +309,36 @@ impl Agent {
 当前可用工具：
 {tools_description}
 
-  【使用场景】修改自身代码后，编译新版本并派生子 agent 验证改动的效果：
-  1. 先修改代码
-  2. 使用 spawn_agent(task="具体验证任务", timeout_seconds=300)
-  3. 工具会自动 cargo build，然后以 `--task` 模式启动子 agent
-  4. 子 agent 独立完成任务后输出结果
-  5. 主 agent 分析结果判断修改是否按预期工作
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【主从 Agent 架构】
+
+你是 **Master Agent（主 Agent）**，可以通过 `spawn_agent` 工具派遣 **Sub-agent（子 Agent）** 为你工作。
+
+### 架构模型
+```
+你 (Master Agent, 当前进程)
+  └── spawn_agent(task="...")  →  编译并启动 Sub-agent (独立子进程)
+        └── Sub-agent 独立完成任务后退出，结果返回给你
+```
+
+### 工作原理
+1. **你（Master）** 决定需要做什么任务
+2. 调用 `spawn_agent(task="任务描述", timeout_seconds=300)`
+3. 系统自动 `cargo build` 编译当前代码，然后以 `--task` 模式启动子进程
+4. **Sub-agent** 作为一个全新的 Agent 实例独立执行任务（拥有自己的上下文、工具）
+5. Sub-agent 完成后返回完整输出，你分析结果并继续工作
+
+### 适合派遣 Sub-agent 的场景
+- **并行探索**：需要同时调查多个方向时，可以多次调用 spawn_agent 并行派遣多个子 agent
+- **独立验证**：修改代码后派生子 agent 做端到端测试验证
+- **分治执行**：复杂任务拆解后，将子任务分派给子 agent 并行处理
+- **安全隔离**：需要在不影响当前上下文的环境中执行的实验性操作
+
+### 注意
+- Sub-agent 是你的副本，拥有和你一样的能力（工具、模型）
+- Sub-agent 在独立进程中运行，它的输出不会污染你的上下文
+- 一次可以派遣多个 Sub-agent 并行工作
+- Sub-agent 完成任务后自动退出
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 【任务状态管理】
@@ -1090,10 +1093,5 @@ fn default_tool_manager() -> ToolManager {
     tool_manager.register_tool(Box::new(SearchTool));
     tool_manager.register_tool(Box::new(SpawnAgent));
     tool_manager.register_tool(Box::new(InvestigateTool::new(".")));
-    // DAG 任务编排工具
-    tool_manager.register_tool(Box::new(crate::tools::dag_tools::PipelineBuild));
-    tool_manager.register_tool(Box::new(crate::tools::dag_tools::PipelineExecute));
-    tool_manager.register_tool(Box::new(crate::tools::dag_tools::PipelineStatus));
-    tool_manager.register_tool(Box::new(crate::tools::dag_tools::PipelineList));
     tool_manager
 }
