@@ -9,9 +9,10 @@ use futures_util::{StreamExt, stream::FuturesUnordered};
 use crate::cli::CommandRegistry;
 use crate::context::{ContextManager, ContextStrategy, TokenEstimator};
 use crate::model::{ChatMessage, ModelAdapter, ModelEvent, ToolCall};
+use crate::investigate::ErrorSnapshotManager;
 use crate::session::SessionManager;
 use crate::task::TaskManager;
-use crate::tools::{ToolManager, shell::BashShell, tool_debug::DebugTool, edit::EditTool, read::ReadTool, search::SearchTool, subagent::SpawnAgent};
+use crate::tools::{ToolManager, shell::BashShell, tool_debug::DebugTool, edit::EditTool, read::ReadTool, search::SearchTool, subagent::SpawnAgent, investigate::InvestigateTool};
 
 // =====================================================================
 // AgentConfig — Agent 配置
@@ -384,7 +385,14 @@ impl Agent {
                         self.context_manager.add_message(ChatMessage::user(&input));
                         self.task_manager.on_user_input(&input);
                     } else {
-                        // --task 模式：任务已完成，退出
+                        // --task 模式：任务已完成，输出最终错误快照引用并退出
+                        // 输出最后的错误快照 ID（如果存在）
+                        let snapshot_manager = ErrorSnapshotManager::new(&self.current_dir);
+                        if let Ok(snapshots) = snapshot_manager.list() {
+                            if let Some(last) = snapshots.last() {
+                                eprintln!("[SNAPSHOT] {}", last.id);
+                            }
+                        }
                         break Ok(());
                     }
                 } else {
@@ -604,17 +612,6 @@ impl Agent {
                 .map(|tool_call| tool_call.id.clone())
                 .collect::<Vec<_>>();
 
-            if tool_calls.len() > 0 {
-                self.context_manager.add_message(ChatMessage::assistant_tool_calls(
-                    final_assistant_message,
-                    tool_calls,
-                ));
-                is_auto = true;
-            } else {
-                self.context_manager.add_message(ChatMessage::assistant(final_assistant_message));
-                is_auto = false;
-            }
-
             let mut tool_results = Vec::new();
             while let Some(tool_result) = tool_tasks.next().await {
                 tool_results.push(tool_result);
@@ -626,6 +623,60 @@ impl Agent {
                 for tool_result in &tool_results {
                     render_tool_result_from_msg(tool_result);
                 }
+            }
+
+            // ⭐ 自动捕获错误快照（在移动 tool_calls 之前）
+            let mut last_snapshot_id: Option<String> = None;
+            if has_tool_calls {
+                let snapshot_manager = ErrorSnapshotManager::new(&self.current_dir);
+                for tool_call in &tool_calls {
+                    if let Some(tool_result) = tool_results.iter().find(|msg| {
+                        msg.tool_call_id() == Some(tool_call.id.as_str())
+                    }) {
+                        if let ChatMessage::Tool { content, .. } = tool_result {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(content) {
+                                if val["ok"].as_bool() == Some(false) {
+                                    let err_msg = val["error"]["message"]
+                                        .as_str()
+                                        .unwrap_or("unknown error");
+                                    let tool_args: serde_json::Value =
+                                        serde_json::from_str(&tool_call.arguments)
+                                            .unwrap_or(serde_json::json!({}));
+                                    let snapshot = snapshot_manager.capture(
+                                        &self.context_manager.get_messages(),
+                                        &tool_call.name,
+                                        &tool_args,
+                                        err_msg,
+                                        None,
+                                        0,
+                                    );
+                                    if let Ok(path) = snapshot_manager.save(&snapshot) {
+                                        let id = snapshot.id.clone();
+                                        eprintln!(
+                                            "\r\x1b[2K\x1b[33m📸 错误快照已保存: {} -> {}\x1b[0m",
+                                            id,
+                                            path.display()
+                                        );
+                                        last_snapshot_id = Some(id);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 将工具调用消息加入上下文
+            if tool_calls.len() > 0 {
+                self.context_manager.add_message(ChatMessage::assistant_tool_calls(
+                    final_assistant_message,
+                    tool_calls,
+                ));
+                is_auto = true;
+            } else {
+                self.context_manager.add_message(ChatMessage::assistant(final_assistant_message));
+                is_auto = false;
             }
 
             // 将工具结果加入消息
@@ -950,5 +1001,6 @@ fn default_tool_manager() -> ToolManager {
     tool_manager.register_tool(Box::new(ReadTool));
     tool_manager.register_tool(Box::new(SearchTool));
     tool_manager.register_tool(Box::new(SpawnAgent));
+    tool_manager.register_tool(Box::new(InvestigateTool::new(".")));
     tool_manager
 }

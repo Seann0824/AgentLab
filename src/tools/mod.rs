@@ -20,6 +20,7 @@ pub mod edit;
 pub mod read;
 pub mod search;
 pub mod subagent;
+pub mod investigate;
 
 
 pub struct ToolManager {

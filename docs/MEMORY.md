@@ -380,3 +380,28 @@ cargo check 报三个编译错误：
 
 ### 验证
 - `cargo check` 通过（0 errors, 19 warnings）
+
+
+## 2025-06-08: 错误排查（Error Investigation）能力技术方案
+
+### 设计决策（v2 简化版）
+用户指出核心场景不是「完整回放」，而是「工具调用报错时记录现场并排查」。方案从三层回放架构简化为聚焦核心场景的轻量方案。
+
+### 核心设计
+1. **ErrorSnapshot** — 工具报错时自动保存「错误现场」（最后几轮消息 + 错误信息 + 任务状态），存到 `.agent/snapshots/*.json`
+2. **InvestigateTool** — 新增 `investigate` 工具，加载快照 + 调用 LLM 做根因分析，输出排查报告
+3. **spawn_agent 集成** — 子 agent 报错时输出 `[SNAPSHOT]` 标记，主 agent 自动触发排查
+
+### 对比旧方案（v1 vs v2）
+| 维度 | v1（三层回放） | v2（错误排查） |
+|------|---------------|---------------|
+| 记录范围 | 每步都记录 | 只在报错时记录 |
+| 存储 | `.agent/replay/*.json` | `.agent/snapshots/*.json` |
+| 工具 | `replay` 三种模式 | `investigate` 单一工具 |
+| 单快照大小 | ~5KB/轮 | <10KB/每次报错 |
+| 复杂度 | 高 | 低 |
+
+### 尚未实现
+- `src/investigate/` 模块代码尚未编写
+- `InvestigateTool` 尚未实现
+- spawn_agent 尚未集成
