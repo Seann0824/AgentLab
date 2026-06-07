@@ -35,6 +35,52 @@ fn find_turn_boundaries(messages: &[ContextMessage]) -> Vec<usize> {
         .collect()
 }
 
+
+/// ⭐ 删除孤立的 Tool 消息（没有对应的 Assistant tool_calls 前驱）
+///
+/// 当压缩操作删除 Assistant(tool_calls) 但保留了对应的 Tool 响应时，
+/// 会产生孤儿 Tool 消息。这些消息会导致 OpenAI API 报错：
+/// "Messages with role 'tool' must be a response to a preceding message with 'tool_calls'"
+///
+/// 策略：从后往前遍历，收集所有"活跃"的 tool_call_id（来自 Assistant tool_calls），
+/// 然后删除 Tool 消息中不属于任何活跃 tool_call_id 的。
+/// 返回删除的孤儿消息数量。
+pub fn remove_orphaned_tool_messages(messages: &mut Vec<ContextMessage>) -> usize {
+    let mut active_tool_call_ids: Vec<String> = Vec::new();
+    let mut orphaned_tool_count = 0;
+
+    // 从后往前扫描，先收集所有 Assistant tool_calls 中的 tool_call_id
+    for i in (0..messages.len()).rev() {
+        if let ChatMessage::Assistant { tool_calls, .. } = &messages[i].message {
+            for tc in tool_calls {
+                if !active_tool_call_ids.contains(&tc.id) {
+                    active_tool_call_ids.push(tc.id.clone());
+                }
+            }
+        }
+    }
+
+    // 再次从后往前遍历，移除孤立的 Tool 消息
+    let mut i = messages.len();
+    while i > 0 {
+        i -= 1;
+        if let ChatMessage::Tool { tool_call_id, .. } = &messages[i].message {
+            if !active_tool_call_ids.contains(tool_call_id) {
+                messages.remove(i);
+                orphaned_tool_count += 1;
+            }
+        }
+    }
+
+    if orphaned_tool_count > 0 {
+        eprintln!(
+            "[remove_orphaned_tool_messages] 🧹 removed {} orphaned tool messages",
+            orphaned_tool_count,
+        );
+    }
+
+    orphaned_tool_count
+}
 // ================= 层0：工具调用结果修剪 =================
 
 /// ⭐ 层0：工具调用结果修剪（最轻量压缩，保留完整对话结构）
@@ -224,8 +270,12 @@ fn sliding_window_compress(
     let removed_count = original_len - new_messages.len();
     *messages = new_messages;
 
+    // 🔴 删除孤立的 Tool 消息（防止 API 报错）
+    let orphaned = remove_orphaned_tool_messages(messages);
+    let total_removed = removed_count + orphaned;
+
     CompressResult::SlidingWindowCompressed {
-        removed_count,
+        removed_count: total_removed,
         removed_turns: remove_turns,
     }
 }
@@ -318,16 +368,20 @@ fn emergency_truncate(
 
     let total_removed = original_len - messages.len();
 
+    // 🔴 删除孤立的 Tool 消息（防止 API 报错）
+    let orphaned = remove_orphaned_tool_messages(messages);
+    let final_removed = total_removed + orphaned;
+
     eprintln!(
         "[emergency_truncate] 🚨 FORCED: removed {} messages (keep={}), tokens {} → {}",
-        total_removed,
+        final_removed,
         messages.len(),
         original_tokens,
         current_tokens,
     );
 
     CompressResult::EmergencyTruncated {
-        removed_count: total_removed,
+        removed_count: final_removed,
         kept_count: messages.len(),
     }
 }
@@ -394,45 +448,20 @@ fn hard_truncate(
     // 保留剩余消息
     new_messages.extend_from_slice(&messages[end..]);
 
-    // 🔴 修复：删除孤立的 Tool 消息（没有对应的 Assistant tool_calls 前驱）
-    // 从后往前遍历，收集当前所有"活跃"的 tool_call_id（来自 Assistant tool_calls）
-    // 然后删除 Tool 消息中不属于任何活跃 tool_call_id 的
-    let mut active_tool_call_ids: Vec<String> = Vec::new();
-    let mut orphaned_tool_count = 0;
-    
-    // 从后往前扫描，先收集所有 Assistant tool_calls 中的 tool_call_id
-    for i in (0..new_messages.len()).rev() {
-        if let ChatMessage::Assistant { tool_calls, .. } = &new_messages[i].message {
-            for tc in tool_calls {
-                if !active_tool_call_ids.contains(&tc.id) {
-                    active_tool_call_ids.push(tc.id.clone());
-                }
-            }
-        }
-    }
-
-    // 再次从后往前遍历，移除孤立的 Tool 消息
-    let mut i = new_messages.len();
-    while i > 0 {
-        i -= 1;
-        if let ChatMessage::Tool { tool_call_id, .. } = &new_messages[i].message {
-            if !active_tool_call_ids.contains(tool_call_id) {
-                new_messages.remove(i);
-                orphaned_tool_count += 1;
-            }
-        }
-    }
-
     let removed_count = original_len - new_messages.len();
     *messages = new_messages;
 
+    // 🔴 删除孤立的 Tool 消息（防止 API 报错）
+    let orphaned_tool_count = remove_orphaned_tool_messages(messages);
+    let final_removed = removed_count + orphaned_tool_count;
+
     eprintln!(
         "[hard_truncate] removed {} messages (including {} orphaned tool results), tokens reduced",
-        removed_count, orphaned_tool_count,
+        final_removed, orphaned_tool_count,
     );
 
     CompressResult::HardTruncated {
-        removed_count,
+        removed_count: final_removed,
         kept_count: messages.len(),
     }
 }
@@ -718,6 +747,15 @@ pub fn force_compress(
             new_messages.extend_from_slice(&messages[original_len.saturating_sub(keep_recent)..]);
             
             *messages = new_messages;
+            
+            // 🔴 清理孤立的 Tool 消息（手动构建消息列表可能破坏 tool_calls→Tool 对应关系）
+            let orphaned = remove_orphaned_tool_messages(messages);
+            if orphaned > 0 {
+                eprintln!(
+                    "[force_compress] 🧹 auto-loop: removed {} orphaned tool messages",
+                    orphaned,
+                );
+            }
         }
     }
 
@@ -943,13 +981,37 @@ mod tests {
     }
 
     #[test]
-    fn test_sliding_window_with_tools_preserves_mid_turn() {
+    fn test_sliding_window_removes_orphaned_tool_even_if_preserved() {
+        /// 测试：当 Tool 消息被 preserved 但其对应的 Assistant(tool_calls) 被滑动窗口删除时，
+        /// Tool 消息仍然是孤儿（因为没有对应的 tool_calls 前驱），会被 remove_orphaned_tool_messages 清理。
+        /// 这是一个安全优先的决策：宁删 preserved 消息，也不让孤儿 Tool 消息导致 API 报错。
         let mut msgs = make_context_messages_with_tools(5);
-        msgs[7].preserved = true;
+        msgs[7].preserved = true; // Tool(call_1) — 但 Assistant(tc: call_1) 在 index 6
 
         let result = sliding_window_compress(&mut msgs, 2);
         assert!(result.did_compress());
-        assert!(msgs.iter().any(|m| m.preserved));
+        // 被 preserved 的孤儿 Tool 消息会被清理掉（安全优先）
+        // 但 System 和正常的 non-orphan preserved 消息应该保留
+        assert!(
+            msgs.iter().any(|m| matches!(&m.message, ChatMessage::System { .. })),
+            "System message should always survive"
+        );
+        // 验证没有孤立的 Tool 消息残留
+        let tool_msgs: Vec<_> = msgs.iter().filter(|m| matches!(&m.message, ChatMessage::Tool { .. })).collect();
+        let assistant_tc_ids: Vec<String> = msgs.iter().filter_map(|m| {
+            if let ChatMessage::Assistant { tool_calls, .. } = &m.message {
+                Some(tool_calls.iter().map(|tc| tc.id.clone()).collect::<Vec<_>>())
+            } else { None }
+        }).flatten().collect();
+        for tool in &tool_msgs {
+            if let ChatMessage::Tool { tool_call_id, .. } = &tool.message {
+                assert!(
+                    assistant_tc_ids.contains(tool_call_id),
+                    "All remaining Tool messages should have matching Assistant tool_calls: {}",
+                    tool_call_id,
+                );
+            }
+        }
     }
 
     // ⭐ 工具调用修剪测试

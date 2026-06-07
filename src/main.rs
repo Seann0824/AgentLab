@@ -267,7 +267,7 @@ async fn main() -> anyhow::Result<()> {
                     // /debug 命令：控制全局 debug 模式
                     if cmd_name == "debug" {
                         let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                        let sub = parts.get(2).copied().unwrap_or("status");
+                        let sub = parts.get(1).copied().unwrap_or("status");
                         match sub {
                             "on" | "enable" | "1" | "true" => {
                                 crate::debug::enable();

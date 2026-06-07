@@ -97,3 +97,14 @@
   - 在测试 `test_registry_contains_builtin_commands` 中添加 `tools` 的断言
 - **效果**：`/help` 现在会列出 `/tools`，`/tools` 命令可直接调用显示所有已注册工具
 - **验证**：cargo check 通过, cargo test 90 passed
+
+### 11. 压缩后孤立 Tool 消息清理 ✅
+- **状态**：✅ 全部完成
+- **实现**：`remove_orphaned_tool_messages()` 函数在 `src/context/strategy.rs:48-83`
+- **调用点（全部5个压缩路径都已覆盖）**：
+  - `sliding_window_compress`（line 274）— 滑动窗口压缩后
+  - `hard_truncate`（line 455）— 保底截断后
+  - `emergency_truncate`（line 372）— 紧急截断后
+  - `force_compress` auto-loop 模式（line 752）— 手动构建消息列表后
+  - `inject_summary`（`src/context/mod.rs:238`）— 摘要注入删除原文后
+- **验证**：cargo check 通过, cargo test 94 passed

@@ -234,6 +234,14 @@ impl ContextManager {
             if remove_start < remove_end {
                 self.messages.drain(remove_start..remove_end);
             }
+            // 🔴 清理孤立的 Tool 消息（按 count 删除可能破坏 tool_calls→Tool 对应关系）
+            let orphaned = strategy::remove_orphaned_tool_messages(&mut self.messages);
+            if orphaned > 0 {
+                eprintln!(
+                    "[inject_summary] 🧹 removed {} orphaned tool messages after summary injection",
+                    orphaned,
+                );
+            }
         }
 
         // 3. ⭐ 缓存失效，全量重算 token

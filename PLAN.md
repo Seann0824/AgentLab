@@ -376,3 +376,50 @@
 - `/debug status` 显示当前状态
 - Agent 可以通过工具调用 `debug` 工具来读取/设置 debug 标志
 - `cargo check` 通过
+
+# 修复：压缩后产生孤立的 Tool 消息导致 API 报错
+
+## 目标
+修复上下文压缩后出现 "Messages with role 'tool' must be a response to a preceding message with 'tool_calls'" 错误。
+
+## 根因
+压缩函数（sliding_window、emergency_truncate、force_compress、inject_summary）在移除消息时，可能删除 `Assistant(tool_calls)` 但保留对应的 `Tool` 响应消息（因 Tool 被标记为 preserved/important 或在保留范围内），导致向 API 发送的消息序列中产生孤立 Tool 消息，违反 OpenAI 协议。
+
+## 执行步骤
+
+- [ ] 0. 分析所有压缩路径，确认哪些函数需要修复
+- [ ] 1. 提取 `hard_truncate` 中的孤儿 Tool 清理逻辑为独立函数 `remove_orphaned_tool_messages`
+- [ ] 2. 在 `sliding_window_compress` 末尾调用孤儿清理
+- [ ] 3. 在 `emergency_truncate` 末尾调用孤儿清理
+- [ ] 4. 在 `force_compress` 的滑动窗口和保留消息路径末尾调用孤儿清理
+- [ ] 5. 在 `inject_summary` 末尾调用孤儿清理
+- [ ] 6. 在 `get_messages()` 中添加安全兜底（保险丝）
+- [ ] 7. 运行 `cargo check 2>&1 | tail -30` 验证编译通过
+- [ ] 8. 运行 `cargo test` 确保测试通过
+
+## 验证标准
+- [ ] `cargo check` 通过
+- [ ] 所有现有测试通过
+- [ ] 不再出现孤立 Tool 消息
+
+# 修复压缩后孤立 Tool 消息
+
+## 目标
+确保所有压缩路径在删除消息后都清理孤立的 Tool 消息（Tool 消息对应的 Assistant tool_calls 已被删除），防止 OpenAI API 报错。
+
+## 问题分析
+`remove_orphaned_tool_messages()` 函数已在 3 个压缩路径中调用：
+- ✅ `sliding_window_compress`（strategy.rs:274）
+- ✅ `hard_truncate`（strategy.rs:455）
+- ✅ `emergency_truncate`（strategy.rs:372）
+
+但以下 2 个路径缺失：
+- ❌ `force_compress` auto-loop 模式（手动构建消息后无清理）
+- ❌ `inject_summary`（按 count 删除消息后可能产生孤儿）
+
+## 执行步骤
+- [x] 1. 在 `force_compress` auto-loop 路径中，手动构建消息列表后添加 `remove_orphaned_tool_messages` 调用
+- [x] 2. 在 `inject_summary` 中，删除消息后添加 `remove_orphaned_tool_messages` 调用
+- [x] 3. 运行 `cargo check` 验证编译通过
+- [x] 4. 运行 `cargo test` 验证所有测试通过（94 passed）
+- [x] 5. 修复测试 `test_sliding_window_with_tools_preserves_mid_turn`（孤儿 Tool 即使 preserved 也应清理，安全优先）
