@@ -37,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
         let mut tool_tasks = FuturesUnordered::new();
         let mut tool_calls = Vec::new();
         let mut final_assistant_message = String::new();
+        let mut has_tool_calls = false;
         while let Some(model_event)  = stream_chat.next().await {
             match model_event {
                 ModelEvent::Text(content) => {
@@ -48,6 +49,25 @@ async fn main() -> anyhow::Result<()> {
                     terminal_line_dirty = !content.ends_with('\n');
                 },
                 ModelEvent::ToolCallBlock { id, name, arguments } => {
+                    finish_terminal_line(&mut terminal_line_dirty);
+
+                    // ===== Tool call visualization =====
+                    println!("\x1b[36m━━━ 🔧 调用工具: {}\x1b[0m", name);
+                    if let Ok(args) = serde_json::from_str::<serde_json::Value>(&arguments) {
+                        if name == "shell" {
+                            if let Some(cmd) = args["command"].as_str() {
+                                println!("\x1b[33m  $ {}\x1b[0m", cmd);
+                            }
+                        } else {
+                            println!("\x1b[33m  {}\x1b[0m",
+                                serde_json::to_string_pretty(&args).unwrap_or_default());
+                        }
+                    }
+                    print!("\x1b[33m⏳ 正在执行...\x1b[0m");
+                    std::io::Write::flush(&mut std::io::stdout())?;
+                    // ===================================
+
+                    has_tool_calls = true;
                     let tool_call = ToolCall { id, name, arguments };
                     tool_calls.push(tool_call.clone());
                     tool_tasks.push(tool_manager.run(tool_call));
@@ -76,6 +96,17 @@ async fn main() -> anyhow::Result<()> {
         while let Some(tool_result) = tool_tasks.next().await {
             tool_results.push(tool_result);
         }
+
+        // Clear loading line and render tool results
+        if has_tool_calls {
+            print!("\r\x1b[K");
+            for tool_result in &tool_results {
+                if let ChatMessage::Tool { content, .. } = tool_result {
+                    render_tool_result(content);
+                }
+            }
+        }
+
         for tool_call_id in tool_call_ids {
             if let Some(index) = tool_results
                 .iter()
@@ -87,6 +118,44 @@ async fn main() -> anyhow::Result<()> {
         }
         for tool_result in tool_results {
             messages.push(tool_result);
+        }
+    }
+}
+
+fn render_tool_result(content: &str) {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+        let ok = value["ok"].as_bool().unwrap_or(false);
+        if ok {
+            if let Some(result) = value.get("result") {
+                if result.is_object() {
+                    let success = result["success"].as_bool().unwrap_or(true);
+                    let status = result["status"].as_i64();
+                    if success {
+                        println!("\x1b[32m━━━ ✅ 执行成功 (exit: {}) ━━━\x1b[0m", status.unwrap_or(0));
+                    } else {
+                        println!("\x1b[31m━━━ ❌ 执行失败 (exit: {}) ━━━\x1b[0m", status.unwrap_or(-1));
+                    }
+                    if let Some(stdout) = result["stdout"].as_str() {
+                        if !stdout.is_empty() {
+                            print!("{}", stdout);
+                            if !stdout.ends_with('\n') { println!(); }
+                        }
+                    }
+                    if let Some(stderr) = result["stderr"].as_str() {
+                        if !stderr.is_empty() {
+                            print!("\x1b[31m{}\x1b[0m", stderr);
+                            if !stderr.ends_with('\n') { println!(); }
+                        }
+                    }
+                } else {
+                    println!("{}", serde_json::to_string_pretty(result).unwrap_or_default());
+                }
+            }
+        } else {
+            println!("\x1b[31m━━━ ❌ 工具调用失败 ━━━\x1b[0m");
+            if let Some(error) = value.get("error") {
+                println!("\x1b[31m  {}\x1b[0m", error["message"].as_str().unwrap_or("unknown error"));
+            }
         }
     }
 }
