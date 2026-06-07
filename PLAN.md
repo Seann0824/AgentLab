@@ -188,12 +188,62 @@
 修复 `main.rs:167` 中 `ctx.setup_summary_channel(None)` 传入了 `None` 的问题，使得异步摘要器能使用 LLM 生成高质量的结构化摘要，而非退化为规则摘要。
 
 ## 执行步骤
-- [ ] 步骤1: 给 `OpenAiCompatibleAdapter` 添加 `Clone` derive
-- [ ] 步骤2: 给 `ModelAdapter` trait 添加 `Clone` 超类约束
-- [ ] 步骤3: 修改 `main.rs:167` 为 `Some(query_client.clone())`
-- [ ] 步骤4: 运行 `cargo check` 和 `cargo test` 验证
+- [x] 步骤1: 给 `OpenAiCompatibleAdapter` 添加 `Clone` derive（已有 `#[derive(Clone)]`）
+- [x] 步骤2: 给 `ModelAdapter` trait 添加 `clone_box(&self) -> Box<dyn ModelAdapter>` 方法 + `Clone for Box<dyn ModelAdapter>`
+- [x] 步骤3: 修改 `main.rs:167` 为 `Some(query_client.clone())`
+- [x] 步骤4: 运行 `cargo check` 和 `cargo test` 验证
 
 ## 验证标准
-1. `cargo check` 编译通过
-2. `cargo test` 全部通过
-3. LLM 摘要实际启用（而非退化到 rule_based_summary）
+1. ✅ `cargo check` 编译通过
+2. ✅ `cargo test` 全部通过（90 passed）
+3. ✅ LLM 摘要实际启用（异步摘要器能调用 LLM，LLM 不可用时自动降级为规则摘要）
+
+# ✅ 会话管理功能
+
+## 目标
+为 Agent Lab 添加会话管理能力，支持保存、加载、列出、删除会话。
+
+## 执行步骤
+
+- [x] 1. 创建 `src/session/mod.rs` — 定义 SessionData、SessionManager（613行）
+- [x] 2. 修改 `src/main.rs` — 注册 session 模块，添加 `/session` CLI 命令
+- [x] 3. 编译验证 `cargo check`
+- [x] 4. 用 spawn_agent 验证会话功能
+
+## 验证标准
+- [x] `cargo check` 通过
+- [x] 支持 `/session save <name>` 保存当前对话
+- [x] 支持 `/session list` 列出所有会话
+- [x] 支持 `/session load <name>` 恢复对话
+- [x] 支持 `/session delete <name>` 删除会话
+- [x] 支持 `/session rename <old> <new>` 重命名会话
+
+# 新增 `/` 命令系统（命令发现 + 帮助）
+
+## 目标
+增强 CLI 交互体验，让用户输入 `/` 时能弹出可用命令列表，帮助了解所有支持的命令。
+
+## 设计思路
+1. 创建 `src/commands/mod.rs` — 命令注册表（CommandRegistry）
+2. 定义命令元数据：名称、描述、用法、子命令列表
+3. 在 main.rs 中集成：
+   - 当输入仅为 `/` 时，显示所有可用命令
+   - 当输入 `/help` 时，显示详细帮助
+   - 当输入未知 `/<xxx>` 时，提示未知命令 + 显示可用命令列表
+   - 现有 `/session ...` 和 `/clear` 逻辑保留
+
+## 执行步骤
+- [x] 1. 创建 `src/commands/mod.rs` — CommandRegistry + Command 结构体，定义所有命令元数据
+- [x] 2. 在 `main.rs` 中注册 commands 模块，集成到输入处理流程
+- [x] 3. 实现 `/help` 命令显示所有可用命令
+- [x] 4. 实现输入 `/` 时自动弹出命令列表
+- [x] 5. 实现未知 `/` 命令的友好提示 + 可用命令列表
+- [x] 6. 运行 `cargo check` 验证编译通过
+- [x] 7. 运行 `cargo test` 确保不影响现有功能
+
+## 验证标准
+- [x] `cargo check` 通过
+- [x] 现有 85 个测试全部通过（实际 90 passed）
+- [x] 输入 `/` 显示可用命令列表
+- [x] 输入 `/help` 显示详细帮助
+- [x] 输入未知命令如 `/xyz` 提示友好信息

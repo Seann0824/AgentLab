@@ -4,14 +4,18 @@ use dotenvy;
 use futures_util::{StreamExt, stream::FuturesUnordered};
 
 use crate::{
+    commands::CommandRegistry,
     context::{ContextManager, ContextStrategy, TokenEstimator},
     model::{ChatMessage, ModelEvent, ToolCall},
+    session::SessionManager,
     task::TaskManager,
     tools::{ToolManager, base_shell::BashShell, edit_tool::EditTool, read_tool::ReadTool, subagent::SpawnAgent},
 };
 
+mod commands;
 mod context;
 mod model;
+mod session;
 mod task;
 mod tools;
 
@@ -170,6 +174,12 @@ async fn main() -> anyhow::Result<()> {
     let mut task_manager = TaskManager::new(&current_dir);
     task_manager.load();
 
+    // ⭐ 初始化会话管理器
+    let session_manager = SessionManager::new(&current_dir, &current_dir);
+
+    // ⭐ 初始化命令注册表
+    let command_registry = CommandRegistry::new();
+
     let mut is_auto = false;
     let mut terminal_line_dirty = false;
     let mut single_task_used = false; // 标记 --task 模式的首次输入是否已使用
@@ -200,17 +210,58 @@ async fn main() -> anyhow::Result<()> {
                 if user_input.trim().is_empty() {
                     continue;
                 }
-                let input = user_input.trim().to_string();
+                let input_str = user_input.trim().to_string();
 
-                // ⭐ /clear 命令：清空历史消息
-                if input == "/clear" {
-                    ctx.clear();
-                    println!("\x1b[32m━━━ 🧹 历史消息已清空 ━━━\x1b[0m");
-                    continue;
+                // ⭐ 处理斜杠命令
+                if input_str.starts_with('/') {
+                    let trimmed = input_str.trim();
+                    let cmd_name = trimmed
+                        .trim_start_matches('/')
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("");
+
+                    // 输入仅为 "/" 时显示可用命令
+                    if trimmed == "/" {
+                        command_registry.print_help_short();
+                        continue;
+                    }
+
+                    // /help 命令
+                    if cmd_name == "help" || cmd_name == "h" || cmd_name == "?" {
+                        command_registry.print_help_full();
+                        continue;
+                    }
+
+                    // /clear 命令
+                    if cmd_name == "clear" {
+                        ctx.clear();
+                        println!("\x1b[32m━━━ 🧹 历史消息已清空 ━━━\x1b[0m");
+                        continue;
+                    }
+
+                    // /session 和 /sessions 命令
+                    if cmd_name == "session" || cmd_name == "sessions" {
+                        handle_session_command(&trimmed, &session_manager, &mut ctx, &mut task_manager);
+                        continue;
+                    }
+
+                    // 未知命令
+                    if command_registry.is_known(cmd_name) {
+                        // 已知命令但未单独处理（未来可扩展）
+                        if let Some(cmd) = command_registry.get(cmd_name) {
+                            command_registry.print_command_help(cmd);
+                        }
+                        continue;
+                    } else {
+                        // 未知命令 → 显示提示
+                        command_registry.print_unknown_command(&trimmed);
+                        continue;
+                    }
                 }
 
-                ctx.add_message(ChatMessage::user(&input));
-                task_manager.on_user_input(&input);
+                ctx.add_message(ChatMessage::user(&input_str));
+                task_manager.on_user_input(&input_str);
             }
         }
 
@@ -357,6 +408,207 @@ async fn main() -> anyhow::Result<()> {
             ctx.add_message(tool_result);
         }
     }
+}
+
+/// ⭐ 处理会话管理命令
+///
+/// 支持的命令：
+///   /session save <name>     - 保存当前对话
+///   /session load <name>     - 加载已保存的对话
+///   /session list            - 列出所有会话
+///   /session delete <name>   - 删除会话
+///   /session rename <old> <new> - 重命名会话
+///   /sessions                - 列出所有会话（快捷方式）
+fn handle_session_command(
+    input: &str,
+    session_manager: &SessionManager,
+    ctx: &mut ContextManager,
+    task_manager: &mut TaskManager,
+) {
+    let trimmed = input.trim();
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+
+    if parts.is_empty() {
+        print_session_help();
+        return;
+    }
+
+    // /sessions 是 /session list 的快捷方式
+    if parts[0] == "/sessions" {
+        list_sessions(session_manager);
+        return;
+    }
+
+    // /session 命令
+    if parts.len() < 2 {
+        print_session_help();
+        return;
+    }
+
+    let subcommand = parts[1];
+
+    match subcommand {
+        "save" => {
+            if parts.len() < 3 {
+                println!("\x1b[33m⚠️  用法: /session save <名称>\x1b[0m");
+                return;
+            }
+            let name = parts[2..].join(" ");
+            match session_manager.save(&name, ctx) {
+                Ok(session) => {
+                    println!(
+                        "\x1b[32m━━━ 💾 会话已保存 ━━━\x1b[0m\n  📁 名称: {}\n  💬 消息数: {}\n  🕐 时间: {}",
+                        session.name,
+                        session.messages.len(),
+                        session.updated_at,
+                    );
+                }
+                Err(e) => {
+                    println!("\x1b[31m━━━ ❌ 保存失败: {}\x1b[0m", e);
+                }
+            }
+        }
+        "load" => {
+            if parts.len() < 3 {
+                println!("\x1b[33m⚠️  用法: /session load <名称>\x1b[0m");
+                return;
+            }
+            let name = parts[2..].join(" ");
+            match session_manager.load(&name) {
+                Ok(session) => {
+                    // 保存当前上下文到自动快照（防止误操作丢失）
+                    if ctx.get_messages().len() > 1 {
+                        let auto_save_name = format!("_autosave_{}", chrono_now_simple());
+                        let _ = session_manager.save(&auto_save_name, ctx);
+                        println!("\x1b[90m  💾 当前上下文已自动保存为: {}\x1b[0m", auto_save_name);
+                    }
+
+                    // 生成恢复用的系统提示词
+                    let restore_prompt = session_manager.default_system_prompt(&session);
+
+                    // 重建 ContextManager
+                    let restored_messages = session_manager.restore_messages(&session, &restore_prompt);
+                    *ctx = ContextManager::new(restore_prompt, session.strategy.clone());
+
+                    // 恢复消息
+                    for msg in restored_messages.into_iter().skip(1) {
+                        // skip(1) 跳过系统提示词（已经用新的了）
+                        ctx.add_message(msg);
+                    }
+
+                    // 重置任务管理器
+                    *task_manager = TaskManager::new(&session.current_dir);
+                    task_manager.load();
+
+                    println!(
+                        "\x1b[32m━━━ 📂 会话已加载 ━━━\x1b[0m\n  📁 名称: {}\n  💬 消息数: {}\n  🕐 创建: {}\n  🕐 更新: {}",
+                        session.name,
+                        session.messages.len(),
+                        session.created_at,
+                        session.updated_at,
+                    );
+                    println!("\x1b[90m  💡 输入 /session list 查看所有会话\x1b[0m");
+                }
+                Err(e) => {
+                    println!("\x1b[31m━━━ ❌ 加载失败: {}\x1b[0m", e);
+                    println!("\x1b[33m  💡 使用 /session list 查看可用会话\x1b[0m");
+                }
+            }
+        }
+        "list" => {
+            list_sessions(session_manager);
+        }
+        "delete" => {
+            if parts.len() < 3 {
+                println!("\x1b[33m⚠️  用法: /session delete <名称>\x1b[0m");
+                return;
+            }
+            let name = parts[2..].join(" ");
+            match session_manager.delete(&name) {
+                Ok(true) => {
+                    println!("\x1b[32m━━━ 🗑️ 会话已删除: {}\x1b[0m", name);
+                }
+                Ok(false) => {
+                    println!("\x1b[33m⚠️  会话不存在: {}\x1b[0m", name);
+                }
+                Err(e) => {
+                    println!("\x1b[31m━━━ ❌ 删除失败: {}\x1b[0m", e);
+                }
+            }
+        }
+        "rename" => {
+            if parts.len() < 4 {
+                println!("\x1b[33m⚠️  用法: /session rename <旧名称> <新名称>\x1b[0m");
+                return;
+            }
+            let old_name = parts[2];
+            let new_name = parts[3..].join(" ");
+            match session_manager.rename(old_name, &new_name) {
+                Ok(true) => {
+                    println!("\x1b[32m━━━ ✏️ 会话已重命名: {} → {}\x1b[0m", old_name, new_name);
+                }
+                Ok(false) => {
+                    println!("\x1b[33m⚠️  会话不存在: {}\x1b[0m", old_name);
+                }
+                Err(e) => {
+                    println!("\x1b[31m━━━ ❌ 重命名失败: {}\x1b[0m", e);
+                }
+            }
+        }
+        "help" | "-h" | "--help" => {
+            print_session_help();
+        }
+        other => {
+            println!("\x1b[33m⚠️  未知的子命令: {}\x1b[0m", other);
+            print_session_help();
+        }
+    }
+}
+
+/// 列出所有会话
+fn list_sessions(session_manager: &SessionManager) {
+    match session_manager.list() {
+        Ok(sessions) => {
+            if sessions.is_empty() {
+                println!("\x1b[33m📂 暂无保存的会话\x1b[0m");
+                println!("\x1b[90m  💡 使用 /session save <名称> 保存当前对话\x1b[0m");
+            } else {
+                println!("\x1b[36m━━━ 📂 已保存的会话 (共 {}) ━━━\x1b[0m", sessions.len());
+                for session in &sessions {
+                    println!("{}", session);
+                }
+                println!("\x1b[90m  💡 使用 /session load <名称> 恢复对话\x1b[0m");
+            }
+        }
+        Err(e) => {
+            println!("\x1b[31m━━━ ❌ 列出会话失败: {}\x1b[0m", e);
+        }
+    }
+}
+
+/// 打印会话管理帮助
+fn print_session_help() {
+    println!("\x1b[36m━━━ 📋 会话管理命令 ━━━\x1b[0m");
+    println!("  \x1b[33m/session save <名称>\x1b[0m    保存当前对话");
+    println!("  \x1b[33m/session load <名称>\x1b[0m    加载已保存的对话");
+    println!("  \x1b[33m/session list\x1b[0m           列出所有会话");
+    println!("  \x1b[33m/session delete <名称>\x1b[0m  删除会话");
+    println!("  \x1b[33m/session rename <旧> <新>\x1b[0m  重命名会话");
+    println!("  \x1b[33m/sessions\x1b[0m                列出所有会话（快捷方式）");
+    println!("  \x1b[33m/session help\x1b[0m            显示此帮助");
+}
+
+/// 获取简单的时间字符串（用于自动保存快照命名）
+fn chrono_now_simple() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let dur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = dur.as_secs();
+    let total_minutes = secs / 60;
+    let hours = (total_minutes / 60) % 24;
+    let minutes = total_minutes % 60;
+    format!("{:02}{:02}", hours, minutes)
 }
 
 fn render_tool_result(content: &str) {

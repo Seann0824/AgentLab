@@ -31,3 +31,12 @@
 2. ✅ `ModelAdapter` trait 新增 `clone_box()` 方法 + `Clone for Box<dyn ModelAdapter>`
 3. ✅ `main.rs:167` 改为 `Some(query_client.clone())`
 4. ✅ 编译验证通过（82 tests passed）
+
+## 当前任务：修复 sanitize_name 测试失败 ✅
+- 进度：1/1 — ✅ 全部完成
+- 当前：已完成
+- 验证：cargo test 85 passed
+## 当前任务：新增 `/` 命令系统（命令发现 + 帮助） ✅
+- 进度：7/7 — ✅ 全部完成
+- 当前：已完成
+- 验证：cargo check 通过, cargo test 90 passed

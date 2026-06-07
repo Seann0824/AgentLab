@@ -71,3 +71,21 @@
   - `src/model/types.rs` — `clone_box` trait 方法 + `Clone for Box<dyn ModelAdapter>`
   - `src/model/openai_compatible.rs` — `clone_box` 实现
   - `src/main.rs:167` — 传入 `Some(query_client.clone())`
+
+### 8. 修复 sanitize_name 测试失败
+- **问题**：`sanitize_name("test/session")` 预期返回 `"testsession"`（移除斜杠），但函数将所有非字母/数字/连字符/下划线/点号字符都替换为 `_`，导致返回 `"test_session"`
+- **根因**：`sanitize_name` 函数未区分空格（应替换为 `_` 以保持可读性）和其他特殊字符（应移除）
+- **修复**：空格→下划线，其他特殊字符→空格→过滤移除
+- **验证**：cargo test 85 passed（原来84 passed + 这个修复）
+
+### 9. 新增 `/` 命令系统（命令发现 + 帮助） ✅
+- **背景**：CLI 交互模式缺少统一的命令发现和管理系统，斜杠命令（/help, /clear, /session 等）分散在 main.rs 主循环中，没有集中管理
+- **方案**：创建 `src/commands/mod.rs`，包含：
+  - `Command` 结构体（名称、描述、用法、示例、子命令）
+  - `CommandRegistry` 注册表（注册、查找、排序）
+  - 内置命令注册：help, clear, session, sessions
+  - 格式化输出：简短列表（print_help_short）、完整帮助（print_help_full）、单命令帮助（print_command_help）
+  - 未知命令提示（print_unknown_command）
+  - 集成到 main.rs 主循环（`/` 路由）
+  - 5 个单元测试覆盖注册、查找、排序、格式化
+- **状态**：✅ 全部完成（cargo check 通过, cargo test 90 passed）
