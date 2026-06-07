@@ -201,6 +201,14 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
                 let input = user_input.trim().to_string();
+
+                // ⭐ /clear 命令：清空历史消息
+                if input == "/clear" {
+                    ctx.clear();
+                    println!("\x1b[32m━━━ 🧹 历史消息已清空 ━━━\x1b[0m");
+                    continue;
+                }
+
                 ctx.add_message(ChatMessage::user(&input));
                 task_manager.on_user_input(&input);
             }

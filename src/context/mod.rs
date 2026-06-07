@@ -328,6 +328,31 @@ impl ContextManager {
         self.max_preserved = max;
     }
 
+    /// ⭐ 清空历史消息（保留系统提示词）
+    ///
+    /// 当用户输入 /clear 时调用，重置上下文到初始状态（仅保留 system prompt）。
+    /// Token 缓存也会被重置。
+    pub fn clear(&mut self) {
+        // 只保留系统提示词（第一条消息）
+        if let Some(system_msg) = self.messages.first().cloned() {
+            // 确保 system 消息被标记为 preserved（避免被意外压缩）
+            self.messages.clear();
+            self.messages.push(system_msg);
+        } else {
+            // 理论上不会发生，但兜底
+            self.messages.clear();
+        }
+
+        // 重置 token 缓存
+        self.recalculate_token_cache();
+        self.stats.message_count = self.messages.len();
+        self.stats.preserved_count = self.messages.iter().filter(|m| m.preserved).count();
+        self.stats.compressed = false;
+        self.stats.pruned_tool_calls = 0;
+        self.stats.pruned_saved_tokens = 0;
+        self.stats.last_compressed_at = None;
+    }
+
     /// ⭐ 手动触发工具调用修剪（层0压缩）
     ///
     /// 可以在检测到 token 接近上限时主动调用。
