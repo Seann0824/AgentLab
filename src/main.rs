@@ -164,7 +164,7 @@ async fn main() -> anyhow::Result<()> {
     // ⭐ 启动异步摘要后台任务（可选，需要 ModelAdapter 支持）
     // 如果希望启用 LLM 摘要，传入 Some(query_client.clone())
     // 如果只用规则摘要，传入 None
-    ctx.setup_summary_channel(None);
+    ctx.setup_summary_channel(Some(query_client.clone()));
 
     // ⭐ 初始化任务管理器（结构化任务执行框架）
     let mut task_manager = TaskManager::new(&current_dir);

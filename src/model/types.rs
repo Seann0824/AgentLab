@@ -83,6 +83,15 @@ pub enum ModelEvent {
 /// 添加 Send + Sync 约束以支持跨线程使用
 pub trait ModelAdapter: Send + Sync {
     fn stream_chat(&self, messages: &[ChatMessage], tools: serde_json::Value) -> ModelStream;
+    /// 克隆自身为 Box<dyn ModelAdapter>（用于跨线程共享，如异步摘要器）
+    fn clone_box(&self) -> Box<dyn ModelAdapter>;
+}
+
+/// 让 Box<dyn ModelAdapter> 支持 clone（委托给 clone_box）
+impl Clone for Box<dyn ModelAdapter> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
 }
 
 pub type ModelStream = Pin<Box<dyn Stream<Item = ModelEvent> + Send + 'static>>;

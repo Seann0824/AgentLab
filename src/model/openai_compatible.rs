@@ -9,6 +9,7 @@ use crate::model::{ModelEvent, types::ModelStream};
 
 use super::{ChatMessage, ModelAdapter, ToolCall};
 
+#[derive(Clone)]
 pub struct OpenAiCompatibleAdapter {
     pub base_url: String,
     pub api_key: String,
@@ -28,6 +29,10 @@ impl OpenAiCompatibleAdapter {
 }
 
 impl ModelAdapter for OpenAiCompatibleAdapter {
+    fn clone_box(&self) -> Box<dyn ModelAdapter> {
+        Box::new(self.clone())
+    }
+
     fn stream_chat(&self, messages: &[ChatMessage], tools_schema: serde_json::Value) -> ModelStream {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let (tx, rx) = mpsc::channel(100);

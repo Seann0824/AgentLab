@@ -6,5 +6,5 @@
 ## 任务：验证上下文压缩能力 ✅ 已完成
 **进度**: 7/7 步完成 | **验证**: cargo check ✅ | 81 tests passed ✅ | spawn_agent 编译+运行验证 ✅
 
-## 🔴 任务：修复 auto_compress 实战中永不触发的 Bug
-**进度**: 3/6 步完成 | 当前步骤: 运行 cargo check 验证编译
+## 🔴 任务：P0 — 解决上下文窗口满了不能发送消息
+**进度**: 0/5 步完成 | 当前步骤: 步骤1 — 添加 ForceCompressed 类型变体

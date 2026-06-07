@@ -232,6 +232,106 @@ fn sliding_window_compress(
 
 // ================= 层3：保底截断 =================
 
+/// 🚨 层4：紧急截断（最后的安全网中的最后安全网）
+///
+/// 触发条件：hard_truncate 无法截断（例如所有消息都是 protected）但 Token 仍然超限。
+///
+/// 策略：
+/// - 仅保留 System 消息 + 最后 2 轮对话
+/// - 忽略 preserved 标记（System 消息除外）
+/// - 如果仍然超限，继续删除最早的非 System 消息直到满足条件
+///
+/// 这是一个非常激进的截断操作，只在所有其他方法都失败后调用。
+fn emergency_truncate(
+    messages: &mut Vec<ContextMessage>,
+    token_limit: usize,
+    estimator: &TokenEstimator,
+) -> CompressResult {
+    let original_len = messages.len();
+    let original_tokens = estimate_total_tokens(messages, estimator);
+
+    eprintln!(
+        "[emergency_truncate] 🚨 ACTIVATED: {} messages, {} tokens (limit={})",
+        original_len, original_tokens, token_limit,
+    );
+
+    // 1. 找到 System 消息索引
+    let system_idx = messages.iter().position(|m| matches!(&m.message, ChatMessage::System { .. }));
+
+    // 2. 找到 User 消息的位置（用于确定轮次边界）
+    let user_positions: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| matches!(&m.message, ChatMessage::User { .. }))
+        .map(|(i, _)| i)
+        .collect();
+
+    // 3. 构建新消息列表：System + 最后 2 轮
+    let mut new_messages: Vec<ContextMessage> = Vec::new();
+
+    // 先添加 System 消息
+    if let Some(idx) = system_idx {
+        new_messages.push(messages[idx].clone());
+    }
+
+    // 计算保留起点：最后 2 轮对话的起始位置
+    let keep_from = if user_positions.len() > 2 {
+        // 保留从倒数第 2 轮 User 开始的所有消息
+        user_positions[user_positions.len() - 2]
+    } else if user_positions.len() > 0 {
+        // 如果只有 1 或 2 轮，全部保留
+        0
+    } else {
+        // 没有 User 消息，只保留 System
+        messages.len()
+    };
+
+    // 添加最后 2 轮的消息（跳过 System，因为已添加）
+    for i in keep_from..messages.len() {
+        if Some(i) == system_idx {
+            continue;
+        }
+        new_messages.push(messages[i].clone());
+    }
+
+    let _after_keep_removed = original_len - new_messages.len();
+    *messages = new_messages;
+
+    // 4. 检查 token 是否降到 limit 以下，如果没有则继续删除
+    let mut current_tokens = estimate_total_tokens(messages, estimator);
+    let mut _additional_removed = 0;
+
+    while current_tokens > token_limit && messages.len() > 1 {
+        // 找到第一条非 System 消息并删除
+        let remove_idx = messages
+            .iter()
+            .position(|m| !matches!(&m.message, ChatMessage::System { .. }));
+        match remove_idx {
+            Some(idx) => {
+                messages.remove(idx);
+                _additional_removed += 1;
+            }
+            None => break, // 只剩 System 消息，不能再删了
+        }
+        current_tokens = estimate_total_tokens(messages, estimator);
+    }
+
+    let total_removed = original_len - messages.len();
+
+    eprintln!(
+        "[emergency_truncate] 🚨 FORCED: removed {} messages (keep={}), tokens {} → {}",
+        total_removed,
+        messages.len(),
+        original_tokens,
+        current_tokens,
+    );
+
+    CompressResult::EmergencyTruncated {
+        removed_count: total_removed,
+        kept_count: messages.len(),
+    }
+}
+
 /// ⭐ 层3：保底截断（最后的安全网）
 ///
 /// 触发条件：滑动窗口执行后 Token 仍然超过硬限制
@@ -491,8 +591,20 @@ pub fn auto_compress(
                 tokens_after,
                 estimate_total_tokens(messages, estimator),
             );
+            return result;
         } else {
             eprintln!("[auto_compress] ⚠️ hard_truncate called but no messages removed (all protected?)");
+            // 🚨 层4: 紧急截断 — 当所有层都无法截断但 Token 仍然超限时的最后安全网
+            let tokens_still = estimate_total_tokens(messages, estimator);
+            if tokens_still >= token_limit {
+                eprintln!("[auto_compress] 🚨 Tokens still over limit after hard_truncate, calling emergency_truncate");
+                let emergency_result = emergency_truncate(messages, token_limit, estimator);
+                if emergency_result.did_compress() {
+                    stats.compressed = true;
+                    stats.last_compressed_at = Some(Instant::now());
+                }
+                return emergency_result;
+            }
         }
         return result;
     }

@@ -153,7 +153,8 @@ impl ContextManager {
             // ⭐ ToolCallsPruned 只替换了内容，消息数量不变，token 缓存需要重算
             CompressResult::ToolCallsPruned { .. }
             | CompressResult::SlidingWindowCompressed { .. }
-            | CompressResult::HardTruncated { .. } => {
+            | CompressResult::HardTruncated { .. }
+            | CompressResult::EmergencyTruncated { .. } => {
                 // ⭐ 缓存失效，需要全量重算 token
                 self.recalculate_token_cache();
                 self.stats.message_count = self.messages.len();

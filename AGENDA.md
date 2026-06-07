@@ -17,3 +17,17 @@
 
 7. ✅ 清理死代码 `maybe_dispatch_summary`（已集成到 auto_compress 中）
 8. ✅ 修复 strategy.rs 测试中 auto_compress 缺少 summary_tx 参数的编译错误
+## 当前任务：修复「触达限制后无行动」✅
+- 进度：6/6 — ✅ 全部完成
+- 当前：已完成
+- 验证：cargo check 通过, cargo test 82 passed
+## 当前任务：启用 LLM 摘要（修复 setup_summary_channel）✅
+- 进度：4/4 — ✅ 全部完成
+- 当前：已完成
+- 验证：cargo check 通过, cargo test 82 passed
+
+## 完成记录
+1. ✅ `OpenAiCompatibleAdapter` 已有 `#[derive(Clone)]`（无需修改）
+2. ✅ `ModelAdapter` trait 新增 `clone_box()` 方法 + `Clone for Box<dyn ModelAdapter>`
+3. ✅ `main.rs:167` 改为 `Some(query_client.clone())`
+4. ✅ 编译验证通过（82 tests passed）

@@ -153,6 +153,12 @@ pub enum CompressResult {
         removed_count: usize,
         kept_count: usize,
     },
+    /// 🚨 紧急截断（所有压缩层都无效时的最后安全网）
+    /// 忽略 preserved 标记（System 除外），仅保留 System + 最后 2 轮对话
+    EmergencyTruncated {
+        removed_count: usize,
+        kept_count: usize,
+    },
 }
 
 impl CompressResult {
@@ -169,6 +175,7 @@ impl CompressResult {
             CompressResult::SlidingWindowCompressed { .. } => "滑动窗口压缩",
             CompressResult::AsyncSummaryDispatched { .. } => "异步摘要已派发",
             CompressResult::HardTruncated { .. } => "保底截断",
+            CompressResult::EmergencyTruncated { .. } => "🚨 紧急截断",
         }
     }
 }
@@ -271,11 +278,13 @@ mod tests {
         assert!(CompressResult::ToolCallsPruned { pruned_count: 1, saved_tokens: 100 }.did_compress());
         assert!(CompressResult::SlidingWindowCompressed { removed_count: 5, removed_turns: 2 }.did_compress());
         assert!(CompressResult::HardTruncated { removed_count: 3, kept_count: 10 }.did_compress());
+        assert!(CompressResult::EmergencyTruncated { removed_count: 5, kept_count: 2 }.did_compress());
     }
 
     #[test]
     fn test_compress_result_description() {
         assert_eq!(CompressResult::NotNeeded.description(), "无需压缩");
         assert_eq!(CompressResult::ToolCallsPruned { pruned_count: 1, saved_tokens: 100 }.description(), "工具调用结果修剪");
+        assert_eq!(CompressResult::EmergencyTruncated { removed_count: 5, kept_count: 2 }.description(), "🚨 紧急截断");
     }
 }

@@ -44,3 +44,30 @@
 - **修复**：补充 `None` 作为第5个参数到所有5个测试调用点
 - **受影响测试**：`test_auto_with_tool_pruning_first`、`test_auto_sliding_window_first`、`test_auto_hard_truncate`、`test_auto_not_needed`、`test_progressive_compression_layers`
 - **结果**：`cargo check` 通过，82个测试全部通过
+
+### 5. 🚨 紧急截断（层4）— 压缩失败时的最后安全网
+- **问题**：所有 4 层压缩（工具修剪→异步摘要→滑动窗口→保底截断）都执行后，如果 Token 仍然超限（例如所有非 System 消息都是 protected），没有任何阻止机制，直接返回 `NotNeeded`
+- **修复**：新增 `emergency_truncate()` 函数作为层4，当 hard_truncate 无法截断但 Token 仍然超限时调用：
+  - 仅保留 System 消息 + 最后 2 轮对话
+  - 忽略 preserved 标记（System 消息除外）
+  - 如果仍然超限，继续删除最早的非 System 消息直到低于 limit
+- **新增枚举**：`CompressResult::EmergencyTruncated { removed_count, kept_count }`
+- **位置**：
+  - `src/context/types.rs` — 新增 EmergencyTruncated 变体
+  - `src/context/strategy.rs` — 新增 emergency_truncate() 函数（约310行），修改 auto_compress() 在 hard_truncate 失败后调用
+  - `src/context/mod.rs` — handle_compress_result() 中处理 EmergencyTruncated
+- **验证**：cargo check 通过，cargo test 82 passed
+
+### 7. 启用 LLM 异步摘要（clone_box 模式）
+- **背景**：`main.rs:167` 调用 `ctx.setup_summary_channel(None)`，异步摘要器因为没有 ModelAdapter 而始终退化为规则摘要
+- **根因**：`ModelAdapter` trait 没有提供克隆能力，`query_client`（Box\<dyn ModelAdapter\>）无法复制一份给摘要器
+- **修复**：
+  - 在 `ModelAdapter` trait 中添加 `clone_box(&self) -> Box<dyn ModelAdapter>` 方法
+  - 实现 `Clone for Box<dyn ModelAdapter>` 委托给 `clone_box`
+  - `OpenAiCompatibleAdapter` 实现 `clone_box`（调用 `self.clone()`，`#[derive(Clone)]` 已有）
+  - `main.rs:167` 改为 `ctx.setup_summary_channel(Some(query_client.clone()))`
+- **效果**：异步摘要器现在能调用 LLM 生成结构化摘要（格式：目标 → 操作 → 决策 → 状态），LLM 不可用时自动降级为规则摘要
+- **位置**：
+  - `src/model/types.rs` — `clone_box` trait 方法 + `Clone for Box<dyn ModelAdapter>`
+  - `src/model/openai_compatible.rs` — `clone_box` 实现
+  - `src/main.rs:167` — 传入 `Some(query_client.clone())`

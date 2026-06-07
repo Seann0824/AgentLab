@@ -164,3 +164,36 @@
 - [x] `cargo check` 通过
 - [x] 所有测试通过（82 passed）
 - [x] 在模拟高频场景中压缩能正确触发
+# 修复：触达限制后无行动（致命 bug）
+
+## 目标
+当前 `add_message()` → `check_and_compress()` → `auto_compress()` 四层压缩后，如果 Token 仍然超限（例如所有消息都是 protected），没有任何阻止机制，直接返回 `NotNeeded`。需要添加**紧急保底截断**机制。
+
+## 修复步骤
+
+- [x] 步骤1：分析现有代码，确认 `auto_compress` 在所有压缩层后仍超限的路径
+- [x] 步骤2：新增 `emergency_truncate()` 函数（强制截断，仅保留 System + 最后 2 轮）
+- [x] 步骤3：在 `auto_compress()` 中 hard_truncate 失败后调用 emergency_truncate
+- [x] 步骤4：添加新的 `CompressResult::EmergencyTruncated` 变体
+- [x] 步骤5：验证：`cargo check` 编译通过
+- [x] 步骤6：运行单元测试确保不破坏现有逻辑（82 passed）
+
+## 验证标准
+1. ✅ `cargo check` 通过
+2. ✅ `cargo test` 通过（82 passed）
+3. ✅ 所有消息皆为 protected 时，emergency_truncate 能强制截断
+# ✅ 启用 LLM 摘要（修复 setup_summary_channel）
+
+## 目标
+修复 `main.rs:167` 中 `ctx.setup_summary_channel(None)` 传入了 `None` 的问题，使得异步摘要器能使用 LLM 生成高质量的结构化摘要，而非退化为规则摘要。
+
+## 执行步骤
+- [ ] 步骤1: 给 `OpenAiCompatibleAdapter` 添加 `Clone` derive
+- [ ] 步骤2: 给 `ModelAdapter` trait 添加 `Clone` 超类约束
+- [ ] 步骤3: 修改 `main.rs:167` 为 `Some(query_client.clone())`
+- [ ] 步骤4: 运行 `cargo check` 和 `cargo test` 验证
+
+## 验证标准
+1. `cargo check` 编译通过
+2. `cargo test` 全部通过
+3. LLM 摘要实际启用（而非退化到 rule_based_summary）
