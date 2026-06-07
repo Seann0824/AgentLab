@@ -82,3 +82,62 @@
 - [ ] **4. 更新 lib.rs** → 添加 `pub mod agent;`
 - [ ] **5. 精简 main.rs** → 只保留 CLI 参数解析和 Agent 创建
 - [ ] **6. 验证** → cargo check + cargo test
+
+---
+
+## 新任务：DAG 任务编排系统实现
+
+> **设计文档**: [dag-task-orchestration.md](./designs/dag-task-orchestration.md)
+> **关键决策记录**: [MEMORY.md](./MEMORY.md#DAG)
+
+### Phase 1 — 基础框架
+
+- [x] **1.1** 创建 `src/dag/` 目录结构 + `src/lib.rs` 注册 ✅
+- [x] **1.2** 实现核心数据模型（`PipelineDef`, `NodeDef`, `EdgeDef`, `NodeStatus`, 运行时类型） ✅
+- [x] **1.3** 实现拓扑排序与环检测（Kahn 算法） ✅
+- [x] **1.4** 创建 `src/dag/node_internal/` 子模块结构（预留 Phase 2 实现） ✅
+- [x] **1.5** 编写 27 个单元测试覆盖基础逻辑 ✅
+- [x] **验证**: `cargo check` ✅ | `cargo test` 121 passed ✅
+
+### Phase 2 — 引擎与执行 ✅
+
+- [x] **2.1** 实现 `DAGEngine` — 调度器主循环 ✅
+- [x] **2.2** 实现 `DataFlowManager` — 数据传递与合并 ✅
+- [x] **2.3** 实现 `WorkerAgent` 封装（基于 `DAGContext` + LLM 调用）✅
+- [x] **2.4** 实现 `ReviewerAgent` 封装（JSON 审核结果解析 + 回退策略）✅
+- [x] **2.5** 实现 `NodeSupervisor` — 节点内部协调（Worker→Reviewer→重试循环）✅
+- [x] **验证**: `cargo check` ✅ | 27 DAG tests passed ✅
+
+### Phase 3 — 工具与集成 ✅
+
+- [x] **3.1** 创建 `dag_tools` 工具集（pipeline_build / pipeline_execute / pipeline_status / pipeline_list）✅
+- [x] **3.2** 注册工具到 `ToolManager`（agent.rs 中 default_tool_manager）✅
+- [ ] **3.3** AgentBuilder 扩展（worker_model / reviewer_model / pipeline_config）— 可选增强
+- [x] **3.4** 注册 `pub mod dag;` 到 lib.rs ✅
+- [x] **验证**: `cargo check` ✅
+
+### Phase 4 — 增强打磨 ✅
+
+- [x] **4.1** 断点续跑持久化 ✅
+- [x] **4.2** 事件系统 ✅
+- [x] **4.3** 审核重试策略优化（反馈注入重试提示）✅
+- [x] **4.4** 可视化日志输出 ✅
+## 实战测试：Agent 端到端使用效果验证
+
+**目标**: 让子 Agent 执行一个真实的多步开发任务，验证实际使用效果
+
+### 测试场景
+
+子 agent 需要完成以下真实任务：
+
+1. 读取项目中的 `.env` 文件和 `Cargo.toml`，了解项目配置
+2. 读取 `src/dag/` 模块的代码结构
+3. 在 `docs/` 下创建一个分析文档 `docs/analyses/dag-code-review.md`，分析 DAG 模块的代码质量
+4. 整个过程中观察 agent 是否：能正确理解任务、能规划步骤、能使用工具、能输出结果
+
+### 验证标准
+
+- ✅ Agent 能自主规划并执行多步任务
+- ✅ Agent 能正确使用 read/shell/edit 等工具
+- ✅ Agent 能输出有实际价值的分析内容
+- ✅ 整个过程无编译错误或崩溃

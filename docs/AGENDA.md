@@ -37,3 +37,43 @@
 | 2. 修复 `SpawnAgent` 的 model 字段类型为 Arc<Mutex<...>> | ✅ 已完成 |
 | 3. 修复 `AgentBuilder::build()` borrow after move | ✅ 已完成 |
 | 4. 验证：cargo check | ✅ 已完成 |
+
+
+---
+
+## DAG 任务编排系统
+
+**任务名称**: DAG 任务编排系统实现  
+**进度**: ✅ Phase 1 / 4 完成  
+**当前步骤**: 2.1 实现 DAGEngine 调度器主循环
+
+| Phase | 状态 |
+|-------|------|
+| Phase 1：基础框架 | ✅ 已完成（27测试通过） |
+| Phase 2：引擎与执行 | 🔄 执行中 |
+| Phase 3：工具与集成 | ⬜ |
+| Phase 4：增强打磨 | ⬜ |
+
+---
+
+## 当前任务：DAG 任务编排系统 — Phase 2&3 实现
+
+**进度**: 95%
+**当前步骤**: Phase 2（引擎与执行）✅ 完成 | Phase 3（工具与集成）✅ 完成（3.3 可选）
+**下一步**: Phase 4 — 增强打磨
+
+### 完成内容
+- Phase 2: WorkerAgent / ReviewerAgent / NodeSupervisor / NodeRuntime 实现
+- Phase 3: dag_tools 工具集（build / execute / status / list）+ 注册到 ToolManager
+
+
+## Phase 4: DAG 增强打磨 ✅
+
+**进度**: 100%
+**当前步骤**: 全部完成 ✅
+
+### 执行计划（全部完成 ✅）
+1. ✅ **4.3** 审核重试策略优化 — WorkerAgent 支持接收 Reviewer 反馈，重试时传递
+2. ✅ **4.1** 断点续跑持久化 — JSON 序列化 checkpoint，支持恢复执行
+3. ✅ **4.2** 事件系统增强 — EventBus 发布/订阅/日志
+4. ✅ **4.4** 可视化日志输出 — ANSI 彩色输出 Pipeline 执行过程

@@ -28,6 +28,7 @@
 
 | 文件 | 用途 |
 |------|------|
+| [DAG 任务编排系统](./designs/dag-task-orchestration.md) | 基于有向无环图的任务编排，每个节点内置 Worker+Reviewer 双 Agent |
 | [上下文窗口管理](./designs/context-window.md) | 四层渐进压缩策略的设计与实现 |
 | [工具调用可见性](./designs/tool-call-visibility.md) | Agent 工具调用结果的可视化设计 |
 | [能力路线图](./designs/agent-capability-roadmap.md) | 项目能力规划与未来方向 |

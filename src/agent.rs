@@ -1002,5 +1002,10 @@ fn default_tool_manager() -> ToolManager {
     tool_manager.register_tool(Box::new(SearchTool));
     tool_manager.register_tool(Box::new(SpawnAgent));
     tool_manager.register_tool(Box::new(InvestigateTool::new(".")));
+    // DAG 任务编排工具
+    tool_manager.register_tool(Box::new(crate::tools::dag_tools::PipelineBuild));
+    tool_manager.register_tool(Box::new(crate::tools::dag_tools::PipelineExecute));
+    tool_manager.register_tool(Box::new(crate::tools::dag_tools::PipelineStatus));
+    tool_manager.register_tool(Box::new(crate::tools::dag_tools::PipelineList));
     tool_manager
 }

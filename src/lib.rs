@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod cli;
 pub mod context;
+pub mod dag;
 pub mod debug;
 pub mod investigate;
 pub mod model;
