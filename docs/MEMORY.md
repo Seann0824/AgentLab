@@ -223,3 +223,128 @@ effective_max_turns = 15, turns 15 > 15? false → 滑动窗口不触发
 ### 验证
 - `cargo check` 通过
 - `cargo test` 90 passed
+
+
+## 2025-06-08: 项目结构重构规划完成
+
+### 任务描述
+应要求输出项目结构重构计划，分析当前结构混乱问题并提出系统化方案。
+
+### 发现的现状问题（10个）
+
+| 优先级 | 问题 | 描述 |
+|--------|------|------|
+| 🔴 P0 | 状态文件分裂 | `./PLAN.md` + `./docs/AGENDA.md` + `./docs/MEMORY.md` 不一致，TaskManager 读取策略混乱 |
+| 🔴 P0 | 空文件占位 | `src/agent.rs` (0行), `src/renderer/` (空目录) |
+| 🔴 P0 | 备份残留 | `src/main.rs.bak` |
+| 🟡 P1 | 超大源文件 | `context/mod.rs` (1291行), `context/strategy.rs` (1249行) |
+| 🟡 P1 | session/mod.rs过大 | 613行包含序列化+业务+CLI多重职责 |
+| 🟡 P1 | main.rs臃肿 | 801行，循环+渲染+初始化全内联 |
+| 🟡 P1 | Tool命名不一致 | `edit_tool/`, `read_tool/` vs `base_shell/`, `subagent/` |
+| 🟡 P1 | 文档结构松散 | feature-* 与分析文档混放 |
+| 🟢 P2 | commands/命名 | 建议改为 cli/ |
+| 🟢 P2 | 无文档索引 | 缺少 docs/index.md |
+
+### 输出文档
+- `docs/ARCHITECTURE-REFACTORING-PLAN.md` — 完整重构计划（6阶段、10问题、文件映射表、验证标准）
+
+
+## 📦 归档：来自旧根目录状态文件的历史记录
+
+> 以下内容来自原根目录 `MEMORY.md`，重构后统一归入 `docs/MEMORY.md`
+
+### 旧记录：清理死代码 `maybe_dispatch_summary`
+- 异步摘要派发逻辑已从 `check_and_compress` 集成到 `auto_compress` 内部（作为层1），旧的 `maybe_dispatch_summary` 方法成为死代码
+- **操作**：删除 `src/context/mod.rs` 中的 `maybe_dispatch_summary` 方法
+
+### 旧记录：修复策略.rs 测试编译错误
+- `auto_compress` 函数签名增加了第5个参数 `summary_tx: Option<mpsc::UnboundedSender<SummaryTask>>`，但测试中的辅助函数未更新
+
+### 旧记录：修复 sanitize_name 测试失败
+- `sanitize_name` 函数未区分空格（应替换为 `_`）和其他特殊字符（应移除）
+- **修复**：空格→下划线，其他特殊字符→空格→过滤移除
+
+### 旧记录：`/` 命令系统
+- 创建 `src/commands/mod.rs`：Command + CommandRegistry
+- 内置命令：help, clear, session, sessions, tools
+- 5 个单元测试
+
+### 旧记录：压缩后孤立 Tool 消息清理
+- `remove_orphaned_tool_messages()` 覆盖全部5个压缩路径
+- 验证：cargo test 94 passed
+
+
+## 2025-06-08: 项目结构重构执行进度
+
+### 已完成 ✅
+
+**阶段 0：清理与准备**
+- ✅ 合并根目录和 docs/ 的状态文件（PLAN.md, AGENDA.md, MEMORY.md → docs/）
+- ✅ 更新 `src/task/mod.rs` 的 STATE_FILES 和所有文件路径（3处代码 + 2处测试）
+- ✅ 删除根目录旧状态文件和 `src/main.rs.bak`
+- ✅ 删除空 `src/renderer/` 目录
+- 验证：cargo check ✅ | 94 tests passed ✅
+
+**阶段 1：模块重命名**
+- ✅ 工具目录统一命名（6个目录重命名）
+  - `base_shell/` → `shell/`
+  - `edit_tool/` → `edit/`
+  - `read_tool/` → `read/`
+  - `search_tool/` → `search/`
+  - `debug_tool/` → `tool_debug/`
+  - 注：`subagent/` 保持原名（无 _tool 后缀）
+- ✅ `commands/` → `cli/`（模块名 + 目录 + 所有引用更新）
+- 验证：cargo check ✅ | 94 tests passed ✅
+
+### 待执行 ⬜
+
+**阶段 2：大文件拆分**
+- [ ] 2.1 拆分 context/mod.rs（1291行，21个pub方法）
+- [ ] 2.2 拆分 session/mod.rs（613行）
+
+**阶段 3：文档重组**
+- [ ] 3.1 创建 docs/ 子目录结构
+- [ ] 3.2 创建 docs/index.md 文档索引
+
+**阶段 4：架构优化**
+- [ ] 4.1 创建 src/lib.rs 库入口
+- [ ] 4.2 提取 Agent 核心循环到 agent.rs
+
+
+## 2024-07-04: 大文件拆分完成
+
+### 完成的工作
+
+**context/mod.rs (1291 → 449 行)**
+- 将 `#[cfg(test)] mod tests` (843行) 拆分到 `src/context/tests.rs`
+- `context/mod.rs` 只保留核心的 `ContextManager` 结构体和方法的实现
+
+**session/mod.rs (613 → 369 行)**
+- 将类型定义（SerializableMessage, SessionData, SerializedContextMessage, 等 + From impls, 127行）拆分到 `src/session/types.rs`
+- 将测试模块（120行）拆分到 `src/session/tests.rs`
+- `session/mod.rs` 只保留 `SessionManager`, `SessionInfo` 和业务逻辑
+
+### 验证结果
+- `cargo check`: ✅ 编译通过
+- `cargo test`: ✅ 全部 94 个测试通过
+- 功能无变化，纯文件结构优化
+
+## 2025-06-08: 项目结构重构完成（阶段 0-4.1）
+
+### 完成情况
+
+| 阶段 | 状态 | 内容 |
+|------|------|------|
+| 阶段 0：清理准备 | ✅ | 状态文件合并到 docs/，删除 main.rs.bak 和空目录 |
+| 阶段 1：模块重命名 | ✅ | tools/*_tool/ → tools/*/，commands/ → cli/ |
+| 阶段 2：大文件拆分 | ✅ | context/mod.rs 拆出 tests.rs，session/mod.rs 拆出 types.rs + tests.rs |
+| 阶段 3：文档重组 | ✅ | docs/ 子目录化（designs/、analyses/、refactoring/、guides/）+ index.md |
+| 阶段 4.1：库入口 | ✅ | 创建 src/lib.rs，main.rs 使用 `use agent_lab::` 导入 |
+
+### 未完成
+- **阶段 4.2**: 从 main.rs 提取 Agent 核心循环到 agent.rs（可选，待后续）
+
+### 验证
+- `cargo check`: ✅ 编译通过
+- `cargo test`: ✅ 全部 94 个测试通过
+- 文档结构清晰，状态文件统一在 docs/

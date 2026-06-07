@@ -24,8 +24,8 @@ use crate::model::ChatMessage;
 pub mod types;
 use types::TaskState;
 
-/// 状态文件路径列表
-const STATE_FILES: &[&str] = &["PLAN.md", "docs/AGENDA.md", "docs/MEMORY.md"];
+/// 状态文件路径列表（全部统一到 docs/ 目录）
+const STATE_FILES: &[&str] = &["docs/PLAN.md", "docs/AGENDA.md", "docs/MEMORY.md"];
 
 /// ⭐ 任务管理器
 pub struct TaskManager {
@@ -54,7 +54,7 @@ impl TaskManager {
     /// 而是通过 `on_user_input` 和 `on_step_complete` 等方法跟踪。
     pub fn load(&mut self) {
         // 读取所有状态文件，尝试恢复任务上下文
-        let plan_path = self.root_dir.join("PLAN.md");
+        let plan_path = self.root_dir.join("docs/PLAN.md");
         let agenda_path = self.root_dir.join("docs/AGENDA.md");
         let memory_path = self.root_dir.join("docs/MEMORY.md");
 
@@ -118,7 +118,7 @@ impl TaskManager {
             return Ok(());
         }
 
-        let plan_path = self.root_dir.join("PLAN.md");
+        let plan_path = self.root_dir.join("docs/PLAN.md");
         let agenda_path = self.root_dir.join("docs/AGENDA.md");
         let _memory_path = self.root_dir.join("docs/MEMORY.md");
 
@@ -358,7 +358,7 @@ mod tests {
         tm.save().unwrap();
 
         // 验证文件存在
-        assert!(Path::new(&root).join("PLAN.md").exists());
+        assert!(Path::new(&root).join("docs/PLAN.md").exists());
         assert!(Path::new(&root).join("docs/AGENDA.md").exists());
 
         // 读取文件内容验证
@@ -368,7 +368,7 @@ mod tests {
         assert!(agenda.contains("编码"));
         assert!(agenda.contains("需要处理边界情况"));
 
-        let plan = std::fs::read_to_string(Path::new(&root).join("PLAN.md")).unwrap();
+        let plan = std::fs::read_to_string(Path::new(&root).join("docs/PLAN.md")).unwrap();
         assert!(plan.contains("集成测试"));
         assert!(plan.contains("- [x] 分析"));
         assert!(plan.contains("- [ ] 编码"));
@@ -411,7 +411,7 @@ mod tests {
 
 _最后更新: 2024-06-07_
 "#;
-        std::fs::write(Path::new(&root).join("PLAN.md"), plan_content).unwrap();
+        std::fs::write(Path::new(&root).join("docs/PLAN.md"), plan_content).unwrap();
 
         // 写入 MEMORY.md
         let memory_content = r#"# MEMORY.md

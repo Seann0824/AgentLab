@@ -3,22 +3,14 @@ use anyhow;
 use dotenvy;
 use futures_util::{StreamExt, stream::FuturesUnordered};
 
-use crate::{
-    commands::CommandRegistry,
+use agent_lab::{
+    cli::CommandRegistry,
     context::{ContextManager, ContextStrategy, TokenEstimator},
-    model::{ChatMessage, ModelEvent, ToolCall},
+    model::{ChatMessage, ModelAdapter, ModelEvent, OpenAiCompatibleAdapter, ToolCall},
     session::SessionManager,
     task::TaskManager,
-    tools::{ToolManager, base_shell::BashShell, debug_tool::DebugTool, edit_tool::EditTool, read_tool::ReadTool, search_tool::SearchTool, subagent::SpawnAgent},
+    tools::{ToolManager, shell::BashShell, tool_debug::DebugTool, edit::EditTool, read::ReadTool, search::SearchTool, subagent::SpawnAgent},
 };
-
-mod commands;
-mod context;
-mod debug;
-mod model;
-mod session;
-mod task;
-mod tools;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -270,15 +262,15 @@ async fn main() -> anyhow::Result<()> {
                         let sub = parts.get(1).copied().unwrap_or("status");
                         match sub {
                             "on" | "enable" | "1" | "true" => {
-                                crate::debug::enable();
+                                agent_lab::debug::enable();
                                 println!("\x1b[32m━━━ 🐛 debug 模式已开启 ━━━\x1b[0m");
                             }
                             "off" | "disable" | "0" | "false" => {
-                                crate::debug::disable();
+                                agent_lab::debug::disable();
                                 println!("\x1b[33m━━━ 🐛 debug 模式已关闭 ━━━\x1b[0m");
                             }
                             "toggle" | "t" => {
-                                let new_state = crate::debug::toggle();
+                                let new_state = agent_lab::debug::toggle();
                                 if new_state {
                                     println!("\x1b[32m━━━ 🐛 debug 模式已切换为开启 ━━━\x1b[0m");
                                 } else {
@@ -288,7 +280,7 @@ async fn main() -> anyhow::Result<()> {
                             _ => {
                                 // "status" 或其他：显示当前状态
                                 println!("\x1b[36m━━━ 🐛 Debug 状态 ━━━\x1b[0m");
-                                println!("  {}", crate::debug::status_text());
+                                println!("  {}", agent_lab::debug::status_text());
                                 println!("\x1b[90m  用法: /debug on|off|toggle|status\x1b[0m");
                             }
                         }
@@ -417,7 +409,6 @@ async fn main() -> anyhow::Result<()> {
                 ModelEvent::Error(err) => {
                     eprintln!("\r\x1b[2K\x1b[31m❌ 模型 API 错误: {}\x1b[0m", err);
                 }
-                _ => (),
             }
             std::io::Write::flush(&mut std::io::stdout())?;
         }
@@ -751,7 +742,7 @@ fn is_important_tool_result(msg: &ChatMessage) -> bool {
         .and_then(|s| s.as_str())
     else { return false };
 
-    context::is_stdout_structural(stdout)
+    agent_lab::context::is_stdout_structural(stdout)
 }
 
 fn finish_terminal_line(terminal_line_dirty: &mut bool) {
@@ -761,7 +752,7 @@ fn finish_terminal_line(terminal_line_dirty: &mut bool) {
     }
 }
 
-fn initial_model() -> anyhow::Result<Box<dyn model::ModelAdapter>> {
+fn initial_model() -> anyhow::Result<Box<dyn ModelAdapter>> {
     // 1. 读取环境变量
     dotenvy::dotenv().ok();
 
@@ -770,7 +761,7 @@ fn initial_model() -> anyhow::Result<Box<dyn model::ModelAdapter>> {
     let deepseek_base_url = env::var("DEEPSEEK_BASE_URL")
         .map_err(|_| anyhow::anyhow!("DEEPSEEK_BASE_URL not set"))?;
 
-    let openai_adapter = model::OpenAiCompatibleAdapter::new(
+    let openai_adapter = OpenAiCompatibleAdapter::new(
         deepseek_base_url,
         api_key,
         "deepseek-v4-flash".to_string(),

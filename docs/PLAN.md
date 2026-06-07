@@ -1,41 +1,61 @@
 
 
-# P0: 解决上下文窗口满了不能发送消息
+# 项目结构重构执行计划
 
-## 目标
-1. 添加阻塞检测机制 — Token 超过 95% 时阻止发送消息
-2. 添加强制压缩机制 — 阻塞时自动触发更激进的压缩
-3. 修复 auto-loop 模式下滑动窗口无法压缩的问题
-4. 启用 LLM 摘要 — 传入 ModelAdapter，让异步摘要使用真实 LLM
+> **目标**: 解决当前项目结构混乱问题，建立清晰一致的目录规范
+> **状态**: 🔄 执行中
+> **计划文档**: [ARCHITECTURE-REFACTORING-PLAN.md](./refactoring/ARCHITECTURE-REFACTORING-PLAN.md)
 
-## 执行步骤
+---
 
-### ✅ 已完成
-- [x] **步骤1**: `context/types.rs` — 添加 `CompressResult::ForceCompressed` 变体
+## 阶段 0：清理与准备
 
-### ⬜ 待执行
+- [x] **0.1** 合并根目录和 docs/ 的状态文件
+  - ✅ 合并内容到 docs/ 下对应文件
+  - ✅ 更新 `src/task/mod.rs` 的 `STATE_FILES` 和文件路径（3处代码 + 2处测试）
+  - ✅ 删除根目录的状态文件（PLAN.md, AGENDA.md, MEMORY.md）
+  - ✅ 删除 `src/main.rs.bak` 和空 `src/renderer/` 目录
+  - **验证**: cargo check ✅ | 94 tests passed ✅
+- [x] **0.2** 删除无用文件（main.rs.bak, 空renderer目录） ✅
 
-- [x] **步骤2**: `context/strategy.rs` — 添加 `force_compress` 函数
-  - 添加了独立的 `pub fn force_compress()` 函数，跳过 trigger_threshold 检查直接执行最激进压缩
-  - 五层强制压缩：工具修剪 → 异步摘要 → 滑动窗口到1轮（auto-loop 模式按消息数压缩）→ 硬截断 → 紧急截断
-  - 修复 auto-loop 模式下 `count_turns` 只有 1 轮时滑动窗口跳过的 Bug：当 `turns <= 1` 时按消息数量压缩
+## 阶段 1：模块重命名
 
-- [x] **步骤3**: `context/mod.rs` — 添加 `is_blocked()`, `is_critical()`, `force_compress()` 方法
-  - `is_blocked()`: `usage_ratio >= 0.95` ✓
-  - `is_critical()`: `usage_ratio >= 0.90` ✓
-  - `force_compress()`: 调用 `force_compress_strategy(...)` ✓
+- [x] **1.1** 工具目录统一命名（去掉 _tool 后缀）
+  - ✅ `base_shell/` → `shell/`
+  - ✅ `edit_tool/` → `edit/`
+  - ✅ `read_tool/` → `read/`
+  - ✅ `search_tool/` → `search/`
+  - ✅ `debug_tool/` → `tool_debug/`
+  - ✅ 更新 `src/tools/mod.rs` 中的 mod 声明
+  - ✅ 更新 `src/main.rs` 中的 import 路径
+  - **验证**: cargo check ✅ | 94 tests passed ✅
+- [x] **1.2** commands/ → cli/ 重命名
+  - ✅ 目录重命名 `src/commands/` → `src/cli/`
+  - ✅ 更新 `src/main.rs` 中的 `mod commands;` → `mod cli;`
+  - ✅ 更新 `src/main.rs` 中的 import 路径
+  - **验证**: cargo check ✅ | 94 tests passed ✅
 
-- [x] **步骤4**: `main.rs` — 在调用模型前添加阻塞检查
-  - 调用 `stream_chat` 前检查 `ctx.is_blocked()`，阻塞时先 `ctx.force_compress()` 再发送 ✓
-  - `ctx.is_critical()` 时执行轻量工具修剪 ✓
+> **阶段 2 具体计划**:
+> - 2.1 context/mod.rs (1291行): 将 `#[cfg(test)] mod tests` (843行) 拆到 `src/context/tests.rs`
+> - 2.2 session/mod.rs (613行): 将 `SerializableMessage` 类型拆到 `src/session/types.rs`，将 tests 拆到 `src/session/tests.rs`
+>
 
-- [x] **步骤5**: `cargo check` 验证编译 + `cargo test` 验证通过
-  - `cargo check` ✅ 编译成功
-  - `cargo test` ✅ 90 tests passed
-  - `spawn_agent` 自我验证 ✅
+## 阶段 2：大文件拆分
 
-### 验证标准
-- `cargo check` 通过
-- `cargo test` 全部通过
-- 模拟场景：长时间 auto-loop 后 token 稳定在 90% 以下，不会达到 100%
-- spawn_agent 自我验证通过
+- [x] **2.1** 拆分 context/mod.rs（1291行）
+  - ✅ 测试模块（843行）拆到 `src/context/tests.rs`
+  - **验证**: cargo check ✅ | 94 tests passed ✅
+- [x] **2.2** 拆分 session/mod.rs（613行）
+  - ✅ 类型定义（127行）拆到 `src/session/types.rs`
+  - ✅ 测试模块（120行）拆到 `src/session/tests.rs`
+  - **验证**: cargo check ✅ | 94 tests passed ✅
+
+## 阶段 3：文档重组
+
+- [x] **3.1** 创建 docs/ 子目录结构，移动文档
+- [x] **3.2** 创建 docs/index.md 文档索引
+
+## 阶段 4：架构优化（可选）
+
+- [x] **4.1** 创建 src/lib.rs 库入口
+- [ ] **4.2** 从 main.rs 提取 Agent 核心循环到 agent.rs（待后续）
