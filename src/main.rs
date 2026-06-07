@@ -6,7 +6,7 @@ use futures_util::{StreamExt, stream::FuturesUnordered};
 use crate::{
     context::{ContextManager, ContextStrategy, TokenEstimator},
     model::{ChatMessage, ModelEvent, ToolCall},
-    tools::{ToolManager, base_shell::BashShell},
+    tools::{ToolManager, base_shell::BashShell, edit_tool::EditTool},
 };
 
 mod context;
@@ -320,5 +320,6 @@ fn initial_model() -> anyhow::Result<Box<dyn model::ModelAdapter>> {
 fn initial_tool_manager() -> ToolManager {
     let mut tool_manager = ToolManager::new();
     tool_manager.register_tool(Box::new(BashShell));
+    tool_manager.register_tool(Box::new(EditTool));
     tool_manager
 }
