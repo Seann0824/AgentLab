@@ -7,6 +7,8 @@ use crate::{model::{ChatMessage, ToolCall}, tools::types::{Tool, ToolEvent}};
 pub mod types;
 pub mod base_shell;
 pub mod edit_tool;
+pub mod read_tool;
+pub mod search_tool;
 
 
 pub struct ToolManager {

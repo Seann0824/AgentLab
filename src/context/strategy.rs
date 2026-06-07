@@ -395,8 +395,26 @@ pub fn auto_compress(
 
     // ⭐ 情况 C: 层1 — 滑动窗口压缩
     let turns = count_turns(messages);
-    if turns > max_turns {
-        let result = sliding_window_compress(messages, max_turns);
+
+    // ⭐ 动态计算有效 max_turns（修复：当 token 超过触发阈值时，按比例缩减保留轮数）
+    //
+    // 原逻辑：仅当 turns > max_turns 时才触发滑动窗口
+    // 问题：如果 token 使用率超过 70% 但轮数没到 20，压缩永远不会触发
+    // 修复：当 current_tokens >= trigger_threshold 时，按超出比例动态降低 effective_max_turns
+    //
+    // 计算公式：effective_max_turns = max_turns * (trigger_threshold / current_tokens)
+    // 举例：token 100% → effective = 20 * 0.7 = 14，15轮时触发压缩到14轮
+    //        token 200% → effective = 20 * 0.35 = 7，8轮时触发压缩到7轮
+    let effective_max_turns = if current_tokens >= trigger_threshold && turns > 1 {
+        let target_ratio = trigger_threshold as f64 / current_tokens as f64;
+        let reduced = (max_turns as f64 * target_ratio).ceil() as usize;
+        reduced.max(1).min(max_turns)
+    } else {
+        max_turns
+    };
+
+    if turns > effective_max_turns {
+        let result = sliding_window_compress(messages, effective_max_turns);
         if result.did_compress() {
             stats.compressed = true;
             stats.last_compressed_at = Some(Instant::now());

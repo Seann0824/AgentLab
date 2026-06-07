@@ -6,11 +6,13 @@ use futures_util::{StreamExt, stream::FuturesUnordered};
 use crate::{
     context::{ContextManager, ContextStrategy, TokenEstimator},
     model::{ChatMessage, ModelEvent, ToolCall},
-    tools::{ToolManager, base_shell::BashShell, edit_tool::EditTool},
+    task::TaskManager,
+    tools::{ToolManager, base_shell::BashShell, edit_tool::EditTool, read_tool::ReadTool},
 };
 
 mod context;
 mod model;
+mod task;
 mod tools;
 
 #[tokio::main]
@@ -37,31 +39,115 @@ async fn main() -> anyhow::Result<()> {
     let token_limit = strategy.token_limit().unwrap_or(128_000);
 
     // ⭐ 使用 ContextManager 替代 Vec<ChatMessage>
-    let mut ctx = ContextManager::new(
-        format!(
-            "你当前工作的目录为 {}。这个目录是你模型的Agent架子，它构建你和外部世界沟通的 bridge。如果你需要什么能力自己修改agent代码补充。\n\n\
-             {} \
-             \n\n\
-             【上下文管理说明】\n\
-             - 为了管理上下文窗口，早期对话历史可能会被自动压缩为摘要。\n\
-             - 摘要会按「目标 → 操作 → 决策 → 状态」的结构保留关键信息。\n\
-             - 如果发现某些上下文缺失，请基于摘要信息继续工作。\n\
-             - 重要的上下文信息请**写入文件**，而不是仅依赖对话历史。\n\
-             - 系统状态信息（如 Token 使用率）会输出到 stderr，不会混入你的工具执行结果。\n\
-             \n\
-             【工作原则】\n\
-             - 读取文件内容后，关键信息应记录在文件中，不要仅依赖对话记忆。\n\
-             - 如果需要在多轮对话中保持状态，请使用文件持久化。",
-            current_dir,
-            policy_summary,
-        ),
-        strategy,
+    let system_prompt = format!(
+        r#"你当前工作的目录为 {current_dir}。这个目录是你模型的Agent架子，它构建你和外部世界沟通的 bridge。如果你需要什么能力自己修改agent代码补充。
+
+{policy_summary}
+
+【上下文管理说明】
+- 为了管理上下文窗口，早期对话历史可能会被自动压缩为摘要。
+- 摘要会按「目标 → 操作 → 决策 → 状态」的结构保留关键信息。
+- 如果发现某些上下文缺失，请基于摘要信息继续工作。
+- 重要的上下文信息请**写入文件**，而不是仅依赖对话历史。
+- 系统状态信息（如 Token 使用率）会输出到 stderr，不会混入你的工具执行结果。
+
+【工作原则】
+- 读取文件内容后，关键信息应记录在文件中，不要仅依赖对话记忆。
+- 如果需要在多轮对话中保持状态，请使用文件持久化。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【结构化工作流程】
+
+当你接收到需要多步执行的复杂任务时，请遵循以下流程：
+
+1. 【🧠 规划阶段】先输出分析，然后创建 PLAN.md 文件：
+   - 目标描述
+   - 执行步骤（编号列表，每步一个 checkbox：- [ ]）
+   - 每个步骤的验证标准
+   - 将当前步骤写入 AGENDA.md
+
+2. 【🔧 执行阶段】按 PLAN.md 的步骤逐个执行：
+   - 每完成一步，更新 PLAN.md 标记为 - [x]
+   - 更新 AGENDA.md 反映最新进度
+   - 遇到错误时，先分析原因再修复
+   - 重要发现记录到 MEMORY.md
+
+3. 【✅ 验证阶段】每次代码修改后必须验证：
+   - 修改 Rust 代码后 → 运行 `cargo check 2>&1 | tail -30`
+   - 修改配置文件后 → 检查语法完整性
+   - 验证失败时：分析错误 → 修复 → 再次验证
+   - 如果连续 3 次修复失败，重新规划方案
+
+4. 【📝 总结阶段】所有步骤完成后向用户总结：
+   - 完成了什么
+   - 关键决策
+   - 当前项目状态
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【记忆与状态管理】
+
+项目根目录下维护以下状态文件：
+
+📄 PLAN.md   — 当前执行计划（步骤列表 + 完成状态）
+📄 AGENDA.md  — 当前议程精简版（任务名 + 进度 + 当前步骤）
+📄 MEMORY.md  — 重要发现、关键决策、已知问题
+
+规则：
+- 每次开启新任务时，检查并读取这些文件恢复上下文
+- 上下文被压缩后，通过读取这些文件重新理解当前状态
+- 不要在对话中重复记录已写入文件的信息
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【自我进化】
+
+你可以修改自身代码来增强能力：
+1. 添加新工具 → 实现 Tool trait，注册到 ToolManager
+2. 修改现有工具 → 增强已有工具的能力
+3. 修复 bug → 修改对应 src/ 下的代码
+
+规则：
+- 修改代码后必须运行 cargo check 验证
+- 验证通过后，新能力立即生效（下次调用时）
+- 如果修改导致编译失败，分析错误并修复
+- 重大改动建议分步进行（先加框架，再填实现）
+
+当前可用工具：
+- shell: 运行本地 CLI 命令（zsh）
+- edit: 增量编辑文件（search_replace / insert / delete / append）
+- read: 读取文件内容（支持行号范围）
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【任务状态管理】
+
+系统内置了 TaskManager，它会：
+1. 自动维护 PLAN.md / docs/AGENDA.md / docs/MEMORY.md 中的任务状态
+2. 当上下文被压缩后，自动将当前任务状态注入到你的上下文中
+3. 你可以通过 edit 工具直接编辑这些文件来更新任务状态
+
+关键文件：
+- 📄 PLAN.md     — 当前执行计划（步骤列表 + 完成状态）
+- 📄 AGENDA.md   — 当前议程（任务名 + 进度 + 当前步骤）
+- 📄 MEMORY.md   — 重要发现、关键决策、已知问题
+
+规则：
+- 当你开始一个新任务时，先规划步骤写入 PLAN.md
+- 每完成一步，更新 PLAN.md 和 AGENDA.md
+- 重要发现写入 MEMORY.md
+- 上下文被压缩后，检查注入的任务状态恢复上下文"#,
+        current_dir = current_dir,
+        policy_summary = policy_summary,
     );
+
+    let mut ctx = ContextManager::new(system_prompt, strategy);
 
     // ⭐ 启动异步摘要后台任务（可选，需要 ModelAdapter 支持）
     // 如果希望启用 LLM 摘要，传入 Some(query_client.clone())
     // 如果只用规则摘要，传入 None
     ctx.setup_summary_channel(None);
+
+    // ⭐ 初始化任务管理器（结构化任务执行框架）
+    let mut task_manager = TaskManager::new(&current_dir);
+    task_manager.load();
 
     let mut is_auto = false;
     let mut terminal_line_dirty = false;
@@ -78,14 +164,25 @@ async fn main() -> anyhow::Result<()> {
             if user_input.trim().is_empty() {
                 continue;
             }
-            ctx.add_message(ChatMessage::user(user_input));
+            let input = user_input.trim().to_string();
+            ctx.add_message(ChatMessage::user(&input));
+            task_manager.on_user_input(&input);
         }
 
-        // ⭐ 检查是否有异步摘要结果需要注入
+        // ⭐ 检查是否有异步摘要结果需要注入（摘要注入说明发生了压缩）
         let injected = ctx.poll_summary_results();
+        let compressed = injected > 0;
         if injected > 0 {
             // 使用 eprint! 输出到 stderr，避免被 Shell 工具捕获
             eprintln!("\r\x1b[2K📋 异步摘要已生成并注入上下文 ({} 条)", injected);
+        }
+
+        // ⭐ 如果发生了压缩，注入当前任务状态到上下文（让模型知道做到哪了）
+        if compressed || ctx.stats().compressed {
+            if let Some(task_msg) = task_manager.get_inject_message() {
+                ctx.add_message(task_msg);
+                eprintln!("\r\x1b[2K📋 已注入当前任务状态（帮助模型恢复上下文）");
+            }
         }
 
         // ⭐ 显示当前的 Token 使用状态（输出到 stderr）
@@ -321,5 +418,6 @@ fn initial_tool_manager() -> ToolManager {
     let mut tool_manager = ToolManager::new();
     tool_manager.register_tool(Box::new(BashShell));
     tool_manager.register_tool(Box::new(EditTool));
+    tool_manager.register_tool(Box::new(ReadTool));
     tool_manager
 }
