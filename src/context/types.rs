@@ -196,6 +196,8 @@ pub struct SummaryResult {
     pub summary_message: ContextMessage,
     /// 被摘要的原始消息范围描述
     pub scope_description: String,
+    /// ⭐ 被摘要的原始消息数量（注入时需要删除对应数量的消息）
+    pub summarized_count: usize,
 }
 
 /// 判断工具输出的 stdout 是否包含结构性上下文信息

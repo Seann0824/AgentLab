@@ -9,6 +9,7 @@ pub mod base_shell;
 pub mod edit_tool;
 pub mod read_tool;
 pub mod search_tool;
+pub mod subagent;
 
 
 pub struct ToolManager {

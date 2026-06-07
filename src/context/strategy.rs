@@ -250,7 +250,8 @@ fn hard_truncate(
         .collect();
 
     let total_tokens: usize = token_counts.iter().sum();
-    if total_tokens <= token_limit {
+    // 🔴 v2 修复：使用 < 而非 <=，确保 100% 时也能触发截断
+    if total_tokens < token_limit {
         return CompressResult::NotNeeded;
     }
 
@@ -396,22 +397,42 @@ pub fn auto_compress(
     // ⭐ 情况 C: 层1 — 滑动窗口压缩
     let turns = count_turns(messages);
 
-    // ⭐ 动态计算有效 max_turns（修复：当 token 超过触发阈值时，按比例缩减保留轮数）
+    // ⭐ 动态计算有效 max_turns
     //
-    // 原逻辑：仅当 turns > max_turns 时才触发滑动窗口
-    // 问题：如果 token 使用率超过 70% 但轮数没到 20，压缩永远不会触发
-    // 修复：当 current_tokens >= trigger_threshold 时，按超出比例动态降低 effective_max_turns
+    // 🔴 v2 修复：线性缩放 max_turns→1，从 trigger_threshold→token_limit
     //
-    // 计算公式：effective_max_turns = max_turns * (trigger_threshold / current_tokens)
-    // 举例：token 100% → effective = 20 * 0.7 = 14，15轮时触发压缩到14轮
-    //        token 200% → effective = 20 * 0.35 = 7，8轮时触发压缩到7轮
+    // 原公式：effective = max_turns * (trigger_threshold / current_tokens)
+    // 问题：此公式在 tokens 刚过阈值时几乎不降低（0.996 的系数），导致滑动窗口无法触发
+    //
+    // 新公式：使用线性插值
+    //   reduction_ratio = (current_tokens - trigger_threshold) / (token_limit - trigger_threshold)
+    //   effective = max_turns * (1 - reduction_ratio)
+    //
+    // 特性：
+    //   - 70% tokens (89.6K) → 20 轮
+    //   - 78% tokens (100K) → 15 轮（而非原公式的 18 轮）
+    //   - 86% tokens (110K) → 9 轮
+    //   - 94% tokens (120K) → 4 轮
+    //   - 100% tokens (128K) → 1 轮
     let effective_max_turns = if current_tokens >= trigger_threshold && turns > 1 {
-        let target_ratio = trigger_threshold as f64 / current_tokens as f64;
-        let reduced = (max_turns as f64 * target_ratio).ceil() as usize;
-        reduced.max(1).min(max_turns)
+        let over = current_tokens.saturating_sub(trigger_threshold) as f64;
+        let range = (token_limit - trigger_threshold) as f64;
+        let reduction_ratio = if range > 0.0 {
+            (over / range).min(1.0)
+        } else {
+            1.0
+        };
+        let effective = (max_turns as f64 * (1.0 - reduction_ratio)).max(1.0).round() as usize;
+        effective.min(max_turns)
     } else {
         max_turns
     };
+
+    eprintln!(
+        "[auto_compress] tokens={}/{} ({:.0}%%) turns={} effective_max_turns={} threshold={}",
+        current_tokens, token_limit, current_tokens as f64 / token_limit as f64 * 100.0,
+        turns, effective_max_turns, trigger_threshold,
+    );
 
     if turns > effective_max_turns {
         let result = sliding_window_compress(messages, effective_max_turns);
@@ -432,12 +453,21 @@ pub fn auto_compress(
     }
 
     // ⭐ 情况 D: 层3 — 保底截断（所有轻量方法都无效时的最后手段）
+    // 🔴 v2 修复：>= 确保 100% 时也能触发硬截断
     let tokens_after = estimate_total_tokens(messages, estimator);
-    if tokens_after > token_limit {
+    if tokens_after >= token_limit {
         let result = hard_truncate(messages, token_limit, estimator);
         if result.did_compress() {
             stats.compressed = true;
             stats.last_compressed_at = Some(Instant::now());
+            eprintln!(
+                "[auto_compress] 🔴 hard_truncate: removed {} messages, tokens {} → {}",
+                match &result { CompressResult::HardTruncated { removed_count, .. } => *removed_count, _ => 0 },
+                tokens_after,
+                estimate_total_tokens(messages, estimator),
+            );
+        } else {
+            eprintln!("[auto_compress] ⚠️ hard_truncate called but no messages removed (all protected?)");
         }
         return result;
     }

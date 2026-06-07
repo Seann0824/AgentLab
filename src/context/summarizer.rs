@@ -185,6 +185,9 @@ impl AsyncSummarizer {
                     continue;
                 }
 
+                // ⭐ 记录被摘要的消息数量（用于注入后删除原始消息）
+                let summarized_count = to_summarize.len();
+
                 // 2. 生成摘要（优先 LLM，兜底规则摘要）
                 let summary_text = if let Some(ref adapter) = model_adapter {
                     Self::generate_llm_summary(adapter.as_ref(), &to_summarize).await
@@ -211,10 +214,11 @@ impl AsyncSummarizer {
                             SummaryScope::AllNonPreserved => "全部历史摘要".to_string(),
                         };
 
-                        // 4. 发送回主线程
+                        // 4. 发送回主线程（携带被摘要的消息数量）
                         let _ = result_tx.send(SummaryResult {
                             summary_message,
                             scope_description: scope_desc,
+                            summarized_count,
                         });
                     }
                     Err(e) => {
@@ -231,6 +235,7 @@ impl AsyncSummarizer {
                         let _ = result_tx.send(SummaryResult {
                             summary_message,
                             scope_description: format!("规则摘要（LLM错误: {}）", e),
+                            summarized_count,
                         });
                     }
                 }

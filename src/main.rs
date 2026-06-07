@@ -7,7 +7,7 @@ use crate::{
     context::{ContextManager, ContextStrategy, TokenEstimator},
     model::{ChatMessage, ModelEvent, ToolCall},
     task::TaskManager,
-    tools::{ToolManager, base_shell::BashShell, edit_tool::EditTool, read_tool::ReadTool},
+    tools::{ToolManager, base_shell::BashShell, edit_tool::EditTool, read_tool::ReadTool, subagent::SpawnAgent},
 };
 
 mod context;
@@ -23,6 +23,19 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
         .display()
         .to_string();
+
+    // ⭐ 解析 CLI 参数：--task 用于子 agent 单次运行模式
+    let args: Vec<String> = std::env::args().collect();
+    let single_task = if args.len() > 1 && args[1] == "--task" {
+        if args.len() > 2 {
+            Some(args[2..].join(" "))
+        } else {
+            eprintln!("⚠️  --task 参数需要提供任务描述");
+            None
+        }
+    } else {
+        None
+    };
 
     let policy_summary = String::new(); // 权限摘要（后续可从配置加载）
 
@@ -115,6 +128,14 @@ async fn main() -> anyhow::Result<()> {
 - shell: 运行本地 CLI 命令（zsh）
 - edit: 增量编辑文件（search_replace / insert / delete / append）
 - read: 读取文件内容（支持行号范围）
+- spawn_agent: 编译当前 agent 并派生子进程执行任务，用于验证代码修改
+
+  【使用场景】修改自身代码后，编译新版本并派生子 agent 验证改动的效果：
+  1. 先修改代码
+  2. 使用 spawn_agent(task="具体验证任务", timeout_seconds=300)
+  3. 工具会自动 cargo build，然后以 `--task` 模式启动子 agent
+  4. 子 agent 独立完成任务后输出结果
+  5. 主 agent 分析结果判断修改是否按预期工作
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 【任务状态管理】
@@ -151,22 +172,38 @@ async fn main() -> anyhow::Result<()> {
 
     let mut is_auto = false;
     let mut terminal_line_dirty = false;
+    let mut single_task_used = false; // 标记 --task 模式的首次输入是否已使用
 
     loop {
         if !is_auto {
-            let mut user_input = String::new();
-            finish_terminal_line(&mut terminal_line_dirty);
-            print!(">");
-            std::io::Write::flush(&mut std::io::stdout())?;
-            if std::io::stdin().read_line(&mut user_input).is_err() {
-                continue;
+            // ⭐ --task 模式：使用 CLI 参数作为首次输入
+            if let Some(ref task) = single_task {
+                if !single_task_used {
+                    single_task_used = true;
+                    let input = task.clone();
+                    eprintln!("[子 agent] 执行任务: {}", &input);
+                    ctx.add_message(ChatMessage::user(&input));
+                    task_manager.on_user_input(&input);
+                } else {
+                    // --task 模式：任务已完成，退出
+                    break Ok(());
+                }
+            } else {
+                // 正常交互模式：从 stdin 读取
+                let mut user_input = String::new();
+                finish_terminal_line(&mut terminal_line_dirty);
+                print!(">");
+                std::io::Write::flush(&mut std::io::stdout())?;
+                if std::io::stdin().read_line(&mut user_input).is_err() {
+                    continue;
+                }
+                if user_input.trim().is_empty() {
+                    continue;
+                }
+                let input = user_input.trim().to_string();
+                ctx.add_message(ChatMessage::user(&input));
+                task_manager.on_user_input(&input);
             }
-            if user_input.trim().is_empty() {
-                continue;
-            }
-            let input = user_input.trim().to_string();
-            ctx.add_message(ChatMessage::user(&input));
-            task_manager.on_user_input(&input);
         }
 
         // ⭐ 检查是否有异步摘要结果需要注入（摘要注入说明发生了压缩）
@@ -419,5 +456,6 @@ fn initial_tool_manager() -> ToolManager {
     tool_manager.register_tool(Box::new(BashShell));
     tool_manager.register_tool(Box::new(EditTool));
     tool_manager.register_tool(Box::new(ReadTool));
+    tool_manager.register_tool(Box::new(SpawnAgent));
     tool_manager
 }
