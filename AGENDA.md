@@ -14,3 +14,6 @@
 
 ## 待处理（低优先级）
 - ✅ 更新系统提示词，告知 agent 可用 spawn_agent 工具（已存在于 main.rs 第127-138行）
+
+7. ✅ 清理死代码 `maybe_dispatch_summary`（已集成到 auto_compress 中）
+8. ✅ 修复 strategy.rs 测试中 auto_compress 缺少 summary_tx 参数的编译错误

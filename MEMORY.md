@@ -33,3 +33,14 @@
 - 总计 82 个测试全部通过
 - 核心压缩测试：6 个增量测试 + 1 个集成测试
 - 测试类型覆盖：Token 缓存一致性、动态 max_turns、摘要注入、端到端生命周期、渐进压缩顺序、真实 Agent 循环模拟
+
+### 5. 清理死代码 `maybe_dispatch_summary`
+- **背景**：异步摘要派发逻辑已从 `check_and_compress` 集成到 `auto_compress` 内部（作为层1），旧的 `maybe_dispatch_summary` 方法成为死代码
+- **操作**：删除 `src/context/mod.rs` 中的 `maybe_dispatch_summary` 方法（第181-201行）
+- **原因**：`auto_compress` 已在层1位置（工具修剪之后、滑动窗口之前）派发异步摘要，不再需要外部调用
+
+### 6. 修复策略.rs 测试编译错误
+- **问题**：`auto_compress` 函数签名增加了第5个参数 `summary_tx`，但 `strategy.rs` 中的5个单元测试仍用4个参数调用
+- **修复**：补充 `None` 作为第5个参数到所有5个测试调用点
+- **受影响测试**：`test_auto_with_tool_pruning_first`、`test_auto_sliding_window_first`、`test_auto_hard_truncate`、`test_auto_not_needed`、`test_progressive_compression_layers`
+- **结果**：`cargo check` 通过，82个测试全部通过

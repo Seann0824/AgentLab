@@ -134,29 +134,14 @@ impl ContextManager {
                 self.handle_compress_result(&result)
             }
             ContextStrategy::Auto { .. } => {
-                // ⭐ 保存压缩前的快照（用于异步摘要派发——在滑动窗口删除消息后，
-                // 摘要器仍能看到被删除的早期消息，从而生成摘要恢复信息）
-                let pre_compress_snapshot = self.messages.clone();
-
                 let result = strategy::auto_compress(
                     &mut self.messages,
                     &self.strategy,
                     &self.tokenizer,
                     &mut self.stats,
+                    self.summary_tx.clone(), // 传递 summary_tx，让 auto_compress 内部派发异步摘要（层1）
                 );
-                let compressed = self.handle_compress_result(&result);
-
-                // ⭐ 如果触发了滑动窗口压缩，用压缩前快照派发摘要任务
-                // 这样摘要器能看到被滑动窗口删除的早期消息
-                if compressed {
-                    if matches!(&result, CompressResult::SlidingWindowCompressed { .. })
-                        || matches!(&result, CompressResult::HardTruncated { .. })
-                    {
-                        self.maybe_dispatch_summary(pre_compress_snapshot);
-                    }
-                }
-
-                compressed
+                self.handle_compress_result(&result)
             }
         }
     }
@@ -193,27 +178,6 @@ impl ContextManager {
         self.stats.estimated_tokens = self.cached_token_count;
     }
 
-    /// ⭐ 派发异步摘要任务（如果已启用）
-    ///
-    /// 修复：接受压缩前快照作为参数，而非从 self.messages 取（因为滑动窗口后
-    /// 早期消息已被删除，摘要器无内容可处理）。快照中的消息用于让摘要器看到
-    /// 被删除的早期对话。
-    fn maybe_dispatch_summary(&mut self, pre_compress_snapshot: Vec<ContextMessage>) {
-        if let Some(ref tx) = self.summary_tx {
-            let max_turns = match &self.strategy {
-                ContextStrategy::Auto { max_turns, .. } => *max_turns,
-                ContextStrategy::SlidingWindow { max_turns } => *max_turns,
-            };
-            // ⭐ 使用压缩前快照派发任务，摘要器能看到被滑动窗口删除的早期消息
-            let task = SummaryTask {
-                messages: pre_compress_snapshot,
-                scope: SummaryScope::EarlyNonPreserved {
-                    keep_recent: max_turns,
-                },
-            };
-            let _ = tx.send(task);
-        }
-    }
 
     /// ⭐ 检查是否有异步摘要结果需要注入
     ///
@@ -299,15 +263,9 @@ impl ContextManager {
                     &self.strategy,
                     &self.tokenizer,
                     &mut self.stats,
+                    self.summary_tx.clone(), // auto_compress 内部已处理异步摘要派发
                 );
                 self.handle_compress_result(&result);
-                if matches!(&result, CompressResult::SlidingWindowCompressed { .. }) {
-                    // ⭐ compress() 是手动调用，没有 pre_compress_snapshot 可用，
-                    // 这种情况下摘要任务可能无法找到早期消息（已被滑动窗口删除）
-                    // 为了修复此问题，我们在这里也传入了当前消息的快照
-                    let snapshot = self.messages.clone();
-                    self.maybe_dispatch_summary(snapshot);
-                }
                 result
             }
         }

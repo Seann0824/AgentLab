@@ -1,10 +1,12 @@
 use std::time::Instant;
 
+use tokio::sync::mpsc;
+
 use crate::model::ChatMessage;
 
 use super::config::ContextStrategy;
 use super::tokenizer::TokenEstimator;
-use super::types::{CompressResult, ContextMessage, ContextStats};
+use super::types::{CompressResult, ContextMessage, ContextStats, SummaryScope, SummaryTask};
 
 /// ⭐ 对话轮次计数器（统一逻辑）
 ///
@@ -307,23 +309,25 @@ fn hard_truncate(
 ///
 /// 层级（从轻到重）：
 /// 层0: 工具调用结果修剪 → 用占位符替换旧工具输出（最轻量，保留对话结构）
-/// 层1: 滑动窗口 → 删除早期整轮对话
-/// 层2: 异步摘要 → 由 ContextManager 派发（不在此处理）
+/// 层1: 异步模型摘要 → 用 LLM 生成结构化摘要（非阻塞派发，摘要结果异步注入）
+/// 层2: 滑动窗口 → 删除早期整轮对话
 /// 层3: 保底截断 → 最后的安全网
 ///
 /// 核心原则：先尝试最轻量的方法，不行再逐渐加重。
+/// summary_tx 参数用于异步派发模型摘要任务（层1），SummaryTask 通过 channel 发送到后台 AsyncSummarizer。
 pub fn auto_compress(
     messages: &mut Vec<ContextMessage>,
     strategy: &ContextStrategy,
     estimator: &TokenEstimator,
     stats: &mut ContextStats,
+    summary_tx: Option<mpsc::UnboundedSender<SummaryTask>>,
 ) -> CompressResult {
     // ⭐ 使用 if let 安全解构
     let (
         token_limit,
         max_turns,
         trigger_ratio,
-        _enable_async_summary,
+        enable_async_summary,
         enable_tool_pruning,
         tool_pruning_keep_recent,
         tool_pruning_max_output_chars,
@@ -394,7 +398,28 @@ pub fn auto_compress(
         }
     }
 
-    // ⭐ 情况 C: 层1 — 滑动窗口压缩
+    // ⭐ 情况 C: 层1 — 异步模型摘要派发（非阻塞，在滑动窗口删除消息前保存上下文）
+    //
+    // 在滑动窗口删除消息之前，将当前消息快照派发给后台 AsyncSummarizer。
+    // 摘要结果会异步注入，帮助恢复被滑动窗口删除的早期对话信息。
+    if enable_async_summary {
+        if let Some(ref tx) = summary_tx {
+            let snapshot = messages.clone();
+            let task = SummaryTask {
+                messages: snapshot,
+                scope: SummaryScope::EarlyNonPreserved {
+                    keep_recent: max_turns,
+                },
+            };
+            let _ = tx.send(task);
+            eprintln!(
+                "[auto_compress] 📋 layer1: dispatched async summary (keep_recent={})",
+                max_turns,
+            );
+        }
+    }
+
+    // ⭐ 情况 D: 层2 — 滑动窗口压缩
     let turns = count_turns(messages);
 
     // ⭐ 动态计算有效 max_turns
@@ -760,9 +785,7 @@ mod tests {
         };
         let mut stats = ContextStats::default();
 
-        let result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats);
-
-        assert!(stats.compressed, "Should have compressed");
+        let result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats, None);
         // token_limit=200 非常小，可能会触发多层压缩直到硬截断
         // 只要压缩发生了就算通过
         assert!(
@@ -792,7 +815,7 @@ mod tests {
         };
         let mut stats = ContextStats::default();
 
-        let result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats);
+        let result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats, None);
 
         assert!(
             stats.compressed,
@@ -821,7 +844,7 @@ mod tests {
         };
         let mut stats = ContextStats::default();
 
-        let _result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats);
+        let _result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats, None);
 
         assert!(stats.compressed);
     }
@@ -841,7 +864,7 @@ mod tests {
         };
         let mut stats = ContextStats::default();
 
-        let result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats);
+        let result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats, None);
 
         assert!(!result.did_compress());
     }
@@ -889,7 +912,7 @@ mod tests {
         };
         let mut stats = ContextStats::default();
 
-        let result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats);
+        let result = auto_compress(&mut msgs, &strategy, &estimator, &mut stats, None);
 
         assert!(stats.compressed);
         // 结果可能是任一层的产物
