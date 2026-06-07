@@ -28,7 +28,7 @@ impl OpenAiCompatibleAdapter {
 }
 
 impl ModelAdapter for OpenAiCompatibleAdapter {
-    fn stream_chat(&self, messages: &Vec<ChatMessage>, tools_schema: serde_json::Value) -> ModelStream {
+    fn stream_chat(&self, messages: &[ChatMessage], tools_schema: serde_json::Value) -> ModelStream {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let (tx, rx) = mpsc::channel(100);
         let messages = openai_messages(messages);
@@ -150,7 +150,7 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
     }
 }
 
-fn openai_messages(messages: &Vec<ChatMessage>) -> Vec<serde_json::Value> {
+fn openai_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
     messages
         .iter()
         .map(|message| {

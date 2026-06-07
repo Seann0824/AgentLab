@@ -80,8 +80,9 @@ pub enum ModelEvent {
     Error(String),
 }
 
-pub trait ModelAdapter {
-    fn stream_chat(&self, messages: &Vec<ChatMessage>, tools: serde_json::Value) -> ModelStream;
+/// 添加 Send + Sync 约束以支持跨线程使用
+pub trait ModelAdapter: Send + Sync {
+    fn stream_chat(&self, messages: &[ChatMessage], tools: serde_json::Value) -> ModelStream;
 }
 
 pub type ModelStream = Pin<Box<dyn Stream<Item = ModelEvent> + Send + 'static>>;
