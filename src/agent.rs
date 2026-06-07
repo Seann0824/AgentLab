@@ -6,7 +6,7 @@
 use anyhow;
 use futures_util::{StreamExt, stream::FuturesUnordered};
 
-use crate::cli::{output, CommandRegistry};
+use crate::cli::CommandRegistry;
 use crate::context::{ContextManager, ContextStrategy, TokenEstimator};
 use crate::model::{ChatMessage, ModelAdapter, ModelEvent, ToolCall};
 use crate::investigate::ErrorSnapshotManager;
@@ -390,13 +390,6 @@ impl Agent {
         self.task_manager = TaskManager::new(&self.current_dir);
         self.task_manager.load();
 
-        // ⭐ 显示启动横幅（非 --task 模式）
-        let is_task_mode = single_task.is_some();
-        if !is_task_mode {
-            let tool_count = self.tool_manager.list_tools().len();
-            println!("{}", output::welcome_banner("0.1.0", &self.current_dir, tool_count));
-        }
-
         let mut is_auto = false;
         let mut terminal_line_dirty = false;
         let mut single_task_used = false;
@@ -426,11 +419,7 @@ impl Agent {
                     // 正常交互模式：从 stdin 读取
                     let mut user_input = String::new();
                     finish_terminal_line(&mut terminal_line_dirty);
-                    // 带上下文信息的提示符
-                    let stats = self.context_manager.stats();
-                    let ratio = if stats.usage_ratio > 0.3 { Some(stats.usage_ratio) } else { None };
-                    let hint = output::context_hint(ratio, stats.preserved_count);
-                    print!("{}", output::prompt("user", Some(&hint)));
+                    print!(">");
                     std::io::Write::flush(&mut std::io::stdout())?;
                     if std::io::stdin().read_line(&mut user_input).is_err() {
                         continue;
@@ -464,7 +453,7 @@ impl Agent {
                         // /clear 命令
                         if cmd_name == "clear" {
                             self.context_manager.clear();
-                            println!("{}", output::badge_success("🧹 历史消息已清空"));
+                            println!("\x1b[32m━━━ 🧹 历史消息已清空 ━━━\x1b[0m");
                             continue;
                         }
 
@@ -477,14 +466,11 @@ impl Agent {
                         // /tools 命令：列出所有可用工具
                         if cmd_name == "tools" {
                             let tools = self.tool_manager.list_tools();
-                            println!("{}", output::section(&format!("🔧 可用工具 (共 {})", tools.len()), ""));
-                            println!("  {:<15}  {}", format!("{}名称{}", output::style::FG_CYAN, output::style::RESET), format!("{}描述{}", output::style::FG_CYAN, output::style::RESET));
-                            println!("  {}", output::separator(70));
+                            println!("\x1b[36m━━━ 🔧 可用工具 (共 {}) ━━━\x1b[0m", tools.len());
                             for t in &tools {
-                                println!("  {}{:<15}{}  {}", output::style::FG_YELLOW, t.name, output::style::RESET, t.description);
+                                println!("  \x1b[33m{:<15}\x1b[0m {}", t.name, t.description);
                             }
-                            println!();
-                            println!("{}  💡 工具详情由 LLM function calling schema 自动提供{}", output::style::FG_BRIGHT_BLACK, output::style::RESET);
+                            println!("\x1b[90m  💡 工具详情由 LLM function calling schema 自动提供\x1b[0m");
                             continue;
                         }
 
@@ -495,24 +481,24 @@ impl Agent {
                             match sub {
                                 "on" | "enable" | "1" | "true" => {
                                     crate::debug::enable();
-                                    println!("{}", output::badge_success("🐛 debug 模式已开启"));
+                                    println!("\x1b[32m━━━ 🐛 debug 模式已开启 ━━━\x1b[0m");
                                 }
                                 "off" | "disable" | "0" | "false" => {
                                     crate::debug::disable();
-                                    println!("{}", output::badge_warning("🐛 debug 模式已关闭"));
+                                    println!("\x1b[33m━━━ 🐛 debug 模式已关闭 ━━━\x1b[0m");
                                 }
                                 "toggle" | "t" => {
                                     let new_state = crate::debug::toggle();
                                     if new_state {
-                                        println!("{}", output::badge_success("🐛 debug 模式已切换为开启"));
+                                        println!("\x1b[32m━━━ 🐛 debug 模式已切换为开启 ━━━\x1b[0m");
                                     } else {
-                                        println!("{}", output::badge_warning("🐛 debug 模式已切换为关闭"));
+                                        println!("\x1b[33m━━━ 🐛 debug 模式已切换为关闭 ━━━\x1b[0m");
                                     }
                                 }
                                 _ => {
-                                    println!("{}", output::section("🐛 Debug 状态", ""));
+                                    println!("\x1b[36m━━━ 🐛 Debug 状态 ━━━\x1b[0m");
                                     println!("  {}", crate::debug::status_text());
-                                    println!("{}  用法: /debug on|off|toggle|status{}", output::style::FG_BRIGHT_BLACK, output::style::RESET);
+                                    println!("\x1b[90m  用法: /debug on|off|toggle|status\x1b[0m");
                                 }
                             }
                             continue;
@@ -593,7 +579,7 @@ impl Agent {
                         terminal_line_dirty = !content.ends_with('\n');
                     }
                     ModelEvent::Thinking(content) => {
-                        print!("{}", output::thinking_text(&content));
+                        print!("\x1b[90m{}\x1b[0m", content);
                         terminal_line_dirty = !content.ends_with('\n');
                     }
                     ModelEvent::ToolCallBlock {
@@ -604,25 +590,20 @@ impl Agent {
                         finish_terminal_line(&mut terminal_line_dirty);
 
                         // ===== Tool call visualization =====
-                        // 工具调用头
-                        println!("{}", output::section(&format!("🔧 {}", name), ""));
-                        // 显示参数
+                        println!("\x1b[36m━━━ 🔧 调用工具: {}\x1b[0m", name);
                         if let Ok(args) = serde_json::from_str::<serde_json::Value>(&arguments) {
                             if name == "shell" {
                                 if let Some(cmd) = args["command"].as_str() {
-                                    println!("  {}${}{}", output::style::FG_YELLOW, cmd, output::style::RESET);
+                                    println!("\x1b[33m  $ {}\x1b[0m", cmd);
                                 }
                             } else {
-                                let pretty = serde_json::to_string_pretty(&args).unwrap_or_default();
-                                for line in pretty.lines() {
-                                    println!("  {}{}", output::style::FG_YELLOW, line);
-                                }
-                                // Reset color after the block
-                                print!("{}", output::style::RESET);
+                                println!(
+                                    "\x1b[33m  {}\x1b[0m",
+                                    serde_json::to_string_pretty(&args).unwrap_or_default()
+                                );
                             }
                         }
-                        // 等待动画
-                        print!("{}", output::waiting_text("正在执行..."));
+                        print!("\x1b[33m⏳ 正在执行...\x1b[0m");
                         std::io::Write::flush(&mut std::io::stdout())?;
                         // ===================================
 
@@ -780,25 +761,27 @@ fn handle_session_command(
     match subcommand {
         "save" => {
             if parts.len() < 3 {
-                println!("{}⚠️  用法: /session save <名称>{}", output::style::FG_YELLOW, output::style::RESET);
+                println!("\x1b[33m⚠️  用法: /session save <名称>\x1b[0m");
                 return;
             }
             let name = parts[2..].join(" ");
             match session_manager.save(&name, ctx) {
                 Ok(session) => {
-                    println!("{}", output::badge_success("💾 会话已保存"));
-                    println!("  📁 名称: {}", session.name);
-                    println!("  💬 消息数: {}", session.messages.len());
-                    println!("  🕐 时间: {}", session.updated_at);
+                    println!(
+                        "\x1b[32m━━━ 💾 会话已保存 ━━━\x1b[0m\n  📁 名称: {}\n  💬 消息数: {}\n  🕐 时间: {}",
+                        session.name,
+                        session.messages.len(),
+                        session.updated_at,
+                    );
                 }
                 Err(e) => {
-                    println!("{}❌ 保存失败: {}{}", output::style::FG_RED, e, output::style::RESET);
+                    println!("\x1b[31m━━━ ❌ 保存失败: {}\x1b[0m", e);
                 }
             }
         }
         "load" => {
             if parts.len() < 3 {
-                println!("{}⚠️  用法: /session load <名称>{}", output::style::FG_YELLOW, output::style::RESET);
+                println!("\x1b[33m⚠️  用法: /session load <名称>\x1b[0m");
                 return;
             }
             let name = parts[2..].join(" ");
@@ -808,7 +791,7 @@ fn handle_session_command(
                     if ctx.get_messages().len() > 1 {
                         let auto_save_name = format!("_autosave_{}", chrono_now_simple());
                         let _ = session_manager.save(&auto_save_name, ctx);
-                        println!("{}  💾 当前上下文已自动保存为: {}{}", output::style::FG_BRIGHT_BLACK, auto_save_name, output::style::RESET);
+                        println!("\x1b[90m  💾 当前上下文已自动保存为: {}\x1b[0m", auto_save_name);
                     }
 
                     // 生成恢复用的系统提示词
@@ -827,16 +810,18 @@ fn handle_session_command(
                     *task_manager = TaskManager::new(&session.current_dir);
                     task_manager.load();
 
-                    println!("{}", output::badge_success("📂 会话已加载"));
-                    println!("  📁 名称: {}", session.name);
-                    println!("  💬 消息数: {}", session.messages.len());
-                    println!("  🕐 创建: {}", session.created_at);
-                    println!("  🕐 更新: {}", session.updated_at);
-                    println!("{}  💡 输入 /session list 查看所有会话{}", output::style::FG_BRIGHT_BLACK, output::style::RESET);
+                    println!(
+                        "\x1b[32m━━━ 📂 会话已加载 ━━━\x1b[0m\n  📁 名称: {}\n  💬 消息数: {}\n  🕐 创建: {}\n  🕐 更新: {}",
+                        session.name,
+                        session.messages.len(),
+                        session.created_at,
+                        session.updated_at,
+                    );
+                    println!("\x1b[90m  💡 输入 /session list 查看所有会话\x1b[0m");
                 }
                 Err(e) => {
-                    println!("{}❌ 加载失败: {}{}", output::style::FG_RED, e, output::style::RESET);
-                    println!("{}  💡 使用 /session list 查看可用会话{}", output::style::FG_YELLOW, output::style::RESET);
+                    println!("\x1b[31m━━━ ❌ 加载失败: {}\x1b[0m", e);
+                    println!("\x1b[33m  💡 使用 /session list 查看可用会话\x1b[0m");
                 }
             }
         }
@@ -845,38 +830,38 @@ fn handle_session_command(
         }
         "delete" => {
             if parts.len() < 3 {
-                println!("{}⚠️  用法: /session delete <名称>{}", output::style::FG_YELLOW, output::style::RESET);
+                println!("\x1b[33m⚠️  用法: /session delete <名称>\x1b[0m");
                 return;
             }
             let name = parts[2..].join(" ");
             match session_manager.delete(&name) {
                 Ok(true) => {
-                    println!("{}", output::badge_success(&format!("🗑️ 会话已删除: {}", name)));
+                    println!("\x1b[32m━━━ 🗑️ 会话已删除: {}\x1b[0m", name);
                 }
                 Ok(false) => {
-                    println!("{}⚠️  会话不存在: {}{}", output::style::FG_YELLOW, name, output::style::RESET);
+                    println!("\x1b[33m⚠️  会话不存在: {}\x1b[0m", name);
                 }
                 Err(e) => {
-                    println!("{}❌ 删除失败: {}{}", output::style::FG_RED, e, output::style::RESET);
+                    println!("\x1b[31m━━━ ❌ 删除失败: {}\x1b[0m", e);
                 }
             }
         }
         "rename" => {
             if parts.len() < 4 {
-                println!("{}⚠️  用法: /session rename <旧名称> <新名称>{}", output::style::FG_YELLOW, output::style::RESET);
+                println!("\x1b[33m⚠️  用法: /session rename <旧名称> <新名称>\x1b[0m");
                 return;
             }
             let old_name = parts[2];
             let new_name = parts[3..].join(" ");
             match session_manager.rename(old_name, &new_name) {
                 Ok(true) => {
-                    println!("{}", output::badge_success(&format!("✏️ 会话已重命名: {} → {}", old_name, new_name)));
+                    println!("\x1b[32m━━━ ✏️ 会话已重命名: {} → {}\x1b[0m", old_name, new_name);
                 }
                 Ok(false) => {
-                    println!("{}⚠️  会话不存在: {}{}", output::style::FG_YELLOW, old_name, output::style::RESET);
+                    println!("\x1b[33m⚠️  会话不存在: {}\x1b[0m", old_name);
                 }
                 Err(e) => {
-                    println!("{}❌ 重命名失败: {}{}", output::style::FG_RED, e, output::style::RESET);
+                    println!("\x1b[31m━━━ ❌ 重命名失败: {}\x1b[0m", e);
                 }
             }
         }
@@ -884,7 +869,7 @@ fn handle_session_command(
             print_session_help();
         }
         other => {
-            println!("{}⚠️  未知的子命令: {}{}", output::style::FG_YELLOW, other, output::style::RESET);
+            println!("\x1b[33m⚠️  未知的子命令: {}\x1b[0m", other);
             print_session_help();
         }
     }
@@ -895,42 +880,32 @@ fn list_sessions(session_manager: &SessionManager) {
     match session_manager.list() {
         Ok(sessions) => {
             if sessions.is_empty() {
-                println!("{}📂 暂无保存的会话{}", output::style::FG_YELLOW, output::style::RESET);
-                println!("{}  💡 使用 /session save <名称> 保存当前对话{}", output::style::FG_BRIGHT_BLACK, output::style::RESET);
+                println!("\x1b[33m📂 暂无保存的会话\x1b[0m");
+                println!("\x1b[90m  💡 使用 /session save <名称> 保存当前对话\x1b[0m");
             } else {
-                println!("{}", output::section("已保存的会话", "📂"));
-                // 表头
-                println!("{}", output::table_header(&["名称", "消息数", "更新时间"], &[25, 10, 20]));
-                println!("  {}", output::separator(57));
+                println!("\x1b[36m━━━ 📂 已保存的会话 (共 {}) ━━━\x1b[0m", sessions.len());
                 for session in &sessions {
-                    let name = if session.name.len() > 22 {
-                        format!("{}...", &session.name[..22])
-                    } else {
-                        session.name.clone()
-                    };
-                    println!("  {}", output::kv_row(&name, &format!("{} 💬", session.message_count)));
-                    println!("  {}      🕐 {}{}", output::style::FG_BRIGHT_BLACK, output::format_session_time(&session.updated_at), output::style::RESET);
+                    println!("{}", session);
                 }
-                println!();
-                println!("{}  💡 使用 /session load <名称> 恢复对话{}", output::style::FG_BRIGHT_BLACK, output::style::RESET);
+                println!("\x1b[90m  💡 使用 /session load <名称> 恢复对话\x1b[0m");
             }
         }
         Err(e) => {
-            println!("{}❌ 列出会话失败: {}{}", output::style::FG_RED, e, output::style::RESET);
+            println!("\x1b[31m━━━ ❌ 列出会话失败: {}\x1b[0m", e);
         }
     }
 }
 
 /// 打印会话管理帮助
 fn print_session_help() {
-    println!("{}", output::section("会话管理命令", "📋"));
-    println!("  {}/session save <名称>{}    保存当前对话", output::style::FG_YELLOW, output::style::RESET);
-    println!("  {}/session load <名称>{}    加载已保存的对话", output::style::FG_YELLOW, output::style::RESET);
-    println!("  {}/session list{}           列出所有会话", output::style::FG_YELLOW, output::style::RESET);
-    println!("  {}/session delete <名称>{}  删除会话", output::style::FG_YELLOW, output::style::RESET);
-    println!("  {}/session rename <旧> <新>{}  重命名会话", output::style::FG_YELLOW, output::style::RESET);
-    println!("  {}/sessions{}                列出所有会话（快捷方式）", output::style::FG_YELLOW, output::style::RESET);
-    println!("  {}/session help{}            显示此帮助", output::style::FG_YELLOW, output::style::RESET);
+    println!("\x1b[36m━━━ 📋 会话管理命令 ━━━\x1b[0m");
+    println!("  \x1b[33m/session save <名称>\x1b[0m    保存当前对话");
+    println!("  \x1b[33m/session load <名称>\x1b[0m    加载已保存的对话");
+    println!("  \x1b[33m/session list\x1b[0m           列出所有会话");
+    println!("  \x1b[33m/session delete <名称>\x1b[0m  删除会话");
+    println!("  \x1b[33m/session rename <旧> <新>\x1b[0m  重命名会话");
+    println!("  \x1b[33m/sessions\x1b[0m                列出所有会话（快捷方式）");
+    println!("  \x1b[33m/session help\x1b[0m            显示此帮助");
 }
 
 /// 获取简单的时间字符串（用于自动保存快照命名）
@@ -954,21 +929,16 @@ fn render_tool_result(content: &str) {
                 if result.is_object() {
                     let success = result["success"].as_bool().unwrap_or(true);
                     let status = result["status"].as_i64();
-                    let exit_code = status.unwrap_or(0);
                     if success {
                         println!(
-                            "  {}✅ exit: {}",
-                            output::style::FG_GREEN,
-                            exit_code,
+                            "\x1b[32m━━━ ✅ 执行成功 (exit: {}) ━━━\x1b[0m",
+                            status.unwrap_or(0)
                         );
-                        print!("{}", output::style::RESET);
                     } else {
                         println!(
-                            "  {}❌ exit: {}",
-                            output::style::FG_RED,
-                            exit_code,
+                            "\x1b[31m━━━ ❌ 执行失败 (exit: {}) ━━━\x1b[0m",
+                            status.unwrap_or(-1)
                         );
-                        print!("{}", output::style::RESET);
                     }
                     if let Some(stdout) = result["stdout"].as_str() {
                         if !stdout.is_empty() {
@@ -980,9 +950,7 @@ fn render_tool_result(content: &str) {
                     }
                     if let Some(stderr) = result["stderr"].as_str() {
                         if !stderr.is_empty() {
-                            print!("{}", output::style::FG_RED);
-                            print!("{}", stderr);
-                            print!("{}", output::style::RESET);
+                            print!("\x1b[31m{}\x1b[0m", stderr);
                             if !stderr.ends_with('\n') {
                                 println!();
                             }
@@ -996,10 +964,12 @@ fn render_tool_result(content: &str) {
                 }
             }
         } else {
-            println!("  {}❌ 工具调用失败{}", output::style::FG_RED, output::style::RESET);
+            println!("\x1b[31m━━━ ❌ 工具调用失败 ━━━\x1b[0m");
             if let Some(error) = value.get("error") {
-                let msg = error["message"].as_str().unwrap_or("unknown error");
-                println!("  {}  {}{}", output::style::FG_RED, msg, output::style::RESET);
+                println!(
+                    "\x1b[31m  {}\x1b[0m",
+                    error["message"].as_str().unwrap_or("unknown error")
+                );
             }
         }
     }
