@@ -159,6 +159,11 @@ pub enum CompressResult {
         removed_count: usize,
         kept_count: usize,
     },
+    /// ⭐ 强制压缩（由 is_blocked 触发，跳过 trigger_threshold 检查直接执行最激进压缩）
+    ForceCompressed {
+        removed_count: usize,
+        kept_count: usize,
+    },
 }
 
 impl CompressResult {
@@ -176,6 +181,63 @@ impl CompressResult {
             CompressResult::AsyncSummaryDispatched { .. } => "异步摘要已派发",
             CompressResult::HardTruncated { .. } => "保底截断",
             CompressResult::EmergencyTruncated { .. } => "🚨 紧急截断",
+            CompressResult::ForceCompressed { .. } => "⭐ 强制压缩",
+        }
+    }
+
+    /// 详细描述（含具体节省量）
+    pub fn display_detail(&self) -> String {
+        match self {
+            CompressResult::NotNeeded => "无需压缩".to_string(),
+            CompressResult::ToolCallsPruned {
+                pruned_count,
+                saved_tokens,
+            } => {
+                format!(
+                    "🔧 工具调用结果修剪: 修剪 {} 个工具输出，节省约 {} tokens",
+                    pruned_count,
+                    saved_tokens,
+                )
+            }
+            CompressResult::SlidingWindowCompressed {
+                removed_count,
+                removed_turns,
+            } => {
+                format!(
+                    "🔧 滑动窗口压缩: 移除 {} 条消息 ({} 轮)",
+                    removed_count, removed_turns,
+                )
+            }
+            CompressResult::AsyncSummaryDispatched { task_id } => {
+                format!("📋 异步摘要已派发 (任务 #{})，完成后自动注入上下文", task_id)
+            }
+            CompressResult::HardTruncated {
+                removed_count,
+                kept_count,
+            } => {
+                format!(
+                    "🔧 保底截断: 移除 {} 条消息，保留 {} 条",
+                    removed_count, kept_count,
+                )
+            }
+            CompressResult::EmergencyTruncated {
+                removed_count,
+                kept_count,
+            } => {
+                format!(
+                    "🚨 紧急截断: 移除 {} 条消息，仅保留 {} 条核心消息",
+                    removed_count, kept_count,
+                )
+            }
+            CompressResult::ForceCompressed {
+                removed_count,
+                kept_count,
+            } => {
+                format!(
+                    "⭐ 强制压缩: 移除 {} 条消息，保留 {} 条",
+                    removed_count, kept_count,
+                )
+            }
         }
     }
 }

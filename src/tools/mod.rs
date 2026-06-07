@@ -1,8 +1,17 @@
-use std::{collections::HashMap, str::FromStr};
+use std::collections::HashMap;
+use std::str::FromStr;
 
 use futures_util::StreamExt;
 
-use crate::{model::{ChatMessage, ToolCall}, tools::types::{Tool, ToolEvent}};
+use crate::model::{ChatMessage, ToolCall};
+use crate::tools::types::{Tool, ToolEvent};
+
+/// 工具摘要信息，用于动态生成系统提示词和交互式工具列表
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+}
 
 pub mod types;
 pub mod base_shell;
@@ -35,6 +44,19 @@ impl ToolManager {
             })
             .collect::<Vec<serde_json::Value>>();
         serde_json::json!(tools_schema)
+    }
+
+    /// 返回所有已注册工具的摘要信息列表，用于动态生成系统提示词和 `/tools` 命令
+    pub fn list_tools(&self) -> Vec<ToolInfo> {
+        let mut tools: Vec<ToolInfo> = self.tools
+            .values()
+            .map(|tool| ToolInfo {
+                name: tool.name().to_string(),
+                description: tool.description().to_string(),
+            })
+            .collect();
+        tools.sort_by(|a, b| a.name.cmp(&b.name));
+        tools
     }
 
     pub async fn run(&self, tool_call: ToolCall) -> ChatMessage {

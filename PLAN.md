@@ -247,3 +247,93 @@
 - [x] 输入 `/` 显示可用命令列表
 - [x] 输入 `/help` 显示详细帮助
 - [x] 输入未知命令如 `/xyz` 提示友好信息
+
+# 下一阶段 Roadmap：工具生态与自我进化
+
+## 🎯 总体目标
+补齐 Agent Lab 工具生态，构建动态工具发现机制，让 Agent 能自我认知并扩展能力。
+
+---
+
+## Phase 1: 动态工具系统与自我认知
+
+### 目标
+当前工具列表在系统提示词中硬编码，添加新工具后需要手动更新提示词。改为从 ToolManager 动态生成，让 Agent 永远知道自己有哪些工具可用。
+
+### 执行步骤
+
+- [ ] 1. 给 ToolManager 添加 `list_tools()` 方法，返回所有已注册工具的摘要（名称 + 描述）
+- [ ] 2. 修改 `main.rs`，系统提示词中的「当前可用工具」部分改为从 ToolManager 动态生成
+- [ ] 3. 创建 `/tools` CLI 命令，交互式列出所有可用工具及其参数 schema
+- [ ] 4. 在 `commands/mod.rs` 中注册 `/tools` 命令
+- [ ] 5. 验证：`cargo check` + `cargo test` 通过
+
+### 验证标准
+- [ ] `cargo check` 通过
+- [ ] 所有现有测试通过（≥90 passed）
+- [ ] 启动时系统提示词包含所有已注册工具的动态列表
+- [ ] 输入 `/tools` 可列出所有工具及描述
+- [ ] 添加新工具后自动出现在提示词和 `/tools` 输出中
+
+---
+
+## Phase 2: 网络能力扩展
+
+### 目标
+为 Agent 添加网络访问能力：HTTP 请求、文件下载。
+
+### 执行步骤
+
+- [ ] 1. 创建 `src/tools/http_tool/mod.rs` — HTTP 请求工具（GET/POST，支持 headers ）
+- [ ] 2. 在 `main.rs` 中注册 http_tool
+- [ ] 3. 创建 `src/tools/fetch_tool/mod.rs` — 文件下载工具（保存到本地）
+- [ ] 4. 在 `main.rs` 中注册 fetch_tool
+- [ ] 5. 验证：`cargo check` + `cargo test` 通过
+
+### 验证标准
+- [ ] `cargo check` 通过
+- [ ] 所有测试通过
+- [ ] HTTP 工具可发送 GET/POST 请求并返回响应
+- [ ] 下载工具可将远程文件保存到本地
+
+---
+
+## Phase 3: MCP（Model Context Protocol）支持
+
+### 目标
+支持 MCP 协议，让 Agent 能连接 MCP 服务器动态加载工具，接入 MCP 生态。
+
+### 执行步骤
+
+- [ ] 1. 研究 MCP 协议规范（JSON-RPC based），设计客户端架构
+- [ ] 2. 创建 `src/tools/mcp/mod.rs` — MCP 客户端实现
+- [ ] 3. 实现工具发现（`tools/list`）和工具调用（`tools/call`）
+- [ ] 4. 实现 MCP server 进程管理（启动/停止）
+- [ ] 5. 在 `main.rs` 中集成 MCP 工具加载
+- [ ] 6. 添加 MCP server 配置文件支持
+- [ ] 7. 验证：`cargo check` + `cargo test` 通过
+
+### 验证标准
+- [ ] `cargo check` 通过
+- [ ] 所有测试通过
+- [ ] 能连接 MCP server 并获取工具列表
+- [ ] 能调用 MCP server 提供的工具
+- [ ] MCP server 异常断开时优雅降级
+
+---
+
+## Phase 4: Web UI 控制台
+
+### 目标
+提供 Web 界面替代纯 CLI 交互，方便可视化操作和多人协作。
+
+### 执行步骤（初步调研）
+
+- [ ] 1. 评估技术方案（SSE streaming vs WebSocket）
+- [ ] 2. 设计架构（嵌入式 HTTP server + Web UI）
+- [ ] 3. 实现基础原型
+
+---
+
+## 关键决策记录
+（将记录在 MEMORY.md 中）

@@ -157,3 +157,42 @@ effective_max_turns = 15, turns 15 > 15? false → 滑动窗口不触发
 
 ### 修改文件
 - `src/context/strategy.rs`：修复 `auto_compress` 中的 effective_max_turns 公式 和 hard_truncate 触发条件
+
+## 2024-06-XX: 🔴 Bug — 上下文 100% 后模型停止调用工具
+
+### 用户反馈
+每次 Token 使用率达到 100% 后，模型就不再继续调用工具了（auto-loop 停止）。
+
+### 根因分析
+
+#### 问题1: auto-loop 模式下没有 User 消息，滑动窗口误判轮数
+`count_turns()` 通过统计 User 消息数量来计算轮次。但在 auto-loop 模式下：
+- 只有一个初始的 User 消息（任务指令）
+- 后续的 tool_calls + tool_results 全是 Assistant/Tool 消息
+- 因此 `turns == 1` 始终成立
+- 即使压缩层计算出 `effective_max_turns = 1`，滑动窗口的 `turns <= max_turns` 检查也会返回 `NotNeeded`
+
+**结果**: 滑动窗口层在 auto-loop 模式下永远无法压缩，直接跳过。
+
+#### 问题2: hard_truncate 可能无法有效降低 token
+当滑动窗口跳过时，所有压缩压力都落到 hard_truncate 上。但如果大量消息被标记为 preserved/important，hard_truncate 能删除的消息有限。
+
+#### 问题3: 没有前置阻塞检测
+模型 API 在被调用时上下文可能已经超过 128K token，DeepSeek 等 API 会返回错误（如 context_length_exceeded）。错误被 `_ => ()` 静默忽略，导致模型无响应。
+
+#### 问题4: 异步摘要可能来不及
+异步摘要在滑动窗口前派发，但摘要结果注入需要等到下一次 loop 迭代。在此期间 token 持续积累。
+
+### 修复方案（对应 docs/PLAN.md 中的 P0 计划）
+
+1. ✅ **步骤1**: 添加 `ForceCompressed` 压缩结果类型 (已完成)
+2. **步骤2**: 修改 `auto_compress` 添加 `force` 参数，跳过常规检查直接执行最激进压缩
+3. **步骤3**: 添加 `is_blocked()` / `force_compress()` 方法到 ContextManager
+4. **步骤4**: 在 `main.rs` 中调用模型前检查阻塞状态，阻塞时先强制压缩再发送
+5. **步骤5**: 修复 auto-loop 下的轮次计算，让滑动窗口在无 User 消息时也能触发
+
+### 修改文件
+- `src/context/types.rs` — ForceCompressed 变体
+- `src/context/strategy.rs` — auto_compress force 参数
+- `src/context/mod.rs` — is_blocked / force_compress 方法
+- `src/main.rs` — 调用模型前阻塞检查

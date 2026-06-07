@@ -5,6 +5,7 @@ mod tokenizer;
 mod types;
 
 pub use config::{ContextConfig, ContextStrategy};
+pub use strategy::force_compress as force_compress_strategy;
 pub use summarizer::{rule_based_summary, AsyncSummarizer};
 pub use tokenizer::TokenEstimator;
 pub use types::{
@@ -53,6 +54,8 @@ pub struct ContextManager {
     _summary_handle: Option<tokio::task::JoinHandle<()>>,
     /// 最大 preserved 消息数量（防止滥用）
     max_preserved: usize,
+    /// ⭐ 最近一次压缩结果（用于向用户展示压缩事件）
+    last_compress_result: Option<CompressResult>,
 }
 
 impl ContextManager {
@@ -78,6 +81,7 @@ impl ContextManager {
             summary_rx: None,
             _summary_handle: None,
             max_preserved: 10,
+            last_compress_result: None,
         }
     }
 
@@ -148,13 +152,16 @@ impl ContextManager {
 
     /// 处理压缩结果，更新缓存
     fn handle_compress_result(&mut self, result: &CompressResult) -> bool {
+        // ⭐ 记录压缩结果（无论是否实际压缩，用于外部展示）
+        self.last_compress_result = Some(result.clone());
         match result {
             CompressResult::NotNeeded => false,
             // ⭐ ToolCallsPruned 只替换了内容，消息数量不变，token 缓存需要重算
             CompressResult::ToolCallsPruned { .. }
             | CompressResult::SlidingWindowCompressed { .. }
             | CompressResult::HardTruncated { .. }
-            | CompressResult::EmergencyTruncated { .. } => {
+            | CompressResult::EmergencyTruncated { .. }
+            | CompressResult::ForceCompressed { .. } => {
                 // ⭐ 缓存失效，需要全量重算 token
                 self.recalculate_token_cache();
                 self.stats.message_count = self.messages.len();
@@ -272,6 +279,11 @@ impl ContextManager {
         }
     }
 
+    /// ⭐ 获取并清除最后一次压缩结果（用于向用户展示压缩事件）
+    pub fn take_last_compress_result(&mut self) -> Option<CompressResult> {
+        self.last_compress_result.take()
+    }
+
     /// 获取统计信息
     pub fn stats(&self) -> &ContextStats {
         &self.stats
@@ -382,6 +394,43 @@ impl ContextManager {
                 self.stats.pruned_tool_calls += pruned_count;
                 self.stats.pruned_saved_tokens += saved_tokens;
             }
+        }
+
+        result
+    }
+
+    /// ⭐ 检查上下文是否阻塞（Token 使用率 >= 95%）
+    /// 阻塞意味着需要强制压缩才能继续
+    pub fn is_blocked(&self) -> bool {
+        self.stats.usage_ratio >= 0.95
+    }
+
+    /// ⭐ 检查上下文是否临界（Token 使用率 >= 90%）
+    /// 临界意味着需要尽快触发压缩
+    pub fn is_critical(&self) -> bool {
+        self.stats.usage_ratio >= 0.90
+    }
+
+    /// ⭐ 强制压缩上下文（跳过 trigger_threshold 检查，直接执行最激进压缩）
+    ///
+    /// 在 is_blocked() 返回 true 时调用。
+    /// 先发送异步摘要任务，然后执行同步压缩。
+    pub fn force_compress(&mut self) -> CompressResult {
+        eprintln!("[ContextManager] force_compress called (usage={:.0}%)", self.stats.usage_ratio * 100.0);
+        
+        let result = crate::context::force_compress_strategy(
+            &mut self.messages,
+            &self.strategy,
+            &self.tokenizer,
+            &mut self.stats,
+            self.summary_tx.clone(),
+        );
+
+        if result.did_compress() {
+            self.recalculate_token_cache();
+            self.stats.message_count = self.messages.len();
+            self.stats.preserved_count = self.messages.iter().filter(|m| m.preserved).count();
+            self.last_compress_result = Some(result.clone());
         }
 
         result

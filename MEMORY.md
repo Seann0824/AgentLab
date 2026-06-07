@@ -89,3 +89,11 @@
   - 集成到 main.rs 主循环（`/` 路由）
   - 5 个单元测试覆盖注册、查找、排序、格式化
 - **状态**：✅ 全部完成（cargo check 通过, cargo test 90 passed）
+
+### 10. 注册 `/tools` 命令到命令注册表 ✅
+- **背景**：`/tools` CLI 命令的 handler 已在 main.rs 中实现（输出 tool_manager.list_tools()），但未在 CommandRegistry 中注册，导致 `/help` 不显示它
+- **操作**：
+  - 在 `src/commands/mod.rs` 的 `register_all()` 中注册 `tools` 命令（名称、描述、用法）
+  - 在测试 `test_registry_contains_builtin_commands` 中添加 `tools` 的断言
+- **效果**：`/help` 现在会列出 `/tools`，`/tools` 命令可直接调用显示所有已注册工具
+- **验证**：cargo check 通过, cargo test 90 passed

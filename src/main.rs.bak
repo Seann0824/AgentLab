@@ -132,7 +132,11 @@ async fn main() -> anyhow::Result<()> {
 - 重大改动建议分步进行（先加框架，再填实现）
 
 当前可用工具：
-{tools_description}
+- shell: 运行本地 CLI 命令（zsh）
+- edit: 增量编辑文件（search_replace / insert / delete / append）
+- read: 读取文件内容（支持行号范围）
+- search: 在目录中搜索文本内容，支持正则表达式、文件扩展名过滤、大小写控制
+- spawn_agent: 编译当前 agent 并派生子进程执行任务，用于验证代码修改
 
   【使用场景】修改自身代码后，编译新版本并派生子 agent 验证改动的效果：
   1. 先修改代码
@@ -159,7 +163,6 @@ async fn main() -> anyhow::Result<()> {
 - 每完成一步，更新 PLAN.md 和 AGENDA.md
 - 重要发现写入 MEMORY.md
 - 上下文被压缩后，检查注入的任务状态恢复上下文"#,
-        tools_description = tools_description,
         current_dir = current_dir,
         policy_summary = policy_summary,
     );
@@ -247,17 +250,6 @@ async fn main() -> anyhow::Result<()> {
                     // /session 和 /sessions 命令
                     if cmd_name == "session" || cmd_name == "sessions" {
                         handle_session_command(&trimmed, &session_manager, &mut ctx, &mut task_manager);
-                        continue;
-                    }
-
-                    // /tools 命令：列出所有可用工具
-                    if cmd_name == "tools" {
-                        let tools = tool_manager.list_tools();
-                        println!("\x1b[36m━━━ 🔧 可用工具 (共 {}) ━━━\x1b[0m", tools.len());
-                        for t in &tools {
-                            println!("  \x1b[33m{:<15}\x1b[0m {}", t.name, t.description);
-                        }
-                        println!("\x1b[90m  💡 工具详情由 LLM function calling schema 自动提供\x1b[0m");
                         continue;
                     }
 

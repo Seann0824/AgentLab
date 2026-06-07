@@ -120,6 +120,14 @@ impl CommandRegistry {
             examples: &["/sessions"],
             subcommands: &[],
         });
+
+        self.register(&Command {
+            name: "tools",
+            description: "列出所有可用工具及其描述",
+            usage: "/tools",
+            examples: &["/tools"],
+            subcommands: &[],
+        });
     }
 
     fn register(&mut self, cmd: &'static Command) {
@@ -239,6 +247,7 @@ mod tests {
         assert!(registry.is_known("clear"));
         assert!(registry.is_known("session"));
         assert!(registry.is_known("sessions"));
+        assert!(registry.is_known("tools"));
     }
 
     #[test]

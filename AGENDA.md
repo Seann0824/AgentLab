@@ -40,3 +40,19 @@
 - 进度：7/7 — ✅ 全部完成
 - 当前：已完成
 - 验证：cargo check 通过, cargo test 90 passed
+
+
+# 当前议程
+
+## 任务名：工具生态与自我进化 — Phase 1
+## 进度：✅ 5/5 — 全部完成
+## 当前步骤：已完成
+
+## 已完成
+- ✅ 注册 SearchTool
+- ✅ ToolManager.list_tools() + ToolInfo 结构体
+- ✅ 系统提示词工具列表改为动态生成（从 ToolManager 自动获取）
+- ✅ 更新系统提示词添加 search 工具描述
+- ✅ 创建 `/tools` CLI 命令（handler 已在 main.rs 中实现）
+- ✅ 在命令注册表中注册 `/tools`
+- ✅ cargo check 通过, cargo test 90 passed
