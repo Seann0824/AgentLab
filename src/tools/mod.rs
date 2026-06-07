@@ -5,8 +5,7 @@ use futures_util::StreamExt;
 use crate::{model::{ChatMessage, ToolCall}, tools::types::{Tool, ToolEvent}};
 
 pub mod types;
-
-pub mod read_file;
+pub mod base_shell;
 
 
 pub struct ToolManager {

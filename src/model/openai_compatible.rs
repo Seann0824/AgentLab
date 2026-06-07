@@ -155,6 +155,12 @@ fn openai_messages(messages: &Vec<ChatMessage>) -> Vec<serde_json::Value> {
         .iter()
         .map(|message| {
             match message {
+                ChatMessage::System { content } => {
+                    json!({
+                        "role": "system",
+                        "content": content,
+                    })
+                },
                 ChatMessage::User { content } => {
                     json!({
                         "role": "user",

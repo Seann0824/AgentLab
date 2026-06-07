@@ -11,6 +11,9 @@ pub struct ToolCall {
 
 #[derive(Debug, Clone)]
 pub enum ChatMessage {
+    System {
+        content: String,
+    },
     User {
         content: String,
     },
@@ -25,6 +28,10 @@ pub enum ChatMessage {
 }
 
 impl ChatMessage {
+    pub fn system(content: impl Into<String>) -> Self {
+        ChatMessage::System { content: content.into() }
+    }
+
     pub fn user(content: impl Into<String>) -> Self {
         ChatMessage::User {
             content: content.into(),

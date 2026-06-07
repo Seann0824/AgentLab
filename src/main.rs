@@ -3,7 +3,7 @@ use anyhow;
 use dotenvy;
 use futures_util::{StreamExt, stream::FuturesUnordered};
 
-use crate::{model::{ChatMessage, ModelEvent, ToolCall}, tools::{ToolManager, read_file::ReadFile}};
+use crate::{model::{ChatMessage, ModelEvent, ToolCall}, tools::{ToolManager, base_shell::BashShell}};
 
 mod model;
 mod tools;
@@ -12,12 +12,16 @@ mod tools;
 async fn main() -> anyhow::Result<()> {
     let query_client = initial_model()?;
     let tool_manager = initial_tool_manager();
-    let mut messages: Vec<ChatMessage> = vec![];
+    let mut messages: Vec<ChatMessage> = vec![
+        ChatMessage::system("你当前工作的目录为 /Users/sean/Desktop/repo/agent-lab。这个目录是你模型的Agent架子，它构建你和外部世界沟通的 bridege。如果你需要什么能力自己修改agent代码补充。"),
+    ];
     let mut is_auto = false;
+    let mut terminal_line_dirty = false;
    
     loop {
         if !is_auto {
             let mut user_input = String::new();
+            finish_terminal_line(&mut terminal_line_dirty);
             print!(">");
             std::io::Write::flush(&mut std::io::stdout())?;
             if std::io::stdin().read_line(&mut user_input).is_err() {
@@ -32,16 +36,16 @@ async fn main() -> anyhow::Result<()> {
         let mut stream_chat = query_client.stream_chat(&messages, tool_manager.get_tools_scehma());
         let mut tool_tasks = FuturesUnordered::new();
         let mut tool_calls = Vec::new();
-        let mut assistant_content = String::new();
         let mut final_assistant_message = String::new();
         while let Some(model_event)  = stream_chat.next().await {
             match model_event {
                 ModelEvent::Text(content) => {
-                    assistant_content.push_str(&content);
                     print!("{}", content);
+                    terminal_line_dirty = !content.ends_with('\n');
                 },
                 ModelEvent::Thinking(content) => {
                     print!("\x1b[90m{}\x1b[0m", content);
+                    terminal_line_dirty = !content.ends_with('\n');
                 },
                 ModelEvent::ToolCallBlock { id, name, arguments } => {
                     let tool_call = ToolCall { id, name, arguments };
@@ -49,21 +53,20 @@ async fn main() -> anyhow::Result<()> {
                     tool_tasks.push(tool_manager.run(tool_call));
                 },
                 ModelEvent::Done(assistant_message) => {
-                    // 还要把Done的内容返回一下。。。              
-                    // 先把 assistant 信息返回 保存
                     final_assistant_message = assistant_message;
                 }
                 _ => ()
             }
             std::io::Write::flush(&mut std::io::stdout())?;
         }
+        finish_terminal_line(&mut terminal_line_dirty);
 
         let tool_call_ids = tool_calls
             .iter()
             .map(|tool_call| tool_call.id.clone())
             .collect::<Vec<_>>();
         if tool_calls.len() > 0 {
-            messages.push(ChatMessage::assistant_tool_calls(assistant_content, tool_calls));
+            messages.push(ChatMessage::assistant_tool_calls(final_assistant_message, tool_calls));
             is_auto = true;
         } else {
             messages.push(ChatMessage::assistant(final_assistant_message));
@@ -79,18 +82,19 @@ async fn main() -> anyhow::Result<()> {
                 .position(|message| message.tool_call_id() == Some(tool_call_id.as_str()))
             {
                 let tool_result = tool_results.remove(index);
-                if let ChatMessage::Tool { content, .. } = &tool_result {
-                    print!("{}", content);
-                }
                 messages.push(tool_result);
             }
         }
         for tool_result in tool_results {
-            if let ChatMessage::Tool { content, .. } = &tool_result {
-                print!("{}", content);
-            }
             messages.push(tool_result);
         }
+    }
+}
+
+fn finish_terminal_line(terminal_line_dirty: &mut bool) {
+    if *terminal_line_dirty {
+        println!();
+        *terminal_line_dirty = false;
     }
 }
 
@@ -114,7 +118,6 @@ fn initial_model() -> anyhow::Result<Box<dyn model::ModelAdapter>> {
 
 fn initial_tool_manager() -> ToolManager {
     let mut tool_manager = ToolManager::new();
-    tool_manager.register_tool(Box::new(ReadFile));
-
+    tool_manager.register_tool(Box::new(BashShell));
     tool_manager
 }
