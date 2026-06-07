@@ -1,5 +1,6 @@
 // src/commands/mod.rs
 //
+pub mod output;
 // ⭐ 命令注册表（CommandRegistry）
 //
 // 集中管理所有 CLI 斜杠命令（/command），提供：
