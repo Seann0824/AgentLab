@@ -337,3 +337,42 @@
 
 ## 关键决策记录
 （将记录在 MEMORY.md 中）
+# Bug: 记忆压缩后导致后续调用结束
+
+## 问题分析
+记忆压缩（特别是 `hard_truncate`）可能破坏对话结构，导致后续 API 调用失败，
+而 `ModelEvent::Error` 被静默忽略，使得 agent 提前退出。
+
+### 根本原因
+1. **`hard_truncate` 破坏对话结构**：当删除 Assistant(tool_calls) 消息但保留后续 Tool 消息时，
+   对话结构变得无效（Tool 消息没有对应的 Assistant tool_calls 前驱），导致 API 调用失败。
+2. **`ModelEvent::Error` 被静默忽略**：main.rs 中 `_ => ()` 忽略了 API 错误，
+   导致 agent 认为没有 tool calls，从而退出 `--task` 模式。
+
+## 修复步骤
+- [x] 分析问题并编写 PLAN
+- [x] 修复 `hard_truncate`：删除孤立 Tool 消息（无对应 Assistant tool_calls 前驱）
+- [x] 处理 `ModelEvent::Error`：记录错误到 stderr，让 agent 知悉
+- [x] 运行 `cargo check` 验证编译（通过）
+- [x] 运行 `cargo test` 验证回归（90 passed）
+# 实现全局 Debug 能力
+
+## 目标
+提供一个全局 debug 开关，当开启时，代码中所有 debug 判断的代码都能执行到（输出 debug 日志、启用调试行为等）。
+
+## 执行步骤
+
+- [x] **步骤 1：创建 debug 模块** — 创建 `src/debug/mod.rs`，提供全局 `AtomicBool` debug 标志 + 切换函数 + 检查宏
+- [x] **步骤 2：注册 debug 模块** — 在 `main.rs` 中添加 `mod debug;` 声明
+- [x] **步骤 3：添加 /debug CLI 命令** — 在 `main.rs` 的命令处理循环中支持 `/debug on|off|status`
+- [x] **步骤 4：添加 DebugTool** — 实现一个工具，让 Agent 可以在运行时读取/设置 debug 标志
+- [x] **步骤 5：注册 DebugTool** — 在 `initial_tool_manager()` 中注册 DebugTool
+- [x] **步骤 6：注入到系统提示** — 在系统提示词中动态生成，包含 debug 工具描述
+- [x] **步骤 7：编译验证** — 运行 `cargo check` 验证编译通过
+
+## 验证标准
+- `/debug on` 开启 debug 模式
+- `/debug off` 关闭 debug 模式
+- `/debug status` 显示当前状态
+- Agent 可以通过工具调用 `debug` 工具来读取/设置 debug 标志
+- `cargo check` 通过

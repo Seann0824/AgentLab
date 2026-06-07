@@ -63,6 +63,7 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
 
                     while let Some(chunck) = stream.next().await {
                         if let Result::Ok(bytes) = chunck {
+                            crate::debug!("[SSE] {}", String::from_utf8_lossy(&bytes));
                             buffer.push_str(&String::from_utf8_lossy(&bytes));
                         }
 

@@ -9,11 +9,12 @@ use crate::{
     model::{ChatMessage, ModelEvent, ToolCall},
     session::SessionManager,
     task::TaskManager,
-    tools::{ToolManager, base_shell::BashShell, edit_tool::EditTool, read_tool::ReadTool, search_tool::SearchTool, subagent::SpawnAgent},
+    tools::{ToolManager, base_shell::BashShell, debug_tool::DebugTool, edit_tool::EditTool, read_tool::ReadTool, search_tool::SearchTool, subagent::SpawnAgent},
 };
 
 mod commands;
 mod context;
+mod debug;
 mod model;
 mod session;
 mod task;
@@ -262,6 +263,38 @@ async fn main() -> anyhow::Result<()> {
                     }
 
                     // 未知命令
+
+                    // /debug 命令：控制全局 debug 模式
+                    if cmd_name == "debug" {
+                        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                        let sub = parts.get(2).copied().unwrap_or("status");
+                        match sub {
+                            "on" | "enable" | "1" | "true" => {
+                                crate::debug::enable();
+                                println!("\x1b[32m━━━ 🐛 debug 模式已开启 ━━━\x1b[0m");
+                            }
+                            "off" | "disable" | "0" | "false" => {
+                                crate::debug::disable();
+                                println!("\x1b[33m━━━ 🐛 debug 模式已关闭 ━━━\x1b[0m");
+                            }
+                            "toggle" | "t" => {
+                                let new_state = crate::debug::toggle();
+                                if new_state {
+                                    println!("\x1b[32m━━━ 🐛 debug 模式已切换为开启 ━━━\x1b[0m");
+                                } else {
+                                    println!("\x1b[33m━━━ 🐛 debug 模式已切换为关闭 ━━━\x1b[0m");
+                                }
+                            }
+                            _ => {
+                                // "status" 或其他：显示当前状态
+                                println!("\x1b[36m━━━ 🐛 Debug 状态 ━━━\x1b[0m");
+                                println!("  {}", crate::debug::status_text());
+                                println!("\x1b[90m  用法: /debug on|off|toggle|status\x1b[0m");
+                            }
+                        }
+                        continue;
+                    }
+
                     if command_registry.is_known(cmd_name) {
                         // 已知命令但未单独处理（未来可扩展）
                         if let Some(cmd) = command_registry.get(cmd_name) {
@@ -380,6 +413,9 @@ async fn main() -> anyhow::Result<()> {
                 }
                 ModelEvent::Done(assistant_message) => {
                     final_assistant_message = assistant_message;
+                }
+                ModelEvent::Error(err) => {
+                    eprintln!("\r\x1b[2K\x1b[31m❌ 模型 API 错误: {}\x1b[0m", err);
                 }
                 _ => (),
             }
@@ -756,6 +792,7 @@ fn generate_tools_description(tm: &ToolManager) -> String {
 fn initial_tool_manager() -> ToolManager {
     let mut tool_manager = ToolManager::new();
     tool_manager.register_tool(Box::new(BashShell));
+    tool_manager.register_tool(Box::new(DebugTool));
     tool_manager.register_tool(Box::new(EditTool));
     tool_manager.register_tool(Box::new(ReadTool));
     tool_manager.register_tool(Box::new(SearchTool));

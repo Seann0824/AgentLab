@@ -15,6 +15,7 @@ pub struct ToolInfo {
 
 pub mod types;
 pub mod base_shell;
+pub mod debug_tool;
 pub mod edit_tool;
 pub mod read_tool;
 pub mod search_tool;

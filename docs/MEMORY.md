@@ -196,3 +196,30 @@ effective_max_turns = 15, turns 15 > 15? false → 滑动窗口不触发
 - `src/context/strategy.rs` — auto_compress force 参数
 - `src/context/mod.rs` — is_blocked / force_compress 方法
 - `src/main.rs` — 调用模型前阻塞检查
+
+## 2024-06-07: 修复记忆压缩后导致后续调用结束的 Bug
+
+### 根本原因
+1. **`hard_truncate` 破坏对话结构**：硬截断按消息逐个删除 unprotected 消息，从最早的开始。
+   当删除 Assistant(tool_calls) 消息但保留后续 Tool 消息时，对话结构变得无效。
+   Tool 消息没有对应的 Assistant tool_calls 前驱，导致 LLM API 调用失败。
+
+2. **`ModelEvent::Error` 被静默忽略**：main.rs 使用 `_ => ()` 忽略了所有未显式处理的 ModelEvent，
+   包括 Error。API 错误被吞掉后，`has_tool_calls` 保持 false，`is_auto` 被设为 false，
+   在 `--task` 模式下触发 `break Ok(())` 提前退出。
+
+### 修复内容
+
+#### 1. `src/context/strategy.rs` - hard_truncate 修复孤儿 Tool 消息
+- 在构建新消息列表后，扫描并删除"孤儿"Tool 消息
+- 实现方式：先收集所有 Assistant tool_calls 中的活跃 tool_call_id，
+  然后从后往前删除不在活跃列表中的 Tool 消息
+- 添加诊断日志：`[hard_truncate] removed N messages (including M orphaned tool results)`
+
+#### 2. `src/main.rs` - ModelEvent::Error 日志
+- 将 `_ => ()` 拆分为 `ModelEvent::Error(err) => { eprintln!("❌ 模型 API 错误: {}", err); }`
+- 错误现在会输出到 stderr，agent 能感知到 API 错误
+
+### 验证
+- `cargo check` 通过
+- `cargo test` 90 passed

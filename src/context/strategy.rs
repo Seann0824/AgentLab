@@ -394,8 +394,42 @@ fn hard_truncate(
     // 保留剩余消息
     new_messages.extend_from_slice(&messages[end..]);
 
+    // 🔴 修复：删除孤立的 Tool 消息（没有对应的 Assistant tool_calls 前驱）
+    // 从后往前遍历，收集当前所有"活跃"的 tool_call_id（来自 Assistant tool_calls）
+    // 然后删除 Tool 消息中不属于任何活跃 tool_call_id 的
+    let mut active_tool_call_ids: Vec<String> = Vec::new();
+    let mut orphaned_tool_count = 0;
+    
+    // 从后往前扫描，先收集所有 Assistant tool_calls 中的 tool_call_id
+    for i in (0..new_messages.len()).rev() {
+        if let ChatMessage::Assistant { tool_calls, .. } = &new_messages[i].message {
+            for tc in tool_calls {
+                if !active_tool_call_ids.contains(&tc.id) {
+                    active_tool_call_ids.push(tc.id.clone());
+                }
+            }
+        }
+    }
+
+    // 再次从后往前遍历，移除孤立的 Tool 消息
+    let mut i = new_messages.len();
+    while i > 0 {
+        i -= 1;
+        if let ChatMessage::Tool { tool_call_id, .. } = &new_messages[i].message {
+            if !active_tool_call_ids.contains(tool_call_id) {
+                new_messages.remove(i);
+                orphaned_tool_count += 1;
+            }
+        }
+    }
+
     let removed_count = original_len - new_messages.len();
     *messages = new_messages;
+
+    eprintln!(
+        "[hard_truncate] removed {} messages (including {} orphaned tool results), tokens reduced",
+        removed_count, orphaned_tool_count,
+    );
 
     CompressResult::HardTruncated {
         removed_count,
