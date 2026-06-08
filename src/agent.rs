@@ -12,6 +12,7 @@ use crate::model::{ChatMessage, ModelEvent, ToolCall};
 use crate::model::{ModelManager, ModelConfig};
 use crate::investigate::ErrorSnapshotManager;
 use crate::session::SessionManager;
+use crate::goal::GoalRegistry;
 use crate::task::TaskManager;
 use crate::tools::{ToolManager, shell::BashShell, tool_debug::DebugTool, edit::EditTool, read::ReadTool, search::SearchTool, subagent::SpawnAgent, investigate::InvestigateTool};
 
@@ -153,11 +154,16 @@ impl AgentBuilder {
         let tool_manager = self.tool_manager.unwrap_or_else(default_tool_manager);
         let strategy = self.config.to_strategy();
 
+        // ⭐ 初始化 GoalRegistry
+        let mut goal_manager = GoalRegistry::new(&self.current_dir);
+        let _ = goal_manager.load_all();
+
         Ok(Agent {
             config: self.config,
             model_manager,
             tool_manager,
             context_manager: ContextManager::new("".to_string(), strategy),
+            goal_manager,
             task_manager: TaskManager::new(&self.current_dir),
             session_manager: SessionManager::new(&self.current_dir, &self.current_dir),
             command_registry: CommandRegistry::new(),
@@ -177,6 +183,7 @@ pub struct Agent {
     model_manager: ModelManager,
     tool_manager: ToolManager,
     context_manager: ContextManager,
+    goal_manager: GoalRegistry,
     task_manager: TaskManager,
     session_manager: SessionManager,
     command_registry: CommandRegistry,
@@ -341,6 +348,29 @@ impl Agent {
 - Sub-agent 完成任务后自动退出
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【🎯 目标驱动模式】
+
+系统支持 Goal-Driven（目标驱动）模式，你可以遵循以下工作方式：
+
+### 目标设定
+- 用户通过 `/goal set <描述>` 设置目标后，系统会自动激活目标并持久化存储
+- 目标激活后，每次压缩都会注入当前目标状态到你的上下文中
+
+### 目标推进
+- 你应当主动分解目标、制定步骤、逐步推进
+- 重要决策和进度应记录到文件（如 PLAN.md / AGENDA.md / MEMORY.md）
+- 每完成一步，可以通过 `edit` 工具更新 PLAN.md 记录进度
+
+### 自评估与完成
+当你认为目标已完成或无法完成时，在回复中输出以下命令来更新目标状态：
+- 所有步骤完成且满足标准 → 输出 `/goal complete <目标ID>`
+- 目标无法完成 → 输出 `/goal fail <目标ID> <原因>`
+- 用户要求取消 → 输出 `/goal cancel <目标ID>`
+
+### 查看目标
+你也可以使用 `/goal list` 列出所有目标，或 `/goal status` 查看当前活跃目标。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 【任务状态管理】
 
 系统内置了 TaskManager，它会：
@@ -496,6 +526,12 @@ impl Agent {
                             continue;
                         }
 
+                        // /goal 命令：目标管理
+                        if cmd_name == "goal" {
+                            handle_goal_command(&trimmed, &mut self.goal_manager);
+                            continue;
+                        }
+
                         if self.command_registry.is_known(cmd_name) {
                             if let Some(cmd) = self.command_registry.get(cmd_name) {
                                 self.command_registry.print_command_help(cmd);
@@ -524,6 +560,14 @@ impl Agent {
                 if let Some(task_msg) = self.task_manager.get_inject_message() {
                     self.context_manager.add_message(task_msg);
                     eprintln!("\r\x1b[2K📋 已注入当前任务状态（帮助模型恢复上下文）");
+                }
+            }
+
+            // ⭐ 如果发生了压缩，注入活跃目标状态
+            if compressed || self.context_manager.stats().compressed {
+                if let Some(goal_msg) = self.goal_manager.get_inject_message() {
+                    self.context_manager.add_message(goal_msg);
+                    eprintln!("\r\x1b[2K🎯 已注入当前活跃目标状态（帮助模型持续朝着目标推进）");
                 }
             }
 
@@ -1081,6 +1125,183 @@ fn print_model_help() {
     println!("  \x1b[33m/model current\x1b[0m           显示当前活跃模型");
     println!("  \x1b[33m/model switch <名称>\x1b[0m      切换到指定模型");
     println!("  \x1b[33m/model help\x1b[0m               显示此帮助");
+}
+
+/// ⭐ 处理 /goal 命令：目标管理
+///
+/// 支持子命令：
+///   /goal list                         — 列出所有目标
+///   /goal set <描述>                   — 设置新目标
+///   /goal complete <id>                — 标记目标为已完成
+///   /goal fail <id> [原因]             — 标记目标为失败
+///   /goal cancel <id>                  — 取消目标
+///   /goal status                       — 显示当前活跃目标
+///   /goal history                      — 显示历史目标
+fn handle_goal_command(input: &str, goal_manager: &mut GoalRegistry) {
+    let parts: Vec<&str> = input.trim().split_whitespace().collect();
+    if parts.len() < 2 {
+        print_goal_help();
+        return;
+    }
+
+    let subcommand = parts[1];
+    match subcommand {
+        "list" | "ls" => {
+            let goals = goal_manager.list();
+            println!("\x1b[36m━━━ 🎯 所有目标 (共 {}) ━━━\x1b[0m", goals.len());
+            for goal in &goals {
+                let status_str = goal.status.to_string();
+                let status_icon = match status_str.to_lowercase().as_str() {
+                    "active" => "\x1b[32m🟢\x1b[0m",
+                    "completed" => "\x1b[34m✅\x1b[0m",
+                    "failed" => "\x1b[31m❌\x1b[0m",
+                    "cancelled" => "\x1b[33m🚫\x1b[0m",
+                    _ => "\x1b[90m⚪\x1b[0m",
+                };
+                println!(
+                    "  {} \x1b[33m{:<8}\x1b[0m {}",
+                    status_icon,
+                    goal.id,
+                    goal.description
+                );
+            }
+        }
+        "set" | "add" | "new" | "create" => {
+            if parts.len() < 3 {
+                println!("\x1b[33m⚠️  用法: /goal set <目标描述>\x1b[0m");
+                return;
+            }
+            let description = parts[2..].join(" ");
+            match goal_manager.create_goal(description.clone()) {
+                Ok(goal) => {
+                    println!(
+                        "\x1b[32m━━━ 🎯 新目标已创建 ━━━\x1b[0m\n  🆔 ID: \x1b[33m{}\x1b[0m\n  📝 描述: {}\n  📂 状态: \x1b[32mactive\x1b[0m",
+                        goal.id, goal.description
+                    );
+                }
+                Err(e) => {
+                    println!("\x1b[31m━━━ ❌ 创建目标失败: {}\x1b[0m", e);
+                }
+            }
+        }
+        "complete" | "done" => {
+            if parts.len() < 3 {
+                println!("\x1b[33m⚠️  用法: /goal complete <id>\x1b[0m");
+                return;
+            }
+            let goal_id = parts[2];
+            match goal_manager.mark_complete(goal_id) {
+                Ok(true) => {
+                    println!("\x1b[32m━━━ ✅ 目标 '{}' 已完成 ━━━\x1b[0m 🎉", goal_id);
+                }
+                Ok(false) => {
+                    println!("\x1b[33m⚠️  找不到目标: {}\x1b[0m", goal_id);
+                }
+                Err(e) => {
+                    println!("\x1b[31m━━━ ❌ 标记完成失败: {}\x1b[0m", e);
+                }
+            }
+        }
+        "fail" => {
+            if parts.len() < 3 {
+                println!("\x1b[33m⚠️  用法: /goal fail <id> [原因]\x1b[0m");
+                return;
+            }
+            let goal_id = parts[2];
+            let reason = if parts.len() > 3 {
+                parts[3..].join(" ")
+            } else {
+                "unexpected error".to_string()
+            };
+            match goal_manager.mark_failed(goal_id, &reason) {
+                Ok(true) => {
+                    println!("\x1b[31m━━━ ❌ 目标 '{}' 已标记为失败 ━━━\x1b[0m", goal_id);
+                }
+                Ok(false) => {
+                    println!("\x1b[33m⚠️  找不到目标: {}\x1b[0m", goal_id);
+                }
+                Err(e) => {
+                    println!("\x1b[31m━━━ ❌ 标记失败失败: {}\x1b[0m", e);
+                }
+            }
+        }
+        "cancel" => {
+            if parts.len() < 3 {
+                println!("\x1b[33m⚠️  用法: /goal cancel <id>\x1b[0m");
+                return;
+            }
+            let goal_id = parts[2];
+            match goal_manager.mark_cancelled(goal_id) {
+                Ok(true) => {
+                    println!("\x1b[33m━━━ 🚫 目标 '{}' 已取消 ━━━\x1b[0m", goal_id);
+                }
+                Ok(false) => {
+                    println!("\x1b[33m⚠️  找不到目标: {}\x1b[0m", goal_id);
+                }
+                Err(e) => {
+                    println!("\x1b[31m━━━ ❌ 取消失败: {}\x1b[0m", e);
+                }
+            }
+        }
+        "status" | "cur" | "current" | "active" => {
+            if let Some(goal) = goal_manager.active_goal() {
+                println!("\x1b[36m━━━ 🎯 当前活跃目标 ━━━\x1b[0m");
+                println!("  🆔 ID:     \x1b[33m{}\x1b[0m", goal.id);
+                println!("  📝 描述:   {}", goal.description);
+                println!("  📂 状态:   \x1b[32m{}\x1b[0m", goal.status.to_string());
+                println!("  🕐 创建:   {}", goal.created_at);
+                println!("  🔄 轮次:   {}", goal.turn_count);
+            } else {
+                println!("\x1b[33m⚠️  当前没有活跃目标\x1b[0m");
+                println!("\x1b[90m  💡 使用 /goal set <描述> 创建新目标\x1b[0m");
+            }
+        }
+        "history" | "hist" | "log" => {
+            let goals = goal_manager.list();
+            let completed: Vec<_> = goals.iter().filter(|g| g.status.to_string().to_lowercase() != "active").collect();
+            if completed.is_empty() {
+                println!("\x1b[33m📜 暂无历史目标记录\x1b[0m");
+            } else {
+                println!("\x1b[36m━━━ 📜 历史目标 (共 {}) ━━━\x1b[0m", completed.len());
+                for goal in completed {
+                    let status_str = goal.status.to_string();
+                    let status_icon = match status_str.to_lowercase().as_str() {
+                        "completed" => "\x1b[34m✅\x1b[0m",
+                        "failed" => "\x1b[31m❌\x1b[0m",
+                        "cancelled" => "\x1b[33m🚫\x1b[0m",
+                        _ => "\x1b[90m⚪\x1b[0m",
+                    };
+                    println!(
+                        "  {} \x1b[33m{:<8}\x1b[0m {} ({} 轮)",
+                        status_icon,
+                        goal.id,
+                        goal.description,
+                        goal.turn_count
+                    );
+                }
+            }
+        }
+        "help" | "-h" | "--help" => {
+            print_goal_help();
+        }
+        _ => {
+            println!("\x1b[33m⚠️  未知的子命令: {}\x1b[0m", subcommand);
+            print_goal_help();
+        }
+    }
+}
+
+/// 打印 /goal 命令帮助
+fn print_goal_help() {
+    println!("\x1b[36m━━━ 🎯 目标管理命令 ━━━\x1b[0m");
+    println!("  \x1b[33m/goal set <描述>\x1b[0m          创建新目标（设定后 agent 会持续推进直到完成）");
+    println!("  \x1b[33m/goal list\x1b[0m                列出所有目标");
+    println!("  \x1b[33m/goal status\x1b[0m              显示当前活跃目标");
+    println!("  \x1b[33m/goal complete <id>\x1b[0m       标记目标为已完成");
+    println!("  \x1b[33m/goal fail <id> [原因]\x1b[0m    标记目标为失败");
+    println!("  \x1b[33m/goal cancel <id>\x1b[0m         取消目标");
+    println!("  \x1b[33m/goal history\x1b[0m             查看历史目标");
+    println!("  \x1b[33m/goal help\x1b[0m                显示此帮助");
 }
 
 /// 创建默认的工具管理器

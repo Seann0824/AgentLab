@@ -83,20 +83,32 @@
 - `cargo check` 通过，无报错
 - 所有 DAG 相关引用已清除
 
-# 🎯 目标驱动能力设计文档
+# 🎯 实现「目标驱动能力（Goal-Driven Capability）」
 
 ## 目标
-设计并编写「目标驱动能力（Goal-Driven Capability）」的技术方案文档到 docs/designs/。
+按照 docs/designs/goal-driven-capability.md 设计文档，实现完整的 Goal-Driven 能力代码。
 
-## 步骤
+---
 
-- [x] 步骤1：分析项目现有架构（agent.rs 主循环、TaskManager、系统提示词）
-- [x] 步骤2：设计 Goal 数据结构和生命周期
-- [x] 步骤3：设计自评估机制和持久化执行循环
-- [x] 步骤4：设计集成方案（与 TaskManager、Agent 主循环的协作）
-- [x] 步骤5：编写完整的 docs/designs/goal-driven-capability.md 文档
-- [x] 步骤6：更新 docs/index.md 添加新文档链接
+## 阶段一：基础框架（P0）
+
+- [x] 步骤1：创建 `src/goal/types.rs` — Goal、GoalStatus 数据类型
+- [x] 步骤2：创建 `src/goal/registry.rs` — GoalRegistry 持久化存储
+- [x] 步骤3：创建 `src/goal/mod.rs` — 模块入口，重新导出
+- [x] 步骤4：编辑 `src/lib.rs` — 添加 `pub mod goal;`
+- [x] 步骤5：验证编译 — `cargo check` ✅
+
+## 阶段二：Agent 集成（P1）
+
+- [ ] 步骤6：Agent 结构体添加 `goal_manager` 字段
+- [ ] 步骤7：系统提示词注入 Goal 上下文块
+- [ ] 步骤8：添加 `/goal` 命令处理（status/complete/fail/cancel/resume）
+- [ ] 步骤9：主循环中检测 LLM 输出的 Goal 完成信号
+- [ ] 步骤10：验证编译 — `cargo check`
 
 ## 验证标准
-- 文档覆盖：动机、架构、数据结构、生命周期、自评估、集成方案、实现计划、示例
-- docs/index.md 更新了链接
+- `cargo check` 通过，无报错
+- Goal 数据类型完整（Goal、GoalStatus、序列化/反序列化）
+- GoalRegistry 可创建/读取/更新/列出 Goal
+- Agent 主循环可检测和处理 `/goal` 命令
+- 系统提示词在活跃 Goal 时注入上下文

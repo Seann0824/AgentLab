@@ -5,6 +5,7 @@ pub mod agent;
 pub mod cli;
 pub mod context;
 pub mod debug;
+pub mod goal;
 pub mod investigate;
 pub mod model;
 pub mod session;
