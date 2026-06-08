@@ -32,6 +32,7 @@
 | [上下文窗口管理](./designs/context-window.md) | 四层渐进压缩策略的设计与实现 |
 | [工具调用可见性](./designs/tool-call-visibility.md) | Agent 工具调用结果的可视化设计 |
 | [能力路线图](./designs/agent-capability-roadmap.md) | 项目能力规划与未来方向 |
+| [目标驱动能力](./designs/goal-driven-capability.md) | 让 Agent 从「反应式对话」进化为「目标驱动的自主执行体」 |
 
 ---
 

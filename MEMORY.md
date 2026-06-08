@@ -51,3 +51,19 @@ DAG Pipeline 执行过程是个黑盒：执行后只返回计数摘要（成功/
 - **执行中**：stderr 实时输出每个节点的进度（开始→执行中→完成/失败）
 - **执行后**：pipeline_execute 返回每个节点的 `worker_output`（Worker 完整输出）、`review_result`（审查评分/反馈/分项检查）、`final_output`（最终输出）
 - **事后查询**：pipeline_status 可查看已执行 Pipeline 的完整节点细节
+
+## [2025-06-08] 🎯 目标驱动能力设计文档
+
+### 关键决策
+1. **Goal 作为独立模块**：新增 `src/goal/` 模块，与现有 TaskManager 互补，不替代。
+2. **JSON 持久化**：Goal 数据存入 `docs/goals/` 目录（index.json + goal_{id}.json），便于程序读写。
+3. **LLM 驱动的自评估**：完成标准由 LLM 理解判定，代码只提供框架和 Prompt 注入，不做硬编码校验。
+4. **与现有系统提示词松耦合**：Goal 上下文作为可选注入块（仅在 Active Goal 时注入），不影响普通模式。
+5. **`/goal` 命令风格**：使用 `/goal complete`、`/goal fail`、`/goal cancel` 等命令，与现有 `/session`、`/debug` 一致。
+6. **四个实现阶段**：P0 基础框架 → P1 Agent 集成 → P2 测试完善 → P3 进阶功能，可增量交付。
+
+### 实现要点
+- Goal 生命周期：Proposed → Active → Completed / Failed / Cancelled
+- 防无限循环：最大轮次限制（100）、停滞检测（连续 N 轮无进展）、用户中断
+- 自评估时机：步骤完成后、达到检查点、全部步骤完成后、遇到严重错误后
+- 三种执行模式：对话模式（普通聊天）、目标驱动模式（自主执行）、子任务模式（--task）

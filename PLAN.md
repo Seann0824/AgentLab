@@ -82,3 +82,21 @@
 ## 验证标准
 - `cargo check` 通过，无报错
 - 所有 DAG 相关引用已清除
+
+# 🎯 目标驱动能力设计文档
+
+## 目标
+设计并编写「目标驱动能力（Goal-Driven Capability）」的技术方案文档到 docs/designs/。
+
+## 步骤
+
+- [x] 步骤1：分析项目现有架构（agent.rs 主循环、TaskManager、系统提示词）
+- [x] 步骤2：设计 Goal 数据结构和生命周期
+- [x] 步骤3：设计自评估机制和持久化执行循环
+- [x] 步骤4：设计集成方案（与 TaskManager、Agent 主循环的协作）
+- [x] 步骤5：编写完整的 docs/designs/goal-driven-capability.md 文档
+- [x] 步骤6：更新 docs/index.md 添加新文档链接
+
+## 验证标准
+- 文档覆盖：动机、架构、数据结构、生命周期、自评估、集成方案、实现计划、示例
+- docs/index.md 更新了链接
