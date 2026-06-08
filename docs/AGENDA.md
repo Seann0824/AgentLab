@@ -15,7 +15,7 @@
 | Phase 3.2 — Agent Pool 管理（src/swarm/pool.rs） | ✅ 已完成 |
 | Phase 3.3 — Verifier Agent（src/swarm/agents/verifier.rs） | ✅ 已完成 |
 | Phase 3.4 — Orchestrator 集成（main.rs 集成） | ✅ 已完成 |
-| Phase 4 — Workflow 引擎（src/swarm/workflow.rs） | ✅ 已完成 |
+| Phase 4 — Workflow 引擎（src/swarm/workflow/） | ✅ 已完成 |
 | Phase 3.5 — 端到端验证（end-to-end） | ⬜ 等待执行 |
 | Phase 5 — 文档与总结 | ⬜ 待后续 |
 

@@ -87,7 +87,7 @@
 
 ## 新任务：DAG 任务编排系统实现
 
-> **设计文档**: [dag-task-orchestration.md](./designs/dag-task-orchestration.md)
+> **设计文档**: dag-task-orchestration.md（当前仓库未包含该文档）
 > **关键决策记录**: [MEMORY.md](./MEMORY.md#DAG)
 
 ### Phase 1 — 基础框架

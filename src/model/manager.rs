@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn test_detect_configs_from_env_empty() {
         // 不设任何环境变量时应返回空列表
-        let configs = ModelManager::detect_configs_from_env();
+        let _configs = ModelManager::detect_configs_from_env();
         // 注意：测试环境可能已经有环境变量，所以我们只检查结构
         // 如果没有任何 _API_KEY + _BASE_URL 配对，则返回空
         // 这个测试不能严格断言，因为运行环境不同

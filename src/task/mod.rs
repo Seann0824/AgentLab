@@ -287,7 +287,6 @@ fn simple_hash(s: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use std::path::Path;
 
     /// 创建临时目录用于测试

@@ -283,7 +283,6 @@ pub fn is_stdout_structural(stdout: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::ToolCall;
 
     #[test]
     fn test_auto_classify_tool_with_file_content() {

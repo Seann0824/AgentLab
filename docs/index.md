@@ -28,11 +28,15 @@
 
 | 文件 | 用途 |
 |------|------|
-| [DAG 任务编排系统](./designs/dag-task-orchestration.md) | 基于有向无环图的任务编排，每个节点内置 Worker+Reviewer 双 Agent |
 | [上下文窗口管理](./designs/context-window.md) | 四层渐进压缩策略的设计与实现 |
+| [多 Agent 蜂群架构](./designs/multi-agent-swarm-architecture.md) | Orchestrator、Memory、General、Verifier 等多 Agent 架构设计 |
+| [多 Agent 架构简版](./designs/MULTI_AGENT_ARCHITECTURE.md) | 当前多 Agent 模块的简要架构说明 |
+| [错误排查能力](./designs/replay-capability.md) | 错误快照与 investigate 工具设计 |
+| [持久化记忆系统](./designs/persistent-memory-vector-db.md) | 基于向量检索的长期记忆设计 |
 | [工具调用可见性](./designs/tool-call-visibility.md) | Agent 工具调用结果的可视化设计 |
 | [能力路线图](./designs/agent-capability-roadmap.md) | 项目能力规划与未来方向 |
 | [目标驱动能力](./designs/goal-driven-capability.md) | 让 Agent 从「反应式对话」进化为「目标驱动的自主执行体」 |
+| [多模型 Provider](./designs/multi-provider-model.md) | 多模型配置与切换设计 |
 
 ---
 
@@ -41,7 +45,16 @@
 | 文件 | 用途 |
 |------|------|
 | [上下文管理分析](./analyses/context-management-analysis.md) | 上下文管理方案的深度分析 |
-| [DAG 与 Agent 集成状态分析](./analyses/dag-agent-integration-status.md) | DAG 系统与 Agent 核心的集成现状、并行能力评估与打通路线 |
+
+---
+
+## 📎 参考资料
+
+| 文件 | 用途 |
+|------|------|
+| [Responses API 迁移参考](./openai-response.md) | OpenAI Responses API 迁移步骤与注意事项 |
+| [项目 Roadmap](./ROADMAP.md) | 当前路线图 |
+| [历史记忆归档](./archive/MEMORY-history.md) | 从 MEMORY.md 拆出的历史记录 |
 
 ---
 

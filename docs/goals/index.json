@@ -1,12 +1,4 @@
 {
-  "goals": [
-    {
-      "id": "g5360021ef",
-      "name": "/Users/sean/Desktop/repo/agent-lab/docs/designs/multi-agent-swarm-architectur完成这个多agent架构",
-      "status": "Active",
-      "progress": 0,
-      "updated_at": "2026-06-05 16:09"
-    }
-  ],
-  "last_updated": "2026-06-05 17:14"
+  "goals": [],
+  "last_updated": "2026-06-05 17:24"
 }
