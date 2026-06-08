@@ -7,6 +7,7 @@ pub mod context;
 pub mod debug;
 pub mod goal;
 pub mod investigate;
+pub mod memory;
 pub mod model;
 pub mod session;
 pub mod task;

@@ -5,6 +5,8 @@
 
 use anyhow;
 use futures_util::{StreamExt, stream::FuturesUnordered};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::cli::CommandRegistry;
 use crate::context::{ContextManager, ContextStrategy, TokenEstimator};
@@ -14,7 +16,9 @@ use crate::investigate::ErrorSnapshotManager;
 use crate::session::SessionManager;
 use crate::goal::GoalRegistry;
 use crate::task::TaskManager;
+use crate::memory::{MemoryManager, MemorySource};
 use crate::tools::{ToolManager, shell::BashShell, tool_debug::DebugTool, edit::EditTool, read::ReadTool, search::SearchTool, subagent::SpawnAgent, investigate::InvestigateTool};
+use crate::tools::memory_tools::{MemorySaveTool, MemorySearchTool, MemoryForgetTool, MemoryStatsTool};
 
 // =====================================================================
 // AgentConfig — Agent 配置
@@ -102,6 +106,7 @@ pub struct AgentBuilder {
     tool_manager: Option<ToolManager>,
     config: AgentConfig,
     current_dir: String,
+    memory_manager: Option<MemoryManager>,
 }
 
 impl Default for AgentBuilder {
@@ -114,6 +119,7 @@ impl Default for AgentBuilder {
                 .unwrap_or_else(|_| std::path::PathBuf::from("."))
                 .display()
                 .to_string(),
+            memory_manager: None,
         }
     }
 }
@@ -148,10 +154,27 @@ impl AgentBuilder {
         self
     }
 
+    /// 设置 MemoryManager（持久化记忆）
+    pub fn memory_manager(mut self, mm: MemoryManager) -> Self {
+        self.memory_manager = Some(mm);
+        self
+    }
+
     /// 构建 Agent
     pub fn build(self) -> anyhow::Result<Agent> {
         let model_manager = self.model_manager.ok_or_else(|| anyhow::anyhow!("ModelManager is required. Call .model_manager(mm) to set it."))?;
-        let tool_manager = self.tool_manager.unwrap_or_else(default_tool_manager);
+
+        // ⭐ 初始化 MemoryManager（持久化记忆）
+        let memory_manager = self.memory_manager.unwrap_or_else(|| MemoryManager::new_mock(std::path::PathBuf::from(&self.current_dir)));
+        let memory_manager = Arc::new(Mutex::new(memory_manager));
+
+        // ⭐ 构建工具管理器（注册 memory 工具）
+        let mut tool_manager = self.tool_manager.unwrap_or_else(default_tool_manager);
+        tool_manager.register_tool(Box::new(MemorySaveTool { memory_manager: memory_manager.clone() }));
+        tool_manager.register_tool(Box::new(MemorySearchTool { memory_manager: memory_manager.clone() }));
+        tool_manager.register_tool(Box::new(MemoryForgetTool { memory_manager: memory_manager.clone() }));
+        tool_manager.register_tool(Box::new(MemoryStatsTool { memory_manager: memory_manager.clone() }));
+
         let strategy = self.config.to_strategy();
 
         // ⭐ 初始化 GoalRegistry
@@ -168,6 +191,7 @@ impl AgentBuilder {
             session_manager: SessionManager::new(&self.current_dir, &self.current_dir),
             command_registry: CommandRegistry::new(),
             current_dir: self.current_dir,
+            memory_manager,
         })
     }
 }
@@ -183,6 +207,7 @@ pub struct Agent {
     model_manager: ModelManager,
     tool_manager: ToolManager,
     context_manager: ContextManager,
+    memory_manager: Arc<Mutex<MemoryManager>>,
     goal_manager: GoalRegistry,
     task_manager: TaskManager,
     session_manager: SessionManager,
@@ -404,12 +429,24 @@ impl Agent {
 
         // ⭐ 初始化任务管理器
         self.task_manager = TaskManager::new(&self.current_dir);
+
+        // ⭐ 如果有活跃 Goal，启动时注入目标状态
+        if self.goal_manager.has_active_goal() {
+            if let Some(goal_msg) = self.goal_manager.get_inject_message() {
+                self.context_manager.add_message(goal_msg);
+                eprintln!("🎯 已发现活跃目标，目标状态已注入上下文");
+            }
+        }
         self.task_manager.load();
 
         let mut is_auto = false;
         let mut terminal_line_dirty = false;
         let mut single_task_used = false;
 
+
+        // ⭐ 自动提取记忆计数器（每 N 轮非工具调用的对话保存重要信息到记忆）
+        let mut auto_extract_counter: usize = 0;
+        const AUTO_EXTRACT_INTERVAL: usize = 3;
         loop {
             if !is_auto {
                 // ⭐ --task 模式：使用 CLI 参数作为首次输入
@@ -529,6 +566,15 @@ impl Agent {
                         // /goal 命令：目标管理
                         if cmd_name == "goal" {
                             handle_goal_command(&trimmed, &mut self.goal_manager);
+
+                            // ⭐ 注入活跃目标状态到上下文，让 AI 能感知目标
+                            if self.goal_manager.has_active_goal() {
+                                if let Some(goal_msg) = self.goal_manager.get_inject_message() {
+                                    self.context_manager.add_message(goal_msg);
+                                    eprintln!("\r\x1b[2K🎯 目标已注入上下文，AI 将感知到当前目标");
+                                }
+                            }
+
                             continue;
                         }
 
@@ -568,6 +614,38 @@ impl Agent {
                 if let Some(goal_msg) = self.goal_manager.get_inject_message() {
                     self.context_manager.add_message(goal_msg);
                     eprintln!("\r\x1b[2K🎯 已注入当前活跃目标状态（帮助模型持续朝着目标推进）");
+                }
+            }
+
+            // ⭐ 如果发生了压缩，注入持久化记忆（与当前上下文最相关的记忆）
+            if compressed || self.context_manager.stats().compressed {
+                // 从最近几条消息提取关键词，搜索相关记忆
+                let recent_messages: Vec<String> = self.context_manager.get_messages()
+                    .iter()
+                    .rev()
+                    .take(6)
+                    .filter_map(|m| match m {
+                        ChatMessage::User { content, .. } => Some(content.clone()),
+                        ChatMessage::Assistant { content, .. } if !content.is_empty() => Some(content.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let query = recent_messages.join(" ");
+                if !query.is_empty() {
+                    match self.memory_manager.lock().await.search_similar(&query, 3).await {
+                        Ok(results) if !results.is_empty() => {
+                            let mut mem_text = String::from("📌 【持久化记忆 — 检索结果】\n以下是与当前上下文相关的历史记忆：\n");
+                            for (i, mem) in results.iter().enumerate() {
+                                mem_text.push_str(&format!("{}. [相关性:{:.1}%] {}\n", i + 1, mem.score * 100.0, mem.record.content));
+                            }
+                            self.context_manager.add_message(ChatMessage::user(&mem_text));
+                            eprintln!("\r\x1b[2K🧠 已注入 {} 条相关持久化记忆（帮助模型恢复上下文）", results.len());
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!("\r\x1b[2K⚠️ 记忆检索失败: {}", e);
+                        }
+                    }
                 }
             }
 
@@ -670,6 +748,55 @@ impl Agent {
                 .map(|tool_call| tool_call.id.clone())
                 .collect::<Vec<_>>();
 
+            // ⭐ 活跃 Goal 轮次计数 & 超限检查
+            if self.goal_manager.has_active_goal() {
+                if let Some(goal) = self.goal_manager.active_goal_mut() {
+                    goal.increment_turn();
+                    let reached_max = goal.is_max_turns_reached();
+                    let stalled = goal.is_stalled();
+                    let goal_id = goal.id.clone();
+                    let goal_clone = goal.clone();
+                    if reached_max {
+                        eprintln!("\r\x1b[2K⚠️  目标 '{}' 已达到最大轮次限制 ({})，自动标记为失败", goal_id, goal.max_turns);
+                        let _ = self.goal_manager.mark_failed(&goal_id, "max turns reached");
+                    } else if stalled {
+                        eprintln!("\r\x1b[2K⚠️  目标 '{}' 已停滞（连续 {} 轮无进展），自动标记为失败", goal_id, goal.stall_count);
+                        let _ = self.goal_manager.mark_failed(&goal_id, "stalled");
+                    } else {
+                        let _ = self.goal_manager.update(goal_clone);
+                    }
+                }
+            }
+
+            // ⭐ 检测 LLM 输出中的 Goal 完成信号
+            if self.goal_manager.has_active_goal() && !final_assistant_message.is_empty() {
+                if let Some((action, goal_id, reason)) = extract_goal_signal(&final_assistant_message) {
+                    match action.as_str() {
+                        "complete" => {
+                            let _ = self.goal_manager.mark_complete(&goal_id);
+                            println!("\n\x1b[32m━━━ ✅ LLM 自动标记目标 '{}' 为已完成 ━━━\x1b[0m 🎉", goal_id);
+                        }
+                        "fail" => {
+                            let _ = self.goal_manager.mark_failed(&goal_id, &reason);
+                            println!("\n\x1b[31m━━━ ❌ LLM 自动标记目标 '{}' 为失败 ━━━\x1b[0m", goal_id);
+                        }
+                        "cancel" => {
+                            let _ = self.goal_manager.mark_cancelled(&goal_id);
+                            println!("\n\x1b[33m━━━ 🚫 LLM 自动取消目标 '{}' ━━━\x1b[0m", goal_id);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // ⭐ 如果 Goal 进入终止状态，停止自动循环
+            if let Some(active_goal) = self.goal_manager.active_goal() {
+                if active_goal.status.is_terminal() {
+                    eprintln!("\r\x1b[2K🎯 目标 '{}' 已达终止状态 ({}), 停止自动执行", active_goal.id, active_goal.status);
+                    is_auto = false;
+                }
+            }
+
             let mut tool_results = Vec::new();
             while let Some(tool_result) = tool_tasks.next().await {
                 tool_results.push(tool_result);
@@ -725,6 +852,10 @@ impl Agent {
                 }
             }
 
+            // ⭐ 自动提取重要信息到持久化记忆（每 N 轮非工具调用的对话）
+            let should_auto_extract = !has_tool_calls && !final_assistant_message.is_empty();
+            let assistant_msg_clone = final_assistant_message.clone();
+
             // 将工具调用消息加入上下文
             if tool_calls.len() > 0 {
                 self.context_manager.add_message(ChatMessage::assistant_tool_calls(
@@ -738,6 +869,43 @@ impl Agent {
             }
 
             // 将工具结果加入消息
+
+            // ⭐ 自动提取重要信息到持久化记忆（每 N 轮非工具调用的对话）
+            if should_auto_extract {
+                auto_extract_counter += 1;
+                if auto_extract_counter >= AUTO_EXTRACT_INTERVAL {
+                    auto_extract_counter = 0;
+                    // 获取最近一轮的用户输入和助手回复
+                    let recent_msgs = self.context_manager.get_messages();
+                    let last_user = recent_msgs.iter().rev().find_map(|m| {
+                        match m {
+                            ChatMessage::User { content, .. } => Some(content.clone()),
+                            _ => None,
+                        }
+                    });
+                    if let Some(user_input) = last_user {
+                        let memory_content = format!(
+                            "[对话] 用户: {} | 助手: {}",
+                            if user_input.len() > 200 { &user_input[..200] } else { &user_input },
+                            if assistant_msg_clone.len() > 500 { &assistant_msg_clone[..500] } else { &assistant_msg_clone }
+                        );
+                        let tags = vec!["auto-extracted".to_string(), "conversation".to_string()];
+                        match self.memory_manager.lock().await.save(
+                            &memory_content,
+                            &tags,
+                            MemorySource::Conversation,
+                            0.3,
+                        ).await {
+                            Ok(id) => {
+                                eprintln!("\r\x1b[2K🧠 自动提取并保存了一条对话记忆 (id: {})", id);
+                            }
+                            Err(e) => {
+                                eprintln!("\r\x1b[2K⚠️ 自动提取记忆失败: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
             for tool_call_id in tool_call_ids {
                 if let Some(index) = tool_results
                     .iter()
@@ -1166,6 +1334,7 @@ fn handle_goal_command(input: &str, goal_manager: &mut GoalRegistry) {
                 );
             }
         }
+
         "set" | "add" | "new" | "create" => {
             if parts.len() < 3 {
                 println!("\x1b[33m⚠️  用法: /goal set <目标描述>\x1b[0m");
@@ -1315,4 +1484,24 @@ fn default_tool_manager() -> ToolManager {
     tool_manager.register_tool(Box::new(SpawnAgent));
     tool_manager.register_tool(Box::new(InvestigateTool::new(".")));
     tool_manager
+}
+
+
+/// ⭐ 从 LLM 输出文本中提取 Goal 完成信号
+///
+/// 解析 `/goal complete <id>`、`/goal fail <id> [reason]`、`/goal cancel <id>` 模式。
+/// 返回 (action, id, reason) 三元组。
+fn extract_goal_signal(text: &str) -> Option<(String, String, String)> {
+    // 匹配模式：/goal complete <id>
+    //            /goal fail <id> [reason]
+    //            /goal cancel <id>
+    let re = regex::Regex::new(r"/goal\s+(complete|fail|cancel)\s+(\S+)(?:\s+(.*))?").ok()?;
+    if let Some(caps) = re.captures(text) {
+        let action = caps.get(1)?.as_str().to_string();
+        let goal_id = caps.get(2)?.as_str().to_string();
+        let reason = caps.get(3).map(|m| m.as_str().to_string()).unwrap_or_default();
+        Some((action, goal_id, reason))
+    } else {
+        None
+    }
 }

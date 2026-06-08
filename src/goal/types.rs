@@ -99,7 +99,7 @@ impl Goal {
             status: GoalStatus::Proposed,
             progress: 0,
             turn_count: 0,
-            max_turns: 100,
+            max_turns: 0,
             steps: Vec::new(),
             completed_steps: Vec::new(),
             decisions: Vec::new(),
@@ -118,9 +118,9 @@ impl Goal {
         self.completed_steps.len() >= self.steps.len()
     }
 
-    /// 是否超过最大轮次
+    /// 是否超过最大轮次（0 表示无限制）
     pub fn is_max_turns_reached(&self) -> bool {
-        self.turn_count >= self.max_turns
+        self.max_turns > 0 && self.turn_count >= self.max_turns
     }
 
     /// 是否停滞（连续无进展轮次超过阈值）
@@ -206,6 +206,11 @@ impl Goal {
     /// 标记 Goal 为 Cancelled
     pub fn cancel(&mut self) {
         self.set_status(GoalStatus::Cancelled);
+    }
+
+    /// 是否为终止状态
+    pub fn is_terminal(&self) -> bool {
+        self.status.is_terminal()
     }
 }
 

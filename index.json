@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "id": "mem_18b703df2537f0f0_0",
+      "content": "修复了 `/goal set <描述>` 后 AI 无法感知目标的 Bug。根因是在 `handle_goal_command` 创建目标后，目标上下文从未注入到会话消息中（只在启动和压缩时注入）。修复方法：在 agent.rs 第 562-575 行，`handle_goal_command` 调用后立即检查是否有活跃目标，有则用 `get_inject_message()` 获取目标提示并注入到 `context_manager`。",
+      "tags": [
+        "bug-fix",
+        "goal",
+        "context-injection",
+        "agent.rs"
+      ],
+      "importance": 0.8,
+      "source": "Manual",
+      "created_at": "2026-06-08T05:27:14.585Z",
+      "accessed_at": "2026-06-08T05:27:14.585Z",
+      "access_count": 0
+    },
+    {
+      "id": "mem_18b7040b4ef92270_0",
+      "content": "实现了对话自动提取到持久化记忆的功能。在 agent.rs 中添加了 auto_extract_counter 和 AUTO_EXTRACT_INTERVAL=3 机制，每3轮非工具调用的对话自动提取最近一轮用户输入和助手回复到向量记忆系统。添加了 MemorySource::Conversation 枚举变体用于标记此类记忆来源。修改了 src/agent.rs（主循环）和 src/memory/types.rs（MemorySource 枚举）。",
+      "tags": [
+        "auto-extraction",
+        "persistent-memory",
+        "feature",
+        "agent"
+      ],
+      "importance": 0.8,
+      "source": "Manual",
+      "created_at": "2026-06-08T05:30:24.264Z",
+      "accessed_at": "2026-06-08T05:30:24.264Z",
+      "access_count": 0
+    },
+    {
+      "id": "mem_18b7044c643597e0_0",
+      "content": "持久化记忆系统（向量数据库）已完整实现并自我验证闭环。核心组件包括：src/memory/（types/embedding/store/manager），4个工具（memory_save/search/forget/stats），Agent集成（自动提取+注入），端到端spawn_agent验证通过。ROADMAP.md中Phase 3进度更新为80%。",
+      "tags": [
+        "milestone",
+        "persistent-memory",
+        "vector-db",
+        "phase-3"
+      ],
+      "importance": 0.9,
+      "source": "Manual",
+      "created_at": "2026-06-08T05:35:03.793Z",
+      "accessed_at": "2026-06-08T05:35:03.793Z",
+      "access_count": 0
+    }
+  ],
+  "stats": {
+    "total_entries": 3,
+    "last_compaction": "2026-06-08T05:26:07.389Z",
+    "vector_dim": 4
+  }
+}

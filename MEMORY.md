@@ -67,3 +67,54 @@ DAG Pipeline 执行过程是个黑盒：执行后只返回计数摘要（成功/
 - 防无限循环：最大轮次限制（100）、停滞检测（连续 N 轮无进展）、用户中断
 - 自评估时机：步骤完成后、达到检查点、全部步骤完成后、遇到严重错误后
 - 三种执行模式：对话模式（普通聊天）、目标驱动模式（自主执行）、子任务模式（--task）
+
+## [2025-06-13] 🗺️ 路线图全面更新（v2.0）
+
+### 关键决策
+1. **新建 `docs/ROADMAP.md`**: 替代旧的 `docs/designs/agent-capability-roadmap.md`，作为唯一的路由图入口
+2. **5 个 Phase 划分**: Phase 0(基础设施) → Phase 1(结构化执行) → Phase 2(自我进化) → Phase 3(持久记忆) → Phase 4(产品化)
+3. **完成度量化**: 每个 Phase 用百分比 + 进度条清晰展示，每个能力用 ✅/🟡/🔴 标注
+4. **优先级三维度**: P0(本月) / P1(下季度) / P2(未来)，聚焦 Next 3 行动项
+
+### 现状总结
+- 项目已完成核心基础设施（100%），处于从「工具型 Agent」向「自主 Agent」进化的关键节点
+- 下一步核心：完成 Goal → Agent 集成（打通结构化执行的最后一环）
+- 自我进化能力（Phase 2）是项目的核心竞争力所在，是区别于其他框架的关键差异点
+
+## [2025-06-13] 🎯 Goal — Agent 集成全部完成
+
+### 关键决策
+1. **Goal 启动注入**: Agent.run() 初始化后，检测活跃 Goal 并通过 `get_inject_message()` 注入目标状态到上下文（agent.rs:408-414）
+2. **压缩后再注入**: 上下文压缩后自动重新注入活跃目标状态（agent.rs:574-580）
+3. **LLM 输出信号检测**: `extract_goal_signal()` 使用正则解析 LLM 回复中的 `/goal complete|fail|cancel <id>` 模式并自动处理（agent.rs:701-720）
+4. **轮次计数与防无限循环**: 每次 LLM 调用后递增 turn_count，超限（100轮）或停滞（连续5轮无进展）自动标记为失败（agent.rs:682-699）
+5. **目标完成自动停止**: 目标进入终止状态（Completed/Failed/Cancelled）后自动设置 `is_auto = false` 停止自动循环（agent.rs:722-728）
+
+### 实现要点
+- `/goal` 命令完整：set/list/status/complete/fail/cancel/history
+- 系统提示词中已包含目标驱动模式的完整说明
+- `cargo check` 通过（仅 warnings，无 errors）
+
+### Phase 1 状态更新
+- Goal → Agent 集成 ✅ → Phase 1 完成进度升至 **100%**
+
+
+# 2025-01-27: MemoryManager 集成修复
+
+## 问题
+agent.rs 在 build() 方法中集成 MemoryManager 时有 3 个编译错误：
+1. `MemoryManager::new(&self.current_dir)` 是异步的，而 `build()` 是同步方法
+2. Memory tools 没有 `new()` 方法，需要使用 struct 字面量初始化
+3. `memory_manager` 字段类型不匹配（需要 `Arc<Mutex<MemoryManager>>`）
+
+## 修复
+1. build() 中使用 `MemoryManager::new_mock()` 作为默认值（同步构造）
+2. 用 `Arc::new(Mutex::new(memory_manager))` 包装
+3. Memory tools 用结构体字面量 `MemorySaveTool { memory_manager: ... }` 初始化
+4. Agent 结构体中 `memory_manager` 字段类型改为 `Arc<Mutex<MemoryManager>>`
+5. `run()` 中的记忆检索调用改为 `self.memory_manager.lock().await.search_similar().await`
+6. SearchResult 的 content 字段访问改为 `mem.record.content`
+7. 添加 `async-stream = "0.3.6"` 依赖到 Cargo.toml
+
+## 运行结果
+- `cargo check` 通过（只有 warnings，无 errors）

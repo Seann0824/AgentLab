@@ -21,6 +21,7 @@ pub mod read;
 pub mod search;
 pub mod subagent;
 pub mod investigate;
+pub mod memory_tools;
 
 
 pub struct ToolManager {
