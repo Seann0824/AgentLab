@@ -10,7 +10,7 @@ use agent_lab::{
     memory::manager::MemoryManager,
     model::ModelManager,
     swarm::{
-        agents::{GeneralAgent, MemoryAgent, VerifierAgent},
+        agents::{CoderAgent, GeneralAgent, MemoryAgent, ResearcherAgent, VerifierAgent},
         orchestrator::SwarmOrchestrator,
         registry::AgentType,
         transport::default_socket_path,
@@ -22,7 +22,7 @@ use tokio::sync::Mutex as TokioMutex;
 #[derive(Parser, Debug)]
 #[command(name = "agent-lab", version, about)]
 struct Cli {
-    /// Agent 类型: orchestrator(默认) | memory | general | verifier
+    /// Agent 类型: orchestrator(默认) | memory | general | verifier | coder | researcher
     #[arg(long, default_value = "orchestrator")]
     agent_type: String,
 
@@ -51,6 +51,8 @@ async fn main() -> anyhow::Result<()> {
         AgentType::Memory => run_memory_agent(socket_path, cli.orchestrator_socket).await,
         AgentType::General => run_general_agent(socket_path, cli.orchestrator_socket).await,
         AgentType::Verifier => run_verifier_agent(socket_path, cli.orchestrator_socket).await,
+        AgentType::Coder => run_coder_agent(socket_path, cli.orchestrator_socket).await,
+        AgentType::Researcher => run_researcher_agent(socket_path, cli.orchestrator_socket).await,
         _ => {
             anyhow::bail!("不支持的 Agent 类型: {}", cli.agent_type);
         }
@@ -64,6 +66,8 @@ fn parse_agent_type(s: &str) -> AgentType {
         "memory" => AgentType::Memory,
         "general" => AgentType::General,
         "verifier" => AgentType::Verifier,
+        "coder" => AgentType::Coder,
+        "researcher" => AgentType::Researcher,
         other => AgentType::Custom(other.to_string()),
     }
 }
@@ -189,4 +193,34 @@ async fn run_verifier_agent(
         .connect(orchestrator_socket.map(PathBuf::from))
         .await?;
     verifier_agent.run().await
+}
+
+/// 启动 Code Agent（非交互式，通过 UDS 通信）
+async fn run_coder_agent(
+    _socket_path: PathBuf,
+    orchestrator_socket: Option<String>,
+) -> anyhow::Result<()> {
+    eprintln!("💻 启动 Code Agent");
+
+    let project_path = PathBuf::from(".");
+    let mut coder_agent = CoderAgent::new(Some(project_path));
+    coder_agent
+        .connect(orchestrator_socket.map(PathBuf::from))
+        .await?;
+    coder_agent.run().await
+}
+
+/// 启动 Researcher Agent（非交互式，通过 UDS 通信）
+async fn run_researcher_agent(
+    _socket_path: PathBuf,
+    orchestrator_socket: Option<String>,
+) -> anyhow::Result<()> {
+    eprintln!("🔬 启动 Researcher Agent");
+
+    let project_path = PathBuf::from(".");
+    let mut researcher_agent = ResearcherAgent::new(Some(project_path));
+    researcher_agent
+        .connect(orchestrator_socket.map(PathBuf::from))
+        .await?;
+    researcher_agent.run().await
 }

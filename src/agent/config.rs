@@ -1,4 +1,5 @@
 use crate::context::ContextStrategy;
+use crate::swarm::registry::AgentType;
 
 /// Agent 配置：上下文策略和运行参数
 #[derive(Debug, Clone)]
@@ -17,6 +18,8 @@ pub struct AgentConfig {
     pub tool_pruning_keep_recent: usize,
     /// 工具输出最大字符数（超过的被截断）
     pub tool_pruning_max_output_chars: usize,
+    /// Agent 类型（用于渲染不同的身份提示词）
+    pub agent_type: AgentType,
 }
 
 impl Default for AgentConfig {
@@ -29,6 +32,7 @@ impl Default for AgentConfig {
             enable_tool_pruning: true,
             tool_pruning_keep_recent: 3,
             tool_pruning_max_output_chars: 200,
+            agent_type: AgentType::Orchestrator,
         }
     }
 }

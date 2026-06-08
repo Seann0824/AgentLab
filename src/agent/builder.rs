@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 use super::default_tools::default_tool_manager;
 use super::{Agent, AgentConfig};
 use crate::cli::CommandRegistry;
+use crate::swarm::registry::AgentType;
 use crate::context::ContextManager;
 use crate::goal::GoalRegistry;
 use crate::memory::MemoryManager;
@@ -82,6 +83,12 @@ impl AgentBuilder {
     /// 设置 SwarmRegistry（蜂群注册表）
     pub fn swarm_registry(mut self, registry: SwarmRegistry) -> Self {
         self.swarm_registry = Some(registry);
+        self
+    }
+
+    /// 设置 Agent 类型（用于渲染不同身份提示词）
+    pub fn agent_type(mut self, agent_type: AgentType) -> Self {
+        self.config.agent_type = agent_type;
         self
     }
 

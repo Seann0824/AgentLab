@@ -1,4 +1,12 @@
 {
-  "goals": [],
-  "last_updated": "2026-06-05 17:24"
+  "goals": [
+    {
+      "id": "g73b01066a",
+      "name": "实现codeagent",
+      "status": "Completed",
+      "progress": 100,
+      "updated_at": "2026-06-05 18:31"
+    }
+  ],
+  "last_updated": "2026-06-05 18:31"
 }

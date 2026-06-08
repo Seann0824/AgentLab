@@ -22,6 +22,10 @@ pub enum AgentType {
     General,
     #[serde(rename = "verifier")]
     Verifier,
+    #[serde(rename = "coder")]
+    Coder,
+    #[serde(rename = "researcher")]
+    Researcher,
     #[serde(rename = "reader")]
     Reader,
     #[serde(rename = "custom")]
@@ -35,6 +39,8 @@ impl AgentType {
             AgentType::Memory => "memory",
             AgentType::General => "general",
             AgentType::Verifier => "verifier",
+            AgentType::Coder => "coder",
+            AgentType::Researcher => "researcher",
             AgentType::Reader => "reader",
             AgentType::Custom(s) => s.as_str(),
         }
@@ -46,6 +52,8 @@ impl AgentType {
             "memory" => AgentType::Memory,
             "general" => AgentType::General,
             "verifier" => AgentType::Verifier,
+            "coder" => AgentType::Coder,
+            "researcher" => AgentType::Researcher,
             "reader" => AgentType::Reader,
             _ => AgentType::Custom(s.to_string()),
         }
