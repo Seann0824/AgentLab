@@ -442,7 +442,9 @@ impl Agent {
         let mut is_auto = false;
         let mut terminal_line_dirty = false;
         let mut single_task_used = false;
-
+        // ⭐ 连续自动迭代计数（防止 Goal 驱动无限循环）
+        let mut consecutive_auto_count: u32 = 0;
+        const MAX_CONSECUTIVE_AUTO: u32 = 30;
 
         // ⭐ 自动提取记忆计数器（每 N 轮非工具调用的对话保存重要信息到记忆）
         let mut auto_extract_counter: usize = 0;
@@ -789,11 +791,10 @@ impl Agent {
                 }
             }
 
-            // ⭐ 如果 Goal 进入终止状态，停止自动循环
+            // ⭐ Goal 状态日志（实际自动循环控制在下方的 is_auto 设定后处理）
             if let Some(active_goal) = self.goal_manager.active_goal() {
                 if active_goal.status.is_terminal() {
                     eprintln!("\r\x1b[2K🎯 目标 '{}' 已达终止状态 ({}), 停止自动执行", active_goal.id, active_goal.status);
-                    is_auto = false;
                 }
             }
 
@@ -869,6 +870,36 @@ impl Agent {
             }
 
             // 将工具结果加入消息
+
+            // ⭐ Goal 状态驱动的自动循环控制
+            // 如果目标未完成（活跃状态），继续自动推进（不重复注入目标消息）
+            if self.goal_manager.has_active_goal() {
+                if let Some(active_goal) = self.goal_manager.active_goal() {
+                    if !active_goal.status.is_terminal() {
+                        // 目标未完成 → 继续自动推进
+                        // ❗ 注意：目标状态不在每次循环重复注入，仅在：
+                        //   1. 启动时（agent.rs:433-438）
+                        //   2. 上下文压缩后（agent.rs:613-618）
+                        // 这样可以防止上下文无限增长
+                        is_auto = true;
+                    } else {
+                        // 目标已完成/失败/取消 → 停止自动循环
+                        is_auto = false;
+                    }
+                }
+            }
+
+            // ⭐ 防止无限自动循环：超过最大连续自动迭代次数时退回用户输入模式
+            if is_auto {
+                consecutive_auto_count += 1;
+                if consecutive_auto_count >= MAX_CONSECUTIVE_AUTO {
+                    eprintln!("\r\x1b[2K⏸️  已达到最大连续自动迭代次数 ({}), 暂停自动循环等待用户输入", MAX_CONSECUTIVE_AUTO);
+                    is_auto = false;
+                    consecutive_auto_count = 0;
+                }
+            } else {
+                consecutive_auto_count = 0;
+            }
 
             // ⭐ 自动提取重要信息到持久化记忆（每 N 轮非工具调用的对话）
             if should_auto_extract {
@@ -1450,6 +1481,45 @@ fn handle_goal_command(input: &str, goal_manager: &mut GoalRegistry) {
                 }
             }
         }
+        "delete" | "rm" | "remove" => {
+            if parts.len() < 3 {
+                println!("\x1b[33m⚠️  用法: /goal delete <id>\x1b[0m");
+                return;
+            }
+            let goal_id = parts[2];
+            match goal_manager.delete(goal_id) {
+                Ok(true) => {
+                    println!("\x1b[32m━━━ 🗑️ 目标 '{}' 已删除 ━━━\x1b[0m", goal_id);
+                }
+                Ok(false) => {
+                    println!("\x1b[33m⚠️  找不到目标: {}\x1b[0m", goal_id);
+                }
+                Err(e) => {
+                    println!("\x1b[31m━━━ ❌ 删除失败: {}\x1b[0m", e);
+                }
+            }
+        }
+        "clear" | "clean" | "purge" => {
+            let count = goal_manager.list().len();
+            if count == 0 {
+                println!("\x1b[33m⚠️  当前没有目标需要清理\x1b[0m");
+                return;
+            }
+            // 要求确认
+            if parts.len() > 2 && (parts[2] == "--force" || parts[2] == "-f") {
+                match goal_manager.clear_all() {
+                    Ok(n) => {
+                        println!("\x1b[32m━━━ 🧹 已清空 {} 个目标 ━━━\x1b[0m", n);
+                    }
+                    Err(e) => {
+                        println!("\x1b[31m━━━ ❌ 清空失败: {}\x1b[0m", e);
+                    }
+                }
+            } else {
+                println!("\x1b[33m⚠️  确定要清空所有 {} 个目标吗？\x1b[0m", count);
+                println!("  \x1b[33m使用 /goal clear --force 确认执行\x1b[0m");
+            }
+        }
         "help" | "-h" | "--help" => {
             print_goal_help();
         }
@@ -1469,6 +1539,8 @@ fn print_goal_help() {
     println!("  \x1b[33m/goal complete <id>\x1b[0m       标记目标为已完成");
     println!("  \x1b[33m/goal fail <id> [原因]\x1b[0m    标记目标为失败");
     println!("  \x1b[33m/goal cancel <id>\x1b[0m         取消目标");
+    println!("  \x1b[33m/goal delete <id>\x1b[0m         删除目标（从磁盘彻底移除）");
+    println!("  \x1b[33m/goal clear --force\x1b[0m       清空所有目标（需确认）");
     println!("  \x1b[33m/goal history\x1b[0m             查看历史目标");
     println!("  \x1b[33m/goal help\x1b[0m                显示此帮助");
 }

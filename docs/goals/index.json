@@ -1,40 +1,19 @@
 {
   "goals": [
     {
-      "id": "gbe3e1535f",
-      "name": "你自己创建一个 roadmap, 然后自己按照自己roadmap规划需保留过程文档。",
-      "status": "Active",
-      "progress": 0,
-      "updated_at": "2026-06-05 15:08"
-    },
-    {
-      "id": "gbc6103a30",
-      "name": "完成我门的持久化记忆使用向量数据库实现，优先输出技术文档，然后在完整实现整个能力，必须要要自我验证闭环",
-      "status": "Proposed",
-      "progress": 0,
-      "updated_at": "2026-06-05 05:25"
-    },
-    {
-      "id": "gb5080a8c0",
-      "name": "完成我门的持久化记忆使用向量数据库实现，优先输出技术文档，然后在完整实现整个能力，必须要要自我验证闭环。",
-      "status": "Failed",
-      "progress": 0,
-      "updated_at": "2026-06-05 05:20"
-    },
-    {
-      "id": "gbcf10dc03",
-      "name": "完成我门的持久化记忆使用向量数据库实现，优先输出技术文档，然后在完整实现整个能力，必须要要自我验证闭环",
+      "id": "g4fcd14981",
+      "name": "完成test",
       "status": "Completed",
       "progress": 100,
-      "updated_at": "2026-06-05 05:35"
+      "updated_at": "2026-06-05 15:54"
     },
     {
-      "id": "g436b03607",
-      "name": "根据写的roadmap, 你开始自动迭代roadmap 的内容，然后自己验证，直到完成所有roadmap.",
-      "status": "Proposed",
-      "progress": 0,
-      "updated_at": "2026-06-05 15:01"
+      "id": "g4fb3137fd",
+      "name": "test goal",
+      "status": "Completed",
+      "progress": 100,
+      "updated_at": "2026-06-05 15:53"
     }
   ],
-  "last_updated": "2026-06-05 15:08"
+  "last_updated": "2026-06-05 15:54"
 }

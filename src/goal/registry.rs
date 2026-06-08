@@ -222,6 +222,27 @@ impl GoalRegistry {
         }
     }
 
+    /// ⭐ 清空所有 Goal
+    pub fn clear_all(&mut self) -> anyhow::Result<usize> {
+        let count = self.goals.len();
+        // 删除所有 goal_*.json 文件
+        if self.goals_dir.exists() {
+            for entry in std::fs::read_dir(&self.goals_dir)? {
+                let entry = entry?;
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with("goal_") && name_str.ends_with(".json") {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+        // 清空内存
+        self.goals.clear();
+        // 更新索引
+        self.save_index()?;
+        Ok(count)
+    }
+
     /// ⭐ 根据描述创建新 Goal（便捷方法）
     pub fn create_goal(&mut self, description: String) -> anyhow::Result<Goal> {
         use super::types::Goal;

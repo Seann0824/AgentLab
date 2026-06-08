@@ -72,10 +72,69 @@
       "created_at": "2026-06-08T15:06:56.249Z",
       "accessed_at": "2026-06-08T15:06:56.249Z",
       "access_count": 0
+    },
+    {
+      "id": "mem_18b723e314b0b1a8_0",
+      "content": "Added `/goal delete <id>` and `/goal clear --force` subcommands to the goal management system in agent.rs. The `handle_goal_command` function now supports:\n- `/goal delete <id>` — permanently remove a goal from disk\n- `/goal clear --force` — clear all goals (requires --force confirmation)\nAlso updated `print_goal_help` to document the new commands.",
+      "tags": [
+        "goal",
+        "feature",
+        "agent.rs"
+      ],
+      "importance": 0.6,
+      "source": "Manual",
+      "created_at": "2026-06-08T15:13:55.859Z",
+      "accessed_at": "2026-06-08T15:13:55.859Z",
+      "access_count": 0
+    },
+    {
+      "id": "mem_18b724709a2d3aa8_0",
+      "content": "完成了多 Agent 蜂群架构技术文档（v2.0），定义 Orchestrator / Memory / General / Verifier 四种 Agent 角色，使用 Unix Domain Socket + JSON-RPC 2.0 作为 IPC 协议，实现了 Agent 注册发现、心跳监控、任务编排（串行/并行/条件/循环）和 Agent 池管理。文档在 docs/designs/multi-agent-swarm-architecture.md，共 6 个 Phase 实现计划。",
+      "tags": [
+        "architecture",
+        "multi-agent",
+        "swarm",
+        "design-doc"
+      ],
+      "importance": 0.9,
+      "source": "Manual",
+      "created_at": "2026-06-08T15:24:03.689Z",
+      "accessed_at": "2026-06-08T15:24:03.689Z",
+      "access_count": 0
+    },
+    {
+      "id": "mem_18b725c474a942e0_0",
+      "content": "实现了 Goal 驱动的自动循环机制：在 agent.rs 主循环中，每次 LLM 响应结束后，如果存在活跃的 Goal 且未进入终止状态（Completed/Failed/Cancelled），系统会自动重新注入 Goal 状态消息到上下文，并设置 is_auto = true 继续循环，无需等待用户输入。如果 AI 通过 `/goal complete/fail/cancel` 信号标记了目标状态，则循环停止等待用户输入。",
+      "tags": [
+        "goal-driven",
+        "auto-loop",
+        "agent",
+        "modification"
+      ],
+      "importance": 0.7,
+      "source": "Manual",
+      "created_at": "2026-06-08T15:48:23.349Z",
+      "accessed_at": "2026-06-08T15:48:23.349Z",
+      "access_count": 0
+    },
+    {
+      "id": "mem_18b726145af088b8_0",
+      "content": "修复了 Goal 驱动的自动循环中无限注入目标消息导致上下文爆炸的问题。变更：1) 移除了每次自动循环都注入 goal message 的代码（改为仅控制 is_auto 标志），2) 添加了 MAX_CONSECUTIVE_AUTO=30 连续自动迭代限制，超过后暂停循环等待用户输入。目标消息仅在启动时、用户执行 /goal 命令后、上下文压缩后三个合理时机注入。",
+      "tags": [
+        "bug-fix",
+        "goal-driven",
+        "infinite-loop",
+        "context-management"
+      ],
+      "importance": 0.8,
+      "source": "Manual",
+      "created_at": "2026-06-08T15:54:06.515Z",
+      "accessed_at": "2026-06-08T15:54:06.515Z",
+      "access_count": 0
     }
   ],
   "stats": {
-    "total_entries": 5,
+    "total_entries": 9,
     "last_compaction": "2026-06-08T05:26:07.389Z",
     "vector_dim": 4
   }
