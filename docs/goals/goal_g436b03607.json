@@ -3,15 +3,15 @@
   "name": "根据写的roadmap, 你开始自动迭代roadmap 的内容，然后自己验证，直到完成所有roadmap.",
   "description": "根据写的roadmap, 你开始自动迭代roadmap 的内容，然后自己验证，直到完成所有roadmap.",
   "criteria": [],
-  "status": "Proposed",
+  "status": "Active",
   "progress": 0,
-  "turn_count": 0,
+  "turn_count": 9,
   "max_turns": 0,
   "steps": [],
   "completed_steps": [],
   "decisions": [],
   "created_at": "2026-06-05 15:01",
-  "updated_at": "2026-06-05 15:01",
+  "updated_at": "2026-06-05 15:06",
   "completed_at": null,
   "stall_count": 0
 }

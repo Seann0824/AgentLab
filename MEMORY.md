@@ -118,3 +118,29 @@ agent.rs 在 build() 方法中集成 MemoryManager 时有 3 个编译错误：
 
 ## 运行结果
 - `cargo check` 通过（只有 warnings，无 errors）
+---
+
+# 2025-06-18: Phase 2 Step 1 ✅ — generate_tool 完成
+
+## 完成内容
+🎉 **新工具脚手架生成**（Phase 2 Step 1）已全部完成并端到端验证通过！
+
+### 实现细节
+- **工具名**: `generate_tool`
+- **功能**: 根据工具名 + 参数描述 + 功能描述，自动生成完整的 Rust 工具脚手架代码
+- **自动注册**: 自动在 `src/tools/mod.rs` 中添加 `pub mod <name>;`
+- **注册路径**: `src/tools/generate_tool/` → `src/tools/mod.rs` → `src/agent.rs`
+
+### 验证结果
+- `cargo check` 编译通过 ✅
+- spawn_agent 端到端验证：生成 hello_world 工具 → 注册 → cargo check ✅
+
+### 关键决策
+1. **代码生成采用 `format!` 模板 + 字符串拼接**：不引入额外模板引擎依赖
+2. **JSON Schema 参数映射**：string → string, number → f64, boolean → bool, array → Vec<String>, object → serde_json::Value
+3. **注册分两步**：自动注册到 `src/tools/mod.rs`，需手动在 `agent.rs` 注册（提示用户完成）
+4. **不自动注册到 agent.rs**: 避免执行时上下文不一致
+
+## 下一步
+**Phase 4 Step 1 — 配置文件系统 [P0]**
+开始实现 YAML/TOML 配置文件系统。

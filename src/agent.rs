@@ -17,7 +17,7 @@ use crate::session::SessionManager;
 use crate::goal::GoalRegistry;
 use crate::task::TaskManager;
 use crate::memory::{MemoryManager, MemorySource};
-use crate::tools::{ToolManager, shell::BashShell, tool_debug::DebugTool, edit::EditTool, read::ReadTool, search::SearchTool, subagent::SpawnAgent, investigate::InvestigateTool};
+use crate::tools::{ToolManager, hello_world::HelloWorld, shell::BashShell, tool_debug::DebugTool, edit::EditTool, read::ReadTool, search::SearchTool, subagent::SpawnAgent, investigate::InvestigateTool, generate_tool::GenerateTool};
 use crate::tools::memory_tools::{MemorySaveTool, MemorySearchTool, MemoryForgetTool, MemoryStatsTool};
 
 // =====================================================================
@@ -1483,6 +1483,8 @@ fn default_tool_manager() -> ToolManager {
     tool_manager.register_tool(Box::new(SearchTool));
     tool_manager.register_tool(Box::new(SpawnAgent));
     tool_manager.register_tool(Box::new(InvestigateTool::new(".")));
+    tool_manager.register_tool(Box::new(GenerateTool::new(".")));
+    tool_manager.register_tool(Box::new(HelloWorld));
     tool_manager
 }
 

@@ -68,3 +68,32 @@
 - 进度：12/12 步骤 ✅ 全部完成
 - 当前步骤：全部完成
 - 状态：✅ 已完成
+
+# 🎯 当前任务：迭代 Roadmap 内容直到全部完成
+- 进度：0/4 大项
+- 当前步骤：1.1 新工具脚手架生成 — 设计
+- 状态：进行中
+
+## 优先级队列
+1. 🏃 **[P0] 新工具脚手架生成** — 正在执行
+2. ⏳ **[P0] 配置文件系统**
+3. ⏳ **[P1] 自我修改安全机制**
+4. ⏳ **[P1] 记忆系统收尾**
+
+---
+
+## 📌 当前步骤: Phase 2 Step 1 ✅ 已完成
+
+**任务**: 新工具脚手架生成 (generate_tool)
+**状态**: ✅ **全部完成**
+- [x] 设计: 确定工具生成模板结构
+- [x] 实现: 创建 `generate_tool` 工具（`src/tools/generate_tool/mod.rs`）
+- [x] 注册: 添加到 `src/tools/mod.rs` 和 `src/agent.rs`
+- [x] 验证: cargo check 通过（仅 warnings）
+- [x] 端到端测试: spawn_agent → 生成 hello_world → cargo check ✅
+
+**结果**: Agent 现在可以通过 `generate_tool` 工具自动生成本地工具模板代码，实现自我进化第一步。
+
+## 🔜 下一步: Phase 4 Step 1 — 配置文件系统 [P0]
+
+开始实现 YAML/TOML 配置文件系统。
