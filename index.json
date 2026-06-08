@@ -44,10 +44,23 @@
       "created_at": "2026-06-08T05:35:03.793Z",
       "accessed_at": "2026-06-08T05:35:03.793Z",
       "access_count": 0
+    },
+    {
+      "id": "mem_18b723420ebf76b8_1",
+      "content": "[对话] 用户: 完成goal | 助手: 好的！所有 goal 状态已更新完毕。\n\n## ✅ Goal 完成情况汇总\n\n**持久化记忆系统** — 完整实现并通过自我验证闭环：\n\n| 组件 | 文件 | 状态 |\n|------|------|:----:|\n| 技术设计文档 | `docs/designs/persistent-memory-vector-db.md` | ✅ |\n| Memory 模块 | `src/memory/` (types/embedding/store/manager) | ✅ |\n| 4 个记忆工具 | memory_save / search / forget / stats | ✅ |\n| 自动提取(每3轮) | agent.rs:873-908 | ✅ |\n| 压缩后注入 | agent.r",
+      "tags": [
+        "auto-extracted",
+        "conversation"
+      ],
+      "importance": 0.3,
+      "source": "Conversation",
+      "created_at": "2026-06-08T15:02:24.270Z",
+      "accessed_at": "2026-06-08T15:02:24.270Z",
+      "access_count": 0
     }
   ],
   "stats": {
-    "total_entries": 3,
+    "total_entries": 4,
     "last_compaction": "2026-06-08T05:26:07.389Z",
     "vector_dim": 4
   }
