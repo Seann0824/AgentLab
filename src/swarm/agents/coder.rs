@@ -1,13 +1,3 @@
-// src/swarm/agents/coder.rs
-// 💻 Code Agent — 编码 Agent
-//
-// Code Agent 是一个非交互式 Agent，通过 UDS 与 Orchestrator 通信。
-// 职责：
-// 1. 专注代码生成与修改
-// 2. 多文件重构
-// 3. 代码评审
-// 4. 与 Verifier Agent 联动（修改→验证循环）
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,19 +7,17 @@ use serde_json::json;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::interval;
 
+use crate::swarm::agents::common::{send_task_result, task_failed, task_success};
 use crate::swarm::heartbeat::create_heartbeat_request;
+use crate::swarm::registry::AgentType;
 use crate::swarm::rpc::JsonRpcRequest;
+use crate::swarm::task::SwarmTask;
 use crate::swarm::transport::{UdsClient, default_socket_path};
 
-/// Code Agent — 编码 Agent
 pub struct CoderAgent {
-    /// Agent ID
     agent_id: String,
-    /// UDS 客户端（连接到 Orchestrator），用 Arc<Mutex> 共享给心跳任务
     client: Option<Arc<TokioMutex<UdsClient>>>,
-    /// 是否正在运行
     running: bool,
-    /// 项目路径
     project_path: PathBuf,
 }
 
@@ -49,7 +37,7 @@ impl CoderAgent {
         let socket = orchestrator_socket.unwrap_or_else(default_socket_path);
         eprintln!("💻 Code Agent 连接到 Orchestrator @ {:?}", socket);
 
-        let client = UdsClient::connect(&socket, &self.agent_id)
+        let client = UdsClient::connect_as(&socket, &self.agent_id, AgentType::Coder)
             .await
             .context(format!("无法连接到 Orchestrator (socket: {:?})", socket))?;
 
@@ -108,6 +96,64 @@ impl CoderAgent {
     /// 处理收到的请求
     async fn handle_request(&mut self, request: JsonRpcRequest) {
         match request.method.as_str() {
+            "dispatch_task" => {
+                let task_result = match SwarmTask::from_rpc_params(request.params.as_ref()) {
+                    Ok(task) => {
+                        let params = task.params();
+                        let operation = params
+                            .get("operation")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let file_path = params
+                            .get("file_path")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let result = match operation {
+                            "read_file" | "read" => self.read_file(file_path).await,
+                            "review_code" | "review" => self.review_code(file_path).await,
+                            "edit_file" | "edit" => {
+                                let edit_operation = params
+                                    .get("edit_operation")
+                                    .or_else(|| params.get("operation_type"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("search_replace");
+                                let search =
+                                    params.get("search").and_then(|v| v.as_str()).unwrap_or("");
+                                let replace =
+                                    params.get("replace").and_then(|v| v.as_str()).unwrap_or("");
+                                let content =
+                                    params.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                                self.edit_file(file_path, edit_operation, search, replace, content)
+                                    .await
+                            }
+                            "generate_code" | "generate" => {
+                                let specification = params
+                                    .get("specification")
+                                    .or_else(|| params.get("content"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                let output_path = params
+                                    .get("output_path")
+                                    .or_else(|| params.get("file_path"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                self.generate_code(specification, output_path).await
+                            }
+                            _ if !file_path.is_empty() => self.review_code(file_path).await,
+                            _ => json!({
+                                "success": true,
+                                "agent_id": self.agent_id,
+                                "task": task.description(),
+                                "params": params.clone(),
+                                "message": "Coder Agent 已接收结构化任务；未提供可执行的编码参数，已返回任务摘要",
+                            }),
+                        };
+                        task_success(&task, result)
+                    }
+                    Err(err) => task_failed("unknown", err),
+                };
+                send_task_result(&self.client, &request.id, task_result).await;
+            }
             "read_file" => {
                 let file_path = request
                     .params
@@ -153,7 +199,13 @@ impl CoderAgent {
 
                 eprintln!("💻 编辑文件: {} (操作: {})", file_path, operation);
                 let result = self
-                    .edit_file(file_path, operation, search_text, replace_text, _insert_content)
+                    .edit_file(
+                        file_path,
+                        operation,
+                        search_text,
+                        replace_text,
+                        _insert_content,
+                    )
                     .await;
                 self.send_response(&request.id, result).await;
             }
@@ -172,9 +224,7 @@ impl CoderAgent {
                     .unwrap_or("");
 
                 eprintln!("💻 生成代码到: {}", output_path);
-                let result = self
-                    .generate_code(specification, output_path)
-                    .await;
+                let result = self.generate_code(specification, output_path).await;
                 self.send_response(&request.id, result).await;
             }
             "review_code" => {

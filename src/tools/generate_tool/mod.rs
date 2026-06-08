@@ -1,11 +1,6 @@
 // src/tools/generate_tool/mod.rs
 //
-// GenerateTool — 工具脚手架生成器
-// 允许 Agent 通过描述自动生成一个新的工具模板代码，实现「自我进化」。
-//
-// 功能：
-//   输入工具名、描述、参数列表，自动生成完整工具代码
-//   并注册到项目中的 tools/mod.rs
+mod registration;
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -14,6 +9,8 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::tools::types::{Tool, ToolEvent, ToolStream};
+
+use self::registration::{ensure_default_tool_registration, ensure_module_decl};
 
 pub struct GenerateTool {
     project_root: String,
@@ -251,6 +248,20 @@ impl Tool for {struct_name} {{
         Box::pin(ReceiverStream::new(rx))
     }}
 }}
+
+#[cfg(test)]
+mod tests {{
+    use super::*;
+
+    #[test]
+    fn generated_tool_contract_is_valid() {{
+        let tool = {struct_name};
+        assert_eq!(tool.name(), "{tool_name}");
+        let schema = tool.parameters_schema();
+        assert_eq!(schema["type"].as_str(), Some("function"));
+        assert_eq!(schema["function"]["name"].as_str(), Some("{tool_name}"));
+    }}
+}}
 "#,
                 tool_dir_name = tool_name,
                 struct_name = struct_name,
@@ -283,70 +294,61 @@ impl Tool for {struct_name} {{
                 }
             }
 
-            // 更新 src/tools/mod.rs 添加模块声明
-            let mod_path = PathBuf::from(&project_root)
-                .join("src")
-                .join("tools")
-                .join("mod.rs");
-            match tokio::fs::read_to_string(&mod_path).await {
-                Ok(content) => {
-                    let mod_decl = format!("pub mod {};", tool_name);
-                    if content.contains(&mod_decl) {
-                        // 已存在，跳过
-                    } else {
-                        // 在 types 之后、最后一个 pub mod 之前插入
-                        let new_content = if let Some(pos) = content.rfind("pub mod ") {
-                            // 找到最后一个 pub mod 声明，在其后插入
-                            let insert_pos = content[pos..]
-                                .find('\n')
-                                .map(|p| pos + p + 1)
-                                .unwrap_or(content.len());
-                            let mut updated = content.clone();
-                            updated.insert_str(insert_pos, &format!("pub mod {};\n", tool_name));
-                            updated
-                        } else {
-                            // fallback: 追加到最后
-                            format!("{}\npub mod {};\n", content, tool_name)
-                        };
-
-                        match tokio::fs::write(&mod_path, &new_content).await {
-                            Ok(_) => {
-                                let msg = format!(
-                                    "✅ Tool '{}' scaffolding created successfully!\n\nFile created: {}\n\nNext steps:\n1. Implement the tool logic in the `execute()` method (search for TODO)\n2. Register in agent.rs: `tool_manager.register_tool(Box::new({}));`\n3. Run `cargo check` to verify",
-                                    tool_name,
-                                    tool_file.to_string_lossy(),
-                                    struct_name
-                                );
-                                let result = serde_json::json!({
-                                    "success": true,
-                                    "tool_name": tool_name,
-                                    "file_path": tool_file.to_string_lossy(),
-                                    "message": msg,
-                                    "next_steps": [
-                                        format!("Implement logic in src/tools/{0}/mod.rs execute() method", tool_name),
-                                        format!("Register in agent.rs: tool_manager.register_tool(Box::new({0}));", struct_name),
-                                        "Run `cargo check` to verify compilation"
-                                    ]
-                                });
-                                let _ = tx.send(ToolEvent::Done(result)).await;
-                            }
-                            Err(e) => {
-                                let _ = tx
-                                    .send(ToolEvent::Err(format!(
-                                        "File created but failed to update mod.rs: {}",
-                                        e
-                                    )))
-                                    .await;
-                            }
-                        }
-                    }
-                }
+            let module_updated = match ensure_module_decl(&project_root, &tool_name).await {
+                Ok(updated) => updated,
                 Err(e) => {
                     let _ = tx
-                        .send(ToolEvent::Err(format!("Failed to read mod.rs: {}", e)))
+                        .send(ToolEvent::Err(format!(
+                            "File created but failed to update src/tools/mod.rs: {}",
+                            e
+                        )))
                         .await;
+                    return;
                 }
-            }
+            };
+
+            let default_tools_updated =
+                match ensure_default_tool_registration(&project_root, &tool_name, &struct_name)
+                    .await
+                {
+                    Ok(updated) => updated,
+                    Err(e) => {
+                        let _ = tx
+                            .send(ToolEvent::Err(format!(
+                                "File created but failed to register default tool: {}",
+                                e
+                            )))
+                            .await;
+                        return;
+                    }
+                };
+
+            let msg = format!(
+                "✅ Tool '{}' scaffolding created and registered.\n\nFile created: {}\n\nValidation:\n1. Implement the TODO in `execute()`\n2. Run `cargo fmt`\n3. Run `cargo check`\n4. Run `cargo test {}::tests::generated_tool_contract_is_valid`",
+                tool_name,
+                tool_file.to_string_lossy(),
+                tool_name,
+            );
+            let result = serde_json::json!({
+                "success": true,
+                "tool_name": tool_name,
+                "struct_name": struct_name,
+                "file_path": tool_file.to_string_lossy(),
+                "module_decl_updated": module_updated,
+                "default_tools_updated": default_tools_updated,
+                "message": msg,
+                "validation_commands": [
+                    "cargo fmt",
+                    "cargo check",
+                    format!("cargo test {}::tests::generated_tool_contract_is_valid", tool_name)
+                ],
+                "rollback_hint": [
+                    format!("remove src/tools/{}/", tool_name),
+                    format!("remove `pub mod {};` from src/tools/mod.rs", tool_name),
+                    format!("remove `{0}::{1}` import and `register_tool(Box::new({1}))` from src/agent/default_tools.rs", tool_name, struct_name)
+                ]
+            });
+            let _ = tx.send(ToolEvent::Done(result)).await;
         });
 
         Box::pin(ReceiverStream::new(rx))

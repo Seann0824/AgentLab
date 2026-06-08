@@ -13,12 +13,14 @@ use crate::session::SessionManager;
 use crate::swarm::orchestrator::SwarmOrchestrator;
 use crate::swarm::registry::{AgentType, SwarmRegistry};
 use crate::task::TaskManager;
-use crate::tools::agent_tools::{make_coder_task, make_general_task, make_memory_task, make_researcher_task, make_verifier_task};
+use crate::tools::ToolManager;
+use crate::tools::agent_tools::{
+    make_coder_task, make_general_task, make_memory_task, make_researcher_task, make_verifier_task,
+};
 use crate::tools::dispatch_task::DispatchTask;
 use crate::tools::memory_tools::{
     MemoryForgetTool, MemorySaveTool, MemorySearchTool, MemoryStatsTool,
 };
-use crate::tools::ToolManager;
 
 /// AgentBuilder — 链式构建 Agent
 pub struct AgentBuilder {
@@ -149,10 +151,17 @@ impl AgentBuilder {
             tool_manager.register_tool(Box::new(dispatch));
 
             // ⭐ 注册 Agent 专用任务工具（每个子 Agent 类型一个独立工具）
-            let registry = self.swarm_registry.as_ref().map(|r| Arc::new(Mutex::new(r.clone())));
+            let registry = self
+                .swarm_registry
+                .as_ref()
+                .map(|r| Arc::new(Mutex::new(r.clone())));
             tool_manager.register_tool(Box::new(make_coder_task(orch.clone(), registry.clone())));
-            tool_manager.register_tool(Box::new(make_researcher_task(orch.clone(), registry.clone())));
-            tool_manager.register_tool(Box::new(make_verifier_task(orch.clone(), registry.clone())));
+            tool_manager.register_tool(Box::new(make_researcher_task(
+                orch.clone(),
+                registry.clone(),
+            )));
+            tool_manager
+                .register_tool(Box::new(make_verifier_task(orch.clone(), registry.clone())));
             tool_manager.register_tool(Box::new(make_general_task(orch.clone(), registry.clone())));
             tool_manager.register_tool(Box::new(make_memory_task(orch.clone(), registry.clone())));
         }
@@ -175,7 +184,6 @@ impl AgentBuilder {
             current_dir: self.current_dir,
             memory_manager,
             swarm_registry: self.swarm_registry,
-            swarm_orchestrator: self.swarm_orchestrator,
         })
     }
 }

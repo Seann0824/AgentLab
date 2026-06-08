@@ -9,12 +9,13 @@
 use std::sync::Arc;
 
 use tokio::sync::Mutex as TokioMutex;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::swarm::orchestrator::SwarmOrchestrator;
 use crate::swarm::registry::{AgentType, SwarmRegistry};
 use crate::swarm::rpc::JsonRpcRequest;
+use crate::swarm::task::{SwarmTask, TaskResult};
 use crate::tools::types::{Tool, ToolEvent, ToolStream};
 
 /// dispatch_task 工具
@@ -81,7 +82,10 @@ impl Tool for DispatchTask {
     fn execute(&self, args: serde_json::Value) -> ToolStream {
         let agent_type_str = args["agent_type"].as_str().unwrap_or("general").to_string();
         let task_description = args["task_description"].as_str().unwrap_or("").to_string();
-        let task_params = args.get("task_params").cloned().unwrap_or(serde_json::json!({}));
+        let task_params = args
+            .get("task_params")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
         let timeout_secs = args["timeout_seconds"].as_u64().unwrap_or(120);
 
         let (tx, rx) = mpsc::channel(1);
@@ -124,7 +128,9 @@ pub fn dispatch_to_agent(
 
         if agent_type == AgentType::Orchestrator {
             let _ = tx
-                .send(ToolEvent::Err("不能向 Orchestrator 自身派发任务".to_string()))
+                .send(ToolEvent::Err(
+                    "不能向 Orchestrator 自身派发任务".to_string(),
+                ))
                 .await;
             return;
         }
@@ -159,27 +165,50 @@ pub fn dispatch_to_agent(
             )))
             .await;
 
-        // 构建 RPC 请求
-        let request = JsonRpcRequest::new(
-            "execute_task",
-            Some(serde_json::json!({
-                "task": task_description,
-                "params": task_params,
-                "timeout_seconds": timeout_secs,
-            })),
-        );
+        // 构建结构化蜂群任务
+        let swarm_task = SwarmTask::new(
+            "dispatch_task",
+            serde_json::json!({
+                "task_description": task_description,
+                "task_params": task_params,
+            }),
+        )
+        .with_target(agent_type_str.clone())
+        .with_timeout(timeout_secs)
+        .with_agent_id(agent_id.clone());
+
+        let request = JsonRpcRequest::new("dispatch_task", Some(swarm_task.to_rpc_params()));
 
         // 通过 Orchestrator 发送并等待响应
-        let mut orch_lock = orch.lock().await;
-        match orch_lock
-            .send_request_and_wait(&agent_id, &request, timeout_secs)
-            .await
+        match SwarmOrchestrator::send_request_and_wait_shared(
+            orch.clone(),
+            &agent_id,
+            &request,
+            timeout_secs,
+        )
+        .await
         {
             Ok(response) => {
+                let task_result = response
+                    .result
+                    .as_ref()
+                    .and_then(|value| {
+                        value
+                            .get("task_result")
+                            .cloned()
+                            .or_else(|| {
+                                value
+                                    .get("result")
+                                    .and_then(|v| v.get("task_result"))
+                                    .cloned()
+                            })
+                            .or_else(|| Some(value.clone()))
+                    })
+                    .and_then(|value| serde_json::from_value::<TaskResult>(value).ok());
                 let result = serde_json::json!({
                     "agent_id": agent_id,
                     "agent_type": agent_type_str,
-                    "task": task_description,
+                    "task": swarm_task,
                     "response_id": response.id,
                     "response_result": response.result,
                     "response_error": response.error.map(|e| serde_json::json!({
@@ -187,6 +216,7 @@ pub fn dispatch_to_agent(
                         "message": e.message,
                         "data": e.data,
                     })),
+                    "task_result": task_result,
                 });
                 let _ = tx.send(ToolEvent::Done(result)).await;
             }

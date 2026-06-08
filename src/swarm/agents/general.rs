@@ -17,8 +17,11 @@ use serde_json::json;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::interval;
 
+use crate::swarm::agents::common::{send_task_result, task_failed, task_success};
 use crate::swarm::heartbeat::create_heartbeat_request;
+use crate::swarm::registry::AgentType;
 use crate::swarm::rpc::JsonRpcRequest;
+use crate::swarm::task::SwarmTask;
 use crate::swarm::transport::{UdsClient, default_socket_path};
 
 /// General Agent — 通用任务执行 Agent
@@ -49,7 +52,7 @@ impl GeneralAgent {
         let socket = orchestrator_socket.unwrap_or_else(default_socket_path);
         eprintln!("🔧 General Agent 连接到 Orchestrator @ {:?}", socket);
 
-        let client = UdsClient::connect(&socket, &self.agent_id)
+        let client = UdsClient::connect_as(&socket, &self.agent_id, AgentType::General)
             .await
             .context(format!("无法连接到 Orchestrator (socket: {:?})", socket))?;
 
@@ -108,6 +111,31 @@ impl GeneralAgent {
     /// 处理收到的请求
     async fn handle_request(&mut self, request: JsonRpcRequest) {
         match request.method.as_str() {
+            "dispatch_task" => {
+                let result = match SwarmTask::from_rpc_params(request.params.as_ref()) {
+                    Ok(task) => {
+                        let task_description = task.description();
+                        let task_params = task.params();
+                        eprintln!(
+                            "🔧 收到结构化任务: {}",
+                            &task_description[..task_description.len().min(100)]
+                        );
+                        self.current_task = Some(task_description.clone());
+                        task_success(
+                            &task,
+                            json!({
+                                "success": true,
+                                "agent_id": self.agent_id,
+                                "task": task_description,
+                                "params": task_params,
+                                "message": "General Agent 已完成结构化任务接收与记录",
+                            }),
+                        )
+                    }
+                    Err(err) => task_failed("unknown", err),
+                };
+                send_task_result(&self.client, &request.id, result).await;
+            }
             "execute_task" => {
                 let task = request
                     .params

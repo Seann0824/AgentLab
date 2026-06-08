@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::time::Instant;
 
 use futures_util::StreamExt;
 
 use crate::model::{ChatMessage, ToolCall};
-use crate::tools::types::{Tool, ToolEvent};
+use crate::tools::types::{Tool, ToolContract, ToolEvent};
 
 /// 工具摘要信息，用于动态生成系统提示词和交互式工具列表
 #[derive(Debug, Clone, serde::Serialize)]
@@ -66,19 +67,39 @@ impl ToolManager {
         tools
     }
 
+    /// 返回完整工具契约，用于能力发现和自我迭代审计。
+    pub fn list_contracts(&self) -> Vec<ToolContract> {
+        let mut contracts: Vec<ToolContract> = self
+            .tools
+            .values()
+            .map(|tool| ToolContract {
+                name: tool.name().to_string(),
+                description: tool.description().to_string(),
+                parameters_schema: tool.parameters_schema(),
+            })
+            .collect();
+        contracts.sort_by(|a, b| a.name.cmp(&b.name));
+        contracts
+    }
+
     pub async fn run(&self, tool_call: ToolCall) -> ChatMessage {
         let id = tool_call.id;
         let name = tool_call.name;
         let arguments = tool_call.arguments;
+        let started_at = Instant::now();
 
         match self.tools.get(&name) {
             Some(tool) => {
                 let Ok(args) = serde_json::Value::from_str(&arguments) else {
                     let content = serde_json::json!({
                         "ok": false,
+                        "tool": name,
                         "error": {
                             "code": "invalid_arguments",
                             "message": format!("{} arguments are not valid JSON: {}", name, arguments),
+                        },
+                        "metrics": {
+                            "elapsed_ms": started_at.elapsed().as_millis(),
                         },
                     });
 
@@ -90,7 +111,11 @@ impl ToolManager {
                         ToolEvent::Done(result) => {
                             let content = serde_json::json!({
                                 "ok": true,
+                                "tool": name,
                                 "result": result,
+                                "metrics": {
+                                    "elapsed_ms": started_at.elapsed().as_millis(),
+                                },
                             });
 
                             return tool_message(&id, content);
@@ -98,9 +123,13 @@ impl ToolManager {
                         ToolEvent::Err(message) => {
                             let content = serde_json::json!({
                                 "ok": false,
+                                "tool": name,
                                 "error": {
                                     "code": "tool_failed",
                                     "message": message,
+                                },
+                                "metrics": {
+                                    "elapsed_ms": started_at.elapsed().as_millis(),
                                 },
                             });
 
@@ -113,9 +142,13 @@ impl ToolManager {
 
                 let content = serde_json::json!({
                     "ok": false,
+                    "tool": name,
                     "error": {
                         "code": "tool_no_result",
                         "message": format!("{} did not return a result", name),
+                    },
+                    "metrics": {
+                        "elapsed_ms": started_at.elapsed().as_millis(),
                     },
                 });
 
@@ -124,9 +157,13 @@ impl ToolManager {
             _ => {
                 let content = serde_json::json!({
                     "ok": false,
+                    "tool": name,
                     "error": {
                         "code": "unknown_tool",
                         "message": format!("unknown tool: {}", name),
+                    },
+                    "metrics": {
+                        "elapsed_ms": started_at.elapsed().as_millis(),
                     },
                 });
 

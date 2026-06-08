@@ -7,14 +7,14 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use tokio::process::Child;
 use tokio::sync::Mutex as TokioMutex;
 
 use super::heartbeat::HeartbeatMonitor;
-use super::registry::{AgentType, SwarmRegistry};
+use super::registry::{AgentRegistration, AgentType, SwarmRegistry};
 use super::rpc::{JsonRpcRequest, JsonRpcResponse};
 use super::transport::{UdsServer, UdsStream, default_socket_path};
 
@@ -29,11 +29,11 @@ pub struct ConnectedAgent {
 /// Swarm Orchestrator — 蜂群编排器
 pub struct SwarmOrchestrator {
     /// UDS 服务器
-    server: UdsServer,
+    server: Option<UdsServer>,
     /// 蜂群注册表（共享引用用于心跳监控）
     registry: Arc<TokioMutex<SwarmRegistry>>,
     /// 已连接的 Agent 流（agent_id → UdsStream）
-    streams: HashMap<String, UdsStream>,
+    streams: HashMap<String, Arc<TokioMutex<UdsStream>>>,
     /// 已启动的子进程（agent_id → Child）
     #[allow(dead_code)]
     subprocesses: HashMap<String, Child>,
@@ -66,7 +66,7 @@ impl SwarmOrchestrator {
         eprintln!("🐝 [Orchestrator] 蜂群编排器已启动 @ {:?}", socket);
 
         Ok(Self {
-            server,
+            server: Some(server),
             registry,
             streams: HashMap::new(),
             subprocesses: HashMap::new(),
@@ -77,43 +77,36 @@ impl SwarmOrchestrator {
     }
 
     /// 接受新的 Agent 连接（阻塞等待）
-    pub async fn accept_agent(&mut self) -> Result<(String, &mut UdsStream)> {
-        let (agent_id, stream) = self.server.accept().await?;
-
-        // 注册到 SwarmRegistry
-        {
-            let mut reg = self.registry.lock().await;
-            reg.register(agent_id.clone(), AgentType::Memory);
-        }
-
-        // 存储流引用
-        self.streams.insert(agent_id.clone(), stream);
-
-        eprintln!("🐝 [Orchestrator] Agent '{}' 已注册", agent_id);
-
-        // 这里需要返回可变引用，但我们用 HashMap 存储，用 get_mut
-        let stream_ref = self
-            .streams
-            .get_mut(&agent_id)
-            .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found after insert", agent_id))?;
-
-        Ok((agent_id, stream_ref))
+    pub async fn accept_agent(&mut self) -> Result<String> {
+        let server = self
+            .server
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("accept loop already owns the UDS server"))?;
+        let (registration, stream) = server.accept().await?;
+        let agent_id = registration.agent_id.clone();
+        self.register_connected_agent(registration, stream).await;
+        Ok(agent_id)
     }
 
     /// 启动后台连接接受循环
     pub fn start_accept_loop(orchestrator: Arc<TokioMutex<Self>>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            loop {
+            let mut server = {
                 let mut orch = orchestrator.lock().await;
-                match orch.server.accept().await {
-                    Ok((agent_id, stream)) => {
-                        // 注册到 SwarmRegistry
-                        {
-                            let mut reg = orch.registry.lock().await;
-                            reg.register(agent_id.clone(), AgentType::Memory);
-                        }
-                        eprintln!("🐝 [Orchestrator] Agent '{}' 已连接", agent_id);
-                        orch.streams.insert(agent_id, stream);
+                match orch.server.take() {
+                    Some(server) => server,
+                    None => {
+                        eprintln!("🐝 [Orchestrator] accept loop 已经启动，跳过重复启动");
+                        return;
+                    }
+                }
+            };
+
+            loop {
+                match server.accept().await {
+                    Ok((registration, stream)) => {
+                        let mut orch = orchestrator.lock().await;
+                        orch.register_connected_agent(registration, stream).await;
                     }
                     Err(e) => {
                         eprintln!("🐝 [Orchestrator] 接受连接失败: {}", e);
@@ -124,12 +117,35 @@ impl SwarmOrchestrator {
         })
     }
 
+    async fn register_connected_agent(
+        &mut self,
+        registration: AgentRegistration,
+        stream: UdsStream,
+    ) {
+        let agent_id = registration.agent_id.clone();
+        let agent_type = registration.agent_type.clone();
+        {
+            let mut reg = self.registry.lock().await;
+            reg.register_agent(registration);
+        }
+        self.agent_types
+            .insert(agent_id.clone(), agent_type.clone());
+        self.streams
+            .insert(agent_id.clone(), Arc::new(TokioMutex::new(stream)));
+        eprintln!(
+            "🐝 [Orchestrator] Agent '{}' 已注册为 {}",
+            agent_id,
+            agent_type.as_str()
+        );
+    }
+
     /// 向指定 Agent 发送 JSON-RPC 请求
-    pub async fn send_to_agent(&mut self, agent_id: &str, request: &JsonRpcRequest) -> Result<()> {
+    pub async fn send_to_agent(&self, agent_id: &str, request: &JsonRpcRequest) -> Result<()> {
         let stream = self
             .streams
-            .get_mut(agent_id)
+            .get(agent_id)
             .ok_or_else(|| anyhow::anyhow!("Agent '{}' not connected", agent_id))?;
+        let mut stream = stream.lock().await;
         stream.send_request(request).await
     }
 
@@ -138,35 +154,48 @@ impl SwarmOrchestrator {
     /// 用于 dispatch_task 工具——派发任务给 Agent 后，
     /// 在同一连接上等待 Agent 返回执行结果。
     pub async fn send_request_and_wait(
-        &mut self,
+        &self,
         agent_id: &str,
         request: &JsonRpcRequest,
         timeout_secs: u64,
     ) -> std::result::Result<JsonRpcResponse, String> {
-        // 1. 获取该 Agent 的流
         let stream = self
             .streams
-            .get_mut(agent_id)
+            .get(agent_id)
+            .cloned()
             .ok_or_else(|| format!("Agent '{}' not connected", agent_id))?;
+        send_request_and_wait_on_stream(
+            stream,
+            self.registry.clone(),
+            agent_id,
+            request,
+            timeout_secs,
+        )
+        .await
+    }
 
-        // 2. 发送请求
-        stream
-            .send_request(request)
-            .await
-            .map_err(|e| format!("发送请求失败: {}", e))?;
-
-        // 3. 带超时等待响应
-        match tokio::time::timeout(Duration::from_secs(timeout_secs), stream.read_response()).await
-        {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(e)) => Err(format!("读取响应失败: {}", e)),
-            Err(_) => Err(format!("等待 Agent '{}' 响应超时 ({}s)", agent_id, timeout_secs)),
-        }
+    /// 在不持有 Orchestrator 全局锁的情况下发送请求并等待响应。
+    pub async fn send_request_and_wait_shared(
+        orchestrator: Arc<TokioMutex<Self>>,
+        agent_id: &str,
+        request: &JsonRpcRequest,
+        timeout_secs: u64,
+    ) -> std::result::Result<JsonRpcResponse, String> {
+        let (stream, registry) = {
+            let orch = orchestrator.lock().await;
+            let stream = orch
+                .streams
+                .get(agent_id)
+                .cloned()
+                .ok_or_else(|| format!("Agent '{}' not connected", agent_id))?;
+            (stream, orch.registry.clone())
+        };
+        send_request_and_wait_on_stream(stream, registry, agent_id, request, timeout_secs).await
     }
 
     /// 发送消息到所有 Agent（广播）
     pub async fn broadcast(
-        &mut self,
+        &self,
         request: &super::rpc::JsonRpcRequest,
     ) -> Vec<(String, Result<()>)> {
         let mut results = Vec::new();
@@ -245,12 +274,97 @@ impl SwarmOrchestrator {
     }
 }
 
+async fn send_request_and_wait_on_stream(
+    stream: Arc<TokioMutex<UdsStream>>,
+    registry: Arc<TokioMutex<SwarmRegistry>>,
+    agent_id: &str,
+    request: &JsonRpcRequest,
+    timeout_secs: u64,
+) -> std::result::Result<JsonRpcResponse, String> {
+    let timeout_secs = timeout_secs.max(1);
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let mut stream = stream.lock().await;
+
+    stream
+        .send_request(request)
+        .await
+        .map_err(|e| format!("发送请求失败: {}", e))?;
+
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(format!(
+                "等待 Agent '{}' 响应超时 ({}s)",
+                agent_id, timeout_secs
+            ));
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let value = match tokio::time::timeout(remaining, stream.read_json_value()).await {
+            Ok(Ok(value)) => value,
+            Ok(Err(e)) => return Err(format!("读取响应失败: {}", e)),
+            Err(_) => {
+                return Err(format!(
+                    "等待 Agent '{}' 响应超时 ({}s)",
+                    agent_id, timeout_secs
+                ));
+            }
+        };
+
+        if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
+            handle_inbound_agent_request(&registry, agent_id, method, value.get("params")).await;
+            continue;
+        }
+
+        let response: JsonRpcResponse =
+            serde_json::from_value(value).map_err(|e| format!("解析响应失败: {}", e))?;
+        if response.id == request.id {
+            return Ok(response);
+        }
+
+        eprintln!(
+            "🐝 [Orchestrator] 忽略来自 Agent '{}' 的非匹配响应 id={} (等待 id={})",
+            agent_id, response.id, request.id
+        );
+    }
+}
+
+async fn handle_inbound_agent_request(
+    registry: &Arc<TokioMutex<SwarmRegistry>>,
+    fallback_agent_id: &str,
+    method: &str,
+    params: Option<&serde_json::Value>,
+) {
+    match method {
+        "heartbeat" => {
+            let agent_id = params
+                .and_then(|p| p.get("agent_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(fallback_agent_id);
+            let mut reg = registry.lock().await;
+            if !reg.heartbeat(agent_id) {
+                eprintln!("🐝 [Orchestrator] 收到未知 Agent '{}' 的心跳", agent_id);
+            }
+        }
+        "unregister" => {
+            let agent_id = params
+                .and_then(|p| p.get("agent_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(fallback_agent_id);
+            let mut reg = registry.lock().await;
+            reg.unregister(agent_id);
+        }
+        other => {
+            eprintln!(
+                "🐝 [Orchestrator] 等待任务响应时收到 Agent '{}' 的请求 '{}'，已忽略",
+                fallback_agent_id, other
+            );
+        }
+    }
+}
+
 impl Drop for SwarmOrchestrator {
     fn drop(&mut self) {
         // 清理 socket 文件
-        let path = self.socket_path.clone();
-        tokio::task::block_in_place(|| {
-            std::fs::remove_file(&path).ok();
-        });
+        let _ = std::fs::remove_file(&self.socket_path);
     }
 }

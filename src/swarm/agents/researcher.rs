@@ -18,8 +18,11 @@ use serde_json::json;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::interval;
 
+use crate::swarm::agents::common::{send_task_result, task_failed, task_success};
 use crate::swarm::heartbeat::create_heartbeat_request;
+use crate::swarm::registry::AgentType;
 use crate::swarm::rpc::JsonRpcRequest;
+use crate::swarm::task::SwarmTask;
 use crate::swarm::transport::{UdsClient, default_socket_path};
 
 // ============================================================
@@ -119,7 +122,7 @@ impl ResearcherAgent {
         let socket = orchestrator_socket.unwrap_or_else(default_socket_path);
         eprintln!("🔬 Researcher Agent 连接到 Orchestrator @ {:?}", socket);
 
-        let client = UdsClient::connect(&socket, &self.agent_id)
+        let client = UdsClient::connect_as(&socket, &self.agent_id, AgentType::Researcher)
             .await
             .context(format!("无法连接到 Orchestrator (socket: {:?})", socket))?;
 
@@ -178,6 +181,76 @@ impl ResearcherAgent {
     /// 处理收到的请求
     async fn handle_request(&mut self, request: JsonRpcRequest) {
         match request.method.as_str() {
+            "dispatch_task" => {
+                let task_result = match SwarmTask::from_rpc_params(request.params.as_ref()) {
+                    Ok(task) => {
+                        let params = task.params();
+                        let operation = params
+                            .get("operation")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let result = match operation {
+                            "read_file" | "read" => {
+                                let file_path = params
+                                    .get("file_path")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                self.read_file(file_path).await
+                            }
+                            "search_code" | "search" => {
+                                let pattern =
+                                    params.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+                                let include_ext = params
+                                    .get("include_ext")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                self.search_code(pattern, include_ext).await
+                            }
+                            "generate_report" | "report" => {
+                                let title = params
+                                    .get("title")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("技术调研报告");
+                                let content =
+                                    params.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                                let output_path = params
+                                    .get("output_path")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                self.generate_report(title, content, output_path).await
+                            }
+                            "analyze_dependencies" | "dependencies" => {
+                                let dep_file = params
+                                    .get("dep_file")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("Cargo.toml");
+                                self.analyze_dependencies(dep_file).await
+                            }
+                            "compare_approaches" | "compare" => {
+                                let approaches = params
+                                    .get("approaches")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                let criteria = params
+                                    .get("criteria")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                self.compare_approaches(approaches, criteria).await
+                            }
+                            _ => {
+                                let include_patterns = params
+                                    .get("include_patterns")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                self.analyze_codebase(include_patterns).await
+                            }
+                        };
+                        task_success(&task, result)
+                    }
+                    Err(err) => task_failed("unknown", err),
+                };
+                send_task_result(&self.client, &request.id, task_result).await;
+            }
             "read_file" => {
                 let file_path = request
                     .params
@@ -412,10 +485,17 @@ impl ResearcherAgent {
         // 使用 find 命令获取文件列表
         let mut cmd = tokio::process::Command::new("find");
         cmd.arg(&path)
-            .arg("-type").arg("f")
-            .arg("-not").arg("-path").arg("*/target/*")
-            .arg("-not").arg("-path").arg("*/.git/*")
-            .arg("-not").arg("-path").arg("*/node_modules/*");
+            .arg("-type")
+            .arg("f")
+            .arg("-not")
+            .arg("-path")
+            .arg("*/target/*")
+            .arg("-not")
+            .arg("-path")
+            .arg("*/.git/*")
+            .arg("-not")
+            .arg("-path")
+            .arg("*/node_modules/*");
 
         if !include_patterns.is_empty() {
             cmd.arg("|").arg("grep").arg("-E").arg(&include_patterns);
@@ -427,8 +507,10 @@ impl ResearcherAgent {
                 let files: Vec<&str> = stdout.lines().collect();
 
                 // 按扩展名分组统计
-                let mut ext_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-                let mut top_dirs: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                let mut ext_count: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+                let mut top_dirs: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
 
                 for file in &files {
                     if let Some(ext) = PathBuf::from(file).extension() {
@@ -436,7 +518,9 @@ impl ResearcherAgent {
                         *ext_count.entry(ext_str).or_insert(0) += 1;
                     }
 
-                    let rel = file.strip_prefix(path.to_string_lossy().as_ref()).unwrap_or(file);
+                    let rel = file
+                        .strip_prefix(path.to_string_lossy().as_ref())
+                        .unwrap_or(file);
                     let trimmed = rel.trim_start_matches('/');
                     if let Some(first) = trimmed.split('/').next() {
                         if !first.is_empty() {
@@ -464,7 +548,12 @@ impl ResearcherAgent {
     }
 
     /// 生成调研报告（写入 markdown 文件）
-    async fn generate_report(&self, title: &str, content: &str, output_path: &str) -> serde_json::Value {
+    async fn generate_report(
+        &self,
+        title: &str,
+        content: &str,
+        output_path: &str,
+    ) -> serde_json::Value {
         if content.is_empty() {
             return json!({
                 "success": false,
@@ -473,10 +562,9 @@ impl ResearcherAgent {
         }
 
         let path = if output_path.is_empty() {
-            self.project_path.join("docs/analyses").join(format!(
-                "research-{}.md",
-                now_compact()
-            ))
+            self.project_path
+                .join("docs/analyses")
+                .join(format!("research-{}.md", now_compact()))
         } else {
             self.project_path.join(output_path)
         };

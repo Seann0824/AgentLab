@@ -2,6 +2,7 @@
 // Agent 角色实现模块入口
 
 pub mod coder;
+pub mod common;
 pub mod general;
 pub mod memory;
 pub mod researcher;

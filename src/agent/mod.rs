@@ -5,6 +5,7 @@
 mod builder;
 mod config;
 mod default_tools;
+pub mod events;
 mod goal_command;
 mod goal_loop;
 mod handle;
@@ -33,7 +34,6 @@ use crate::goal::GoalRegistry;
 use crate::memory::MemoryManager;
 use crate::model::ModelManager;
 use crate::session::SessionManager;
-use crate::swarm::orchestrator::SwarmOrchestrator;
 use crate::swarm::registry::SwarmRegistry;
 use crate::task::TaskManager;
 use crate::tools::ToolManager;
@@ -51,6 +51,4 @@ pub struct Agent {
     pub(super) command_registry: CommandRegistry,
     pub(super) current_dir: String,
     pub(super) swarm_registry: Option<SwarmRegistry>,
-    /// Swarm Orchestrator 共享引用（用于派发任务到子 Agent）
-    pub(super) swarm_orchestrator: Option<Arc<Mutex<SwarmOrchestrator>>>,
 }

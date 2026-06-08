@@ -11,11 +11,14 @@ use super::types::{
     Condition, ConditionType, ExecutionMode, StepResult, StepStatus, Workflow, WorkflowState,
     WorkflowStatus, WorkflowStep,
 };
+use crate::swarm::orchestrator::SwarmOrchestrator;
 use crate::swarm::pool::AgentPoolManager;
 
 pub struct WorkflowEngine {
     /// Agent 池管理器
     pool_manager: Arc<TokioMutex<AgentPoolManager>>,
+    /// 可选 Orchestrator，用于真实派发 Workflow 步骤。
+    orchestrator: Option<Arc<TokioMutex<SwarmOrchestrator>>>,
     /// 活跃的 Workflow 状态
     active_workflows: Arc<TokioMutex<HashMap<String, WorkflowState>>>,
 }
@@ -25,8 +28,15 @@ impl WorkflowEngine {
     pub fn new(pool_manager: Arc<TokioMutex<AgentPoolManager>>) -> Self {
         Self {
             pool_manager,
+            orchestrator: None,
             active_workflows: Arc::new(TokioMutex::new(HashMap::new())),
         }
+    }
+
+    /// 注入 SwarmOrchestrator，使 Workflow 步骤通过真实 dispatch_task 执行。
+    pub fn with_orchestrator(mut self, orchestrator: Arc<TokioMutex<SwarmOrchestrator>>) -> Self {
+        self.orchestrator = Some(orchestrator);
+        self
     }
 
     /// 执行 Workflow
@@ -110,14 +120,28 @@ impl WorkflowEngine {
                     }
 
                     let pool_mgr = self.pool_manager.clone();
+                    let orchestrator = self.orchestrator.clone();
                     let task_desc = step.task.clone();
                     let step_name = step.name.clone();
+                    let timeout_seconds = if step.timeout_seconds == 0 {
+                        workflow.timeout_seconds
+                    } else {
+                        step.timeout_seconds
+                    };
+                    let retry_count = step.retry_count;
 
                     // 启动并行执行
-                    let handle =
-                        tokio::spawn(
-                            async move { execute_step(pool_mgr, &task_desc, step_name).await },
-                        );
+                    let handle = tokio::spawn(async move {
+                        execute_step(
+                            pool_mgr,
+                            orchestrator,
+                            &task_desc,
+                            step_name,
+                            timeout_seconds,
+                            retry_count,
+                        )
+                        .await
+                    });
                     handles.push((step_id.clone(), handle, step.name.clone()));
                 }
             }

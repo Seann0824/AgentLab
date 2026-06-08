@@ -11,6 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{UnixListener, UnixStream};
 
+use super::registry::{AgentRegistration, AgentType};
 use super::rpc::{JsonRpcRequest, JsonRpcResponse};
 
 // ===================================================================
@@ -36,6 +37,8 @@ pub fn default_socket_path() -> PathBuf {
 #[derive(Debug, Clone)]
 pub struct UdsConnection {
     pub agent_id: String,
+    pub agent_type: AgentType,
+    pub protocol_version: u32,
     pub connected_at: SystemTime,
 }
 
@@ -82,30 +85,36 @@ impl UdsServer {
     }
 
     /// 接受一个新的 Agent 连接
-    pub async fn accept(&mut self) -> Result<(String, UdsStream)> {
+    pub async fn accept(&mut self) -> Result<(AgentRegistration, UdsStream)> {
         let (stream, _addr) = self.listener.accept().await?;
         let (reader, writer) = stream.into_split();
-        let mut stream = UdsStream { reader, writer };
+        let mut stream = UdsStream {
+            buf_reader: BufReader::new(reader),
+            writer,
+        };
 
         // 等待 Agent 发送注册消息
         let register_msg = stream.read_request().await?;
-        let agent_id = register_msg
-            .params
-            .as_ref()
-            .and_then(|p| p.get("agent_id"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("unknown-{}", self.connections.len()));
+        let registration = AgentRegistration::from_register_params(
+            register_msg.params.as_ref(),
+            self.connections.len(),
+        );
 
         let conn = UdsConnection {
-            agent_id: agent_id.clone(),
+            agent_id: registration.agent_id.clone(),
+            agent_type: registration.agent_type.clone(),
+            protocol_version: registration.protocol_version,
             connected_at: SystemTime::now(),
         };
-        self.connections.insert(agent_id.clone(), conn);
+        self.connections.insert(registration.agent_id.clone(), conn);
 
-        eprintln!("🐝 [Swarm] Agent '{}' connected", agent_id);
+        eprintln!(
+            "🐝 [Swarm] Agent '{}' ({}) connected",
+            registration.agent_id,
+            registration.agent_type.as_str()
+        );
 
-        Ok((agent_id, stream))
+        Ok((registration, stream))
     }
 
     /// 获取已连接的 Agent 数量
@@ -146,12 +155,25 @@ pub struct UdsClient {
 impl UdsClient {
     /// 连接到指定的 UDS 服务器
     pub async fn connect(path: impl AsRef<Path>, agent_id: impl Into<String>) -> Result<Self> {
+        let agent_id = agent_id.into();
+        let agent_type =
+            AgentType::from_str(agent_id.split(['-', '_']).next().unwrap_or(&agent_id));
+        Self::connect_as(path, agent_id, agent_type).await
+    }
+
+    /// 使用完整 Agent 类型注册到指定 UDS 服务器
+    pub async fn connect_as(
+        path: impl AsRef<Path>,
+        agent_id: impl Into<String>,
+        agent_type: AgentType,
+    ) -> Result<Self> {
         let stream = UnixStream::connect(path.as_ref())
             .await
             .context(format!("Failed to connect to UDS at {:?}", path.as_ref()))?;
 
         let (reader, writer) = stream.into_split();
         let agent_id = agent_id.into();
+        let registration = AgentRegistration::new(agent_id.clone(), agent_type);
 
         let mut client = Self {
             buf_reader: BufReader::new(reader),
@@ -160,12 +182,8 @@ impl UdsClient {
         };
 
         // 发送注册消息
-        let register_req = JsonRpcRequest::new(
-            "register",
-            Some(serde_json::json!({
-                "agent_id": client.agent_id,
-            })),
-        );
+        let register_req =
+            JsonRpcRequest::new("register", Some(serde_json::to_value(&registration)?));
         client.send_request(&register_req).await?;
 
         eprintln!(
@@ -226,20 +244,25 @@ impl UdsClient {
 
 /// UDS 流 — 用于处理已建立的连接
 pub struct UdsStream {
-    reader: OwnedReadHalf,
+    buf_reader: BufReader<OwnedReadHalf>,
     writer: OwnedWriteHalf,
 }
 
 impl UdsStream {
-    /// 读取一个 JSON-RPC 请求（按行分割）
-    pub async fn read_request(&mut self) -> Result<JsonRpcRequest> {
-        let mut reader = BufReader::new(&mut self.reader);
+    /// 读取一个原始 JSON-RPC 消息值（请求或响应）
+    pub async fn read_json_value(&mut self) -> Result<serde_json::Value> {
         let mut line = String::new();
-        reader.read_line(&mut line).await?;
+        self.buf_reader.read_line(&mut line).await?;
         if line.is_empty() {
             anyhow::bail!("Connection closed");
         }
-        let req: JsonRpcRequest = serde_json::from_str(&line.trim())?;
+        let value: serde_json::Value = serde_json::from_str(line.trim())?;
+        Ok(value)
+    }
+
+    /// 读取一个 JSON-RPC 请求（按行分割）
+    pub async fn read_request(&mut self) -> Result<JsonRpcRequest> {
+        let req: JsonRpcRequest = serde_json::from_value(self.read_json_value().await?)?;
         Ok(req)
     }
 
@@ -254,13 +277,7 @@ impl UdsStream {
 
     /// 读取一个 JSON-RPC 响应
     pub async fn read_response(&mut self) -> Result<JsonRpcResponse> {
-        let mut reader = BufReader::new(&mut self.reader);
-        let mut line = String::new();
-        reader.read_line(&mut line).await?;
-        if line.is_empty() {
-            anyhow::bail!("Connection closed");
-        }
-        let resp: JsonRpcResponse = serde_json::from_str(&line.trim())?;
+        let resp: JsonRpcResponse = serde_json::from_value(self.read_json_value().await?)?;
         Ok(resp)
     }
 

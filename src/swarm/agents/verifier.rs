@@ -16,8 +16,11 @@ use serde_json::json;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::interval;
 
+use crate::swarm::agents::common::{send_task_result, task_failed, task_success};
 use crate::swarm::heartbeat::create_heartbeat_request;
+use crate::swarm::registry::AgentType;
 use crate::swarm::rpc::JsonRpcRequest;
+use crate::swarm::task::SwarmTask;
 use crate::swarm::transport::{UdsClient, default_socket_path};
 
 /// Verifier Agent — 代码验证 Agent
@@ -48,7 +51,7 @@ impl VerifierAgent {
         let socket = orchestrator_socket.unwrap_or_else(default_socket_path);
         eprintln!("✅ Verifier Agent 连接到 Orchestrator @ {:?}", socket);
 
-        let client = UdsClient::connect(&socket, &self.agent_id)
+        let client = UdsClient::connect_as(&socket, &self.agent_id, AgentType::Verifier)
             .await
             .context(format!("无法连接到 Orchestrator (socket: {:?})", socket))?;
 
@@ -107,6 +110,30 @@ impl VerifierAgent {
     /// 处理收到的请求
     async fn handle_request(&mut self, request: JsonRpcRequest) {
         match request.method.as_str() {
+            "dispatch_task" => {
+                let task_result = match SwarmTask::from_rpc_params(request.params.as_ref()) {
+                    Ok(task) => {
+                        let desc = task.description();
+                        let params = task.params();
+                        let lower = desc.to_lowercase();
+                        let result =
+                            if lower.contains("test") || params.get("test_filter").is_some() {
+                                let test_filter = params
+                                    .get("test_filter")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                eprintln!("✅ 结构化任务执行 cargo test (filter: {})", test_filter);
+                                self.run_cargo_test(test_filter).await
+                            } else {
+                                eprintln!("✅ 结构化任务执行 cargo check");
+                                self.run_cargo_check().await
+                            };
+                        task_success(&task, result)
+                    }
+                    Err(err) => task_failed("unknown", err),
+                };
+                send_task_result(&self.client, &request.id, task_result).await;
+            }
             "run_cargo_check" => {
                 eprintln!("✅ 执行 cargo check...");
                 let result = self.run_cargo_check().await;

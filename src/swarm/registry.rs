@@ -60,6 +60,167 @@ impl AgentType {
     }
 }
 
+/// Agent 能力清单 — 注册时上报给 Orchestrator，用于后续任务路由。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityManifest {
+    /// Agent 可处理的任务类型或 RPC 方法名
+    pub task_types: Vec<String>,
+    /// Agent 本地暴露的工具名
+    pub tools: Vec<String>,
+    /// 是否支持长任务/异步任务语义
+    pub supports_async_tasks: bool,
+}
+
+impl CapabilityManifest {
+    pub fn empty() -> Self {
+        Self {
+            task_types: Vec::new(),
+            tools: Vec::new(),
+            supports_async_tasks: false,
+        }
+    }
+
+    pub fn for_agent_type(agent_type: &AgentType) -> Self {
+        match agent_type {
+            AgentType::Memory => Self {
+                task_types: vec![
+                    "dispatch_task".to_string(),
+                    "memory_save".to_string(),
+                    "memory_search".to_string(),
+                    "memory_forget".to_string(),
+                    "memory_stats".to_string(),
+                ],
+                tools: vec!["memory".to_string()],
+                supports_async_tasks: false,
+            },
+            AgentType::Verifier => Self {
+                task_types: vec![
+                    "dispatch_task".to_string(),
+                    "run_cargo_check".to_string(),
+                    "run_cargo_test".to_string(),
+                ],
+                tools: vec!["cargo_check".to_string(), "cargo_test".to_string()],
+                supports_async_tasks: false,
+            },
+            AgentType::Coder => Self {
+                task_types: vec![
+                    "dispatch_task".to_string(),
+                    "read_file".to_string(),
+                    "edit_file".to_string(),
+                    "generate_code".to_string(),
+                    "review_code".to_string(),
+                ],
+                tools: vec![
+                    "read_file".to_string(),
+                    "edit_file".to_string(),
+                    "generate_code".to_string(),
+                    "review_code".to_string(),
+                ],
+                supports_async_tasks: false,
+            },
+            AgentType::Researcher => Self {
+                task_types: vec![
+                    "dispatch_task".to_string(),
+                    "read_file".to_string(),
+                    "search_code".to_string(),
+                    "analyze_codebase".to_string(),
+                    "generate_report".to_string(),
+                ],
+                tools: vec![
+                    "read_file".to_string(),
+                    "search_code".to_string(),
+                    "analyze_codebase".to_string(),
+                    "generate_report".to_string(),
+                ],
+                supports_async_tasks: false,
+            },
+            AgentType::General => Self {
+                task_types: vec!["dispatch_task".to_string(), "ping".to_string()],
+                tools: vec!["general".to_string()],
+                supports_async_tasks: false,
+            },
+            AgentType::Orchestrator => Self {
+                task_types: vec!["orchestrate".to_string(), "dispatch_task".to_string()],
+                tools: vec!["all".to_string()],
+                supports_async_tasks: true,
+            },
+            AgentType::Reader | AgentType::Custom(_) => Self::empty(),
+        }
+    }
+}
+
+impl Default for CapabilityManifest {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+/// Agent 注册握手载荷。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentRegistration {
+    pub agent_id: String,
+    pub agent_type: AgentType,
+    pub protocol_version: u32,
+    pub capabilities: CapabilityManifest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+impl AgentRegistration {
+    pub const CURRENT_PROTOCOL_VERSION: u32 = 1;
+
+    pub fn new(agent_id: impl Into<String>, agent_type: AgentType) -> Self {
+        let agent_type = agent_type;
+        Self {
+            agent_id: agent_id.into(),
+            capabilities: CapabilityManifest::for_agent_type(&agent_type),
+            agent_type,
+            protocol_version: Self::CURRENT_PROTOCOL_VERSION,
+            metadata: None,
+        }
+    }
+
+    pub fn from_register_params(params: Option<&serde_json::Value>, fallback_index: usize) -> Self {
+        let agent_id = params
+            .and_then(|p| p.get("agent_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("unknown-{}", fallback_index));
+
+        let agent_type = params
+            .and_then(|p| p.get("agent_type"))
+            .and_then(|v| v.as_str())
+            .map(AgentType::from_str)
+            .unwrap_or_else(|| infer_agent_type_from_id(&agent_id));
+
+        let protocol_version = params
+            .and_then(|p| p.get("protocol_version"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(Self::CURRENT_PROTOCOL_VERSION);
+
+        let capabilities = params
+            .and_then(|p| p.get("capabilities"))
+            .and_then(|v| serde_json::from_value::<CapabilityManifest>(v.clone()).ok())
+            .unwrap_or_else(|| CapabilityManifest::for_agent_type(&agent_type));
+
+        let metadata = params.and_then(|p| p.get("metadata")).cloned();
+
+        Self {
+            agent_id,
+            agent_type,
+            protocol_version,
+            capabilities,
+            metadata,
+        }
+    }
+}
+
+fn infer_agent_type_from_id(agent_id: &str) -> AgentType {
+    let prefix = agent_id.split(['-', '_']).next().unwrap_or(agent_id);
+    AgentType::from_str(prefix)
+}
+
 /// Agent 状态
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentStatus {
@@ -102,6 +263,10 @@ pub struct AgentInfo {
     /// Agent 元数据（可选扩展）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+    /// 注册协议版本
+    pub protocol_version: u32,
+    /// Agent 能力清单
+    pub capabilities: CapabilityManifest,
 }
 
 // ===================================================================
@@ -133,22 +298,29 @@ impl SwarmRegistry {
 
     /// 注册 Agent
     pub fn register(&mut self, agent_id: String, agent_type: AgentType) -> AgentInfo {
+        self.register_agent(AgentRegistration::new(agent_id, agent_type))
+    }
+
+    /// 使用完整握手载荷注册 Agent
+    pub fn register_agent(&mut self, registration: AgentRegistration) -> AgentInfo {
         let now = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
         let info = AgentInfo {
-            agent_id: agent_id.clone(),
-            agent_type,
+            agent_id: registration.agent_id.clone(),
+            agent_type: registration.agent_type,
             status: AgentStatus::Online,
             hostname: hostname(),
             connected_at: now,
             last_heartbeat: now,
-            metadata: None,
+            metadata: registration.metadata,
+            protocol_version: registration.protocol_version,
+            capabilities: registration.capabilities,
         };
 
-        self.agents.insert(agent_id, info.clone());
+        self.agents.insert(info.agent_id.clone(), info.clone());
         info
     }
 

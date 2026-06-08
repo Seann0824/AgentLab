@@ -17,7 +17,9 @@ pub mod workflow;
 // 重新导出核心类型
 pub use heartbeat::HeartbeatMonitor;
 pub use orchestrator::SwarmOrchestrator;
-pub use registry::{AgentInfo, AgentStatus, AgentType, SwarmRegistry};
+pub use registry::{
+    AgentInfo, AgentRegistration, AgentStatus, AgentType, CapabilityManifest, SwarmRegistry,
+};
 pub use rpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, SwarmMethod};
-pub use task::{SwarmTask, TaskResult, TaskStatus, TaskPriority};
+pub use task::{SwarmTask, TaskPriority, TaskResult, TaskStatus};
 pub use transport::{UdsClient, UdsServer};

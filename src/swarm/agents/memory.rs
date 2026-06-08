@@ -18,8 +18,11 @@ use tokio::time::interval;
 
 use crate::memory::manager::MemoryManager;
 use crate::memory::types::MemorySource;
+use crate::swarm::agents::common::{send_task_result, task_failed, task_success};
 use crate::swarm::heartbeat::create_heartbeat_request;
+use crate::swarm::registry::AgentType;
 use crate::swarm::rpc::JsonRpcRequest;
+use crate::swarm::task::SwarmTask;
 use crate::swarm::transport::{UdsClient, default_socket_path};
 
 /// Memory Agent — 记忆管理 Agent
@@ -50,7 +53,7 @@ impl MemoryAgent {
         let socket = orchestrator_socket.unwrap_or_else(default_socket_path);
         eprintln!("🧠 Memory Agent 连接到 Orchestrator @ {:?}", socket);
 
-        let client = UdsClient::connect(&socket, &self.agent_id)
+        let client = UdsClient::connect_as(&socket, &self.agent_id, AgentType::Memory)
             .await
             .context(format!("无法连接到 Orchestrator (socket: {:?})", socket))?;
 
@@ -185,6 +188,113 @@ impl MemoryAgent {
     /// 处理收到的请求
     async fn handle_request(&self, request: JsonRpcRequest) {
         match request.method.as_str() {
+            "dispatch_task" => {
+                let task_result = match SwarmTask::from_rpc_params(request.params.as_ref()) {
+                    Ok(task) => {
+                        let params = task.params();
+                        let operation = params
+                            .get("operation")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let result = match operation {
+                            "save" | "memory_save" => {
+                                let content = params
+                                    .get("content")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from)
+                                    .unwrap_or_else(|| task.description());
+                                let importance = params
+                                    .get("importance")
+                                    .and_then(|v| v.as_f64())
+                                    .unwrap_or(0.5)
+                                    as f32;
+                                let tags: Vec<String> = params
+                                    .get("tags")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|v| v.as_str().map(String::from))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                let mut mgr = self.memory_manager.lock().await;
+                                match mgr
+                                    .save(&content, &tags, MemorySource::Manual, importance)
+                                    .await
+                                {
+                                    Ok(id) => serde_json::json!({
+                                        "success": true,
+                                        "memory_id": id,
+                                        "content": content,
+                                    }),
+                                    Err(e) => serde_json::json!({
+                                        "success": false,
+                                        "error": e.to_string(),
+                                    }),
+                                }
+                            }
+                            "search" | "memory_search" => {
+                                let query = params
+                                    .get("query")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from)
+                                    .unwrap_or_else(|| task.description());
+                                let top_k =
+                                    params.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5)
+                                        as usize;
+                                let mgr = self.memory_manager.lock().await;
+                                match mgr.search_similar(&query, top_k).await {
+                                    Ok(results) => {
+                                        let memories: Vec<serde_json::Value> = results
+                                            .iter()
+                                            .map(|m| {
+                                                serde_json::json!({
+                                                    "id": m.record.id,
+                                                    "content": m.record.content,
+                                                    "importance": m.record.importance,
+                                                    "tags": m.record.tags,
+                                                    "score": m.score,
+                                                    "source": m.record.source,
+                                                })
+                                            })
+                                            .collect();
+                                        serde_json::json!({
+                                            "success": true,
+                                            "query": query,
+                                            "count": memories.len(),
+                                            "results": memories,
+                                        })
+                                    }
+                                    Err(e) => serde_json::json!({
+                                        "success": false,
+                                        "error": e.to_string(),
+                                    }),
+                                }
+                            }
+                            "forget" | "memory_forget" => {
+                                let memory_id =
+                                    params.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                                let mut mgr = self.memory_manager.lock().await;
+                                let removed = mgr.forget(memory_id);
+                                serde_json::json!({
+                                    "success": removed,
+                                    "memory_id": memory_id,
+                                })
+                            }
+                            _ => {
+                                let mgr = self.memory_manager.lock().await;
+                                serde_json::json!({
+                                    "success": true,
+                                    "stats": mgr.stats(),
+                                })
+                            }
+                        };
+                        task_success(&task, result)
+                    }
+                    Err(err) => task_failed("unknown", err),
+                };
+                send_task_result(&self.client, &request.id, task_result).await;
+            }
             "memory_save" => {
                 let content = request
                     .params

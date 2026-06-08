@@ -11,8 +11,8 @@
 use std::sync::Arc;
 
 use tokio::sync::Mutex as TokioMutex;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::swarm::orchestrator::SwarmOrchestrator;
 use crate::swarm::registry::{AgentType, SwarmRegistry};
@@ -71,7 +71,10 @@ impl Tool for AgentTaskTool {
 
     fn execute(&self, args: serde_json::Value) -> ToolStream {
         let task_description = args["task_description"].as_str().unwrap_or("").to_string();
-        let task_params = args.get("task_params").cloned().unwrap_or(serde_json::json!({}));
+        let task_params = args
+            .get("task_params")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
         let timeout_secs = args["timeout_seconds"].as_u64().unwrap_or(120);
         let agent_type_str = self.agent_type.as_str().to_string();
 

@@ -72,6 +72,91 @@ impl SwarmTask {
         self
     }
 
+    /// 设置最大重试次数
+    pub fn with_max_retries(mut self, retries: u32) -> Self {
+        self.max_retries = retries;
+        self
+    }
+
+    /// 设置执行 Agent ID
+    pub fn with_agent_id(mut self, agent_id: impl Into<String>) -> Self {
+        self.agent_id = Some(agent_id.into());
+        self
+    }
+
+    /// 从 JSON-RPC params 中解析任务，兼容旧的 {task, params} 形态。
+    pub fn from_rpc_params(params: Option<&serde_json::Value>) -> Result<Self, String> {
+        let Some(params) = params else {
+            return Err("dispatch_task params is required".to_string());
+        };
+
+        if let Some(task_value) = params.get("task") {
+            if task_value.is_object() {
+                return serde_json::from_value::<SwarmTask>(task_value.clone())
+                    .map_err(|e| format!("invalid SwarmTask: {}", e));
+            }
+        }
+
+        let task_description = params
+            .get("task")
+            .or_else(|| params.get("task_description"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if task_description.trim().is_empty() {
+            return Err("task description is empty".to_string());
+        }
+
+        let task_params = params
+            .get("params")
+            .or_else(|| params.get("task_params"))
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let target = params
+            .get("agent_type")
+            .or_else(|| params.get("target_agent_type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("general");
+        let timeout_seconds = params
+            .get("timeout_seconds")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(60);
+
+        Ok(Self::new(
+            "dispatch_task",
+            serde_json::json!({
+                "task_description": task_description,
+                "task_params": task_params,
+            }),
+        )
+        .with_target(target)
+        .with_timeout(timeout_seconds))
+    }
+
+    /// 生成 JSON-RPC params 载荷。
+    pub fn to_rpc_params(&self) -> serde_json::Value {
+        serde_json::json!({ "task": self })
+    }
+
+    /// 任务描述文本。
+    pub fn description(&self) -> String {
+        self.payload
+            .get("task_description")
+            .or_else(|| self.payload.get("task"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// 任务参数 JSON。
+    pub fn params(&self) -> serde_json::Value {
+        self.payload
+            .get("task_params")
+            .or_else(|| self.payload.get("params"))
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}))
+    }
+
     /// 生成任务 ID
     fn generate_id() -> String {
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -135,6 +220,7 @@ impl TaskResult {
 
 /// 任务状态
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     /// 等待执行
     Pending,
@@ -165,6 +251,7 @@ impl TaskStatus {
 
 /// 任务优先级
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskPriority {
     Low,
     Normal,
@@ -215,10 +302,7 @@ mod tests {
 
     #[test]
     fn test_task_serialization_roundtrip() {
-        let task = SwarmTask::new(
-            "test",
-            serde_json::json!({ "key": "value" }),
-        );
+        let task = SwarmTask::new("test", serde_json::json!({ "key": "value" }));
         let json = serde_json::to_string(&task).unwrap();
         let deserialized: SwarmTask = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.task_type, task.task_type);

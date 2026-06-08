@@ -11,6 +11,14 @@ pub enum ToolEvent {
     Err(String),
 }
 
+/// 工具契约快照 — 可用于能力发现、审计和自我迭代前后的对比。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolContract {
+    pub name: String,
+    pub description: String,
+    pub parameters_schema: serde_json::Value,
+}
+
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
