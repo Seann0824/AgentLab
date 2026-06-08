@@ -183,30 +183,32 @@ impl VectorStore {
             .entries
             .iter()
             .filter_map(|entry| {
-                self.vectors
-                    .get(&entry.id)
-                    .map(|vec| {
-                        let score = cosine_similarity(query_vector, vec);
-                        SearchResult {
-                            record: VectorRecord {
-                                id: entry.id.clone(),
-                                content: entry.content.clone(),
-                                vector: vec.clone(),
-                                tags: entry.tags.clone(),
-                                importance: entry.importance,
-                                source: entry.source.clone(),
-                                created_at: entry.created_at.clone(),
-                                accessed_at: entry.accessed_at.clone(),
-                                access_count: entry.access_count,
-                            },
-                            score,
-                        }
-                    })
+                self.vectors.get(&entry.id).map(|vec| {
+                    let score = cosine_similarity(query_vector, vec);
+                    SearchResult {
+                        record: VectorRecord {
+                            id: entry.id.clone(),
+                            content: entry.content.clone(),
+                            vector: vec.clone(),
+                            tags: entry.tags.clone(),
+                            importance: entry.importance,
+                            source: entry.source.clone(),
+                            created_at: entry.created_at.clone(),
+                            accessed_at: entry.accessed_at.clone(),
+                            access_count: entry.access_count,
+                        },
+                        score,
+                    }
+                })
             })
             .collect();
 
         // Sort by score descending
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Apply importance weighting for final score: similarity * 0.7 + importance * 0.3
         for r in &mut results {
@@ -215,7 +217,11 @@ impl VectorStore {
         }
 
         // Re-sort after importance weighting
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         results.truncate(top_k);
         results
@@ -233,43 +239,39 @@ impl VectorStore {
         }
 
         // First filter by tags, then search
-        let tag_set: std::collections::HashSet<&str> =
-            tags.iter().map(|t| t.as_str()).collect();
+        let tag_set: std::collections::HashSet<&str> = tags.iter().map(|t| t.as_str()).collect();
 
         let mut results: Vec<SearchResult> = self
             .index
             .entries
             .iter()
-            .filter(|entry| {
-                entry
-                    .tags
-                    .iter()
-                    .any(|t| tag_set.contains(t.as_str()))
-            })
+            .filter(|entry| entry.tags.iter().any(|t| tag_set.contains(t.as_str())))
             .filter_map(|entry| {
-                self.vectors
-                    .get(&entry.id)
-                    .map(|vec| {
-                        let score = cosine_similarity(query_vector, vec);
-                        SearchResult {
-                            record: VectorRecord {
-                                id: entry.id.clone(),
-                                content: entry.content.clone(),
-                                vector: vec.clone(),
-                                tags: entry.tags.clone(),
-                                importance: entry.importance,
-                                source: entry.source.clone(),
-                                created_at: entry.created_at.clone(),
-                                accessed_at: entry.accessed_at.clone(),
-                                access_count: entry.access_count,
-                            },
-                            score,
-                        }
-                    })
+                self.vectors.get(&entry.id).map(|vec| {
+                    let score = cosine_similarity(query_vector, vec);
+                    SearchResult {
+                        record: VectorRecord {
+                            id: entry.id.clone(),
+                            content: entry.content.clone(),
+                            vector: vec.clone(),
+                            tags: entry.tags.clone(),
+                            importance: entry.importance,
+                            source: entry.source.clone(),
+                            created_at: entry.created_at.clone(),
+                            accessed_at: entry.accessed_at.clone(),
+                            access_count: entry.access_count,
+                        },
+                        score,
+                    }
+                })
             })
             .collect();
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(top_k);
         results
     }
@@ -342,7 +344,11 @@ impl VectorStore {
     /// 列出所有条目（按重要性降序）
     pub fn list_entries(&self, limit: usize) -> Vec<IndexEntry> {
         let mut entries = self.index.entries.clone();
-        entries.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
+        entries.sort_by(|a, b| {
+            b.importance
+                .partial_cmp(&a.importance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         entries.truncate(limit);
         entries
     }
@@ -386,9 +392,30 @@ mod tests {
     fn test_insert_and_search() {
         let (mut store, dir) = create_test_store();
 
-        store.insert(make_record("1", "rust programming", vec![1.0, 0.0, 0.0, 0.0], 0.8)).unwrap();
-        store.insert(make_record("2", "python data science", vec![0.0, 1.0, 0.0, 0.0], 0.6)).unwrap();
-        store.insert(make_record("3", "javascript web", vec![0.0, 0.0, 1.0, 0.0], 0.5)).unwrap();
+        store
+            .insert(make_record(
+                "1",
+                "rust programming",
+                vec![1.0, 0.0, 0.0, 0.0],
+                0.8,
+            ))
+            .unwrap();
+        store
+            .insert(make_record(
+                "2",
+                "python data science",
+                vec![0.0, 1.0, 0.0, 0.0],
+                0.6,
+            ))
+            .unwrap();
+        store
+            .insert(make_record(
+                "3",
+                "javascript web",
+                vec![0.0, 0.0, 1.0, 0.0],
+                0.5,
+            ))
+            .unwrap();
 
         // Search for rust-related
         let results = store.search(&[1.0, 0.0, 0.0, 0.0], 2);
@@ -402,7 +429,9 @@ mod tests {
     #[test]
     fn test_delete() {
         let (mut store, dir) = create_test_store();
-        store.insert(make_record("1", "test", vec![1.0, 0.0, 0.0, 0.0], 0.5)).unwrap();
+        store
+            .insert(make_record("1", "test", vec![1.0, 0.0, 0.0, 0.0], 0.5))
+            .unwrap();
         assert!(store.delete("1"));
         assert!(!store.delete("1"));
         assert!(store.search(&[1.0, 0.0, 0.0, 0.0], 10).is_empty());
@@ -412,8 +441,17 @@ mod tests {
     #[test]
     fn test_compact() {
         let (mut store, dir) = create_test_store();
-        store.insert(make_record("1", "important", vec![1.0, 0.0, 0.0, 0.0], 0.8)).unwrap();
-        store.insert(make_record("2", "unimportant", vec![0.0, 1.0, 0.0, 0.0], 0.2)).unwrap();
+        store
+            .insert(make_record("1", "important", vec![1.0, 0.0, 0.0, 0.0], 0.8))
+            .unwrap();
+        store
+            .insert(make_record(
+                "2",
+                "unimportant",
+                vec![0.0, 1.0, 0.0, 0.0],
+                0.2,
+            ))
+            .unwrap();
 
         let removed = store.compact(0.5);
         assert_eq!(removed, 1);
@@ -432,7 +470,14 @@ mod tests {
         // Write
         {
             let mut store = VectorStore::open(dir.clone(), 4).unwrap();
-            store.insert(make_record("1", "persistent data", vec![1.0, 0.0, 0.0, 0.0], 0.7)).unwrap();
+            store
+                .insert(make_record(
+                    "1",
+                    "persistent data",
+                    vec![1.0, 0.0, 0.0, 0.0],
+                    0.7,
+                ))
+                .unwrap();
             store.flush().unwrap();
         }
 

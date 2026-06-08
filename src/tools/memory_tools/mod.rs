@@ -63,7 +63,11 @@ impl Tool for MemorySaveTool {
         let content = args["content"].as_str().unwrap_or("").to_string();
         let tags: Vec<String> = args["tags"]
             .as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
         let importance = args["importance"].as_f64().unwrap_or(0.5) as f32;
 

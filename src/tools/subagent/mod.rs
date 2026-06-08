@@ -12,10 +12,10 @@
 // - 修改了上下文压缩逻辑，需要验证 token 管理正常
 // - 新增了功能，需要验证端到端流程
 
-use std::time::Duration;
 use std::process::Stdio;
+use std::time::Duration;
 
-use tokio::{process::Command, sync::mpsc, time, io::AsyncReadExt};
+use tokio::{io::AsyncReadExt, process::Command, sync::mpsc, time};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::tools::types::{Tool, ToolEvent, ToolStream};
@@ -68,12 +68,16 @@ impl Tool for SpawnAgent {
 
         tokio::spawn(async move {
             if task.trim().is_empty() {
-                let _ = tx.send(ToolEvent::Err("task description is empty".to_string())).await;
+                let _ = tx
+                    .send(ToolEvent::Err("task description is empty".to_string()))
+                    .await;
                 return;
             }
 
             // === Step 1: 编译 agent ===
-            let _ = tx.send(ToolEvent::Progress("📦 正在编译 agent...".to_string())).await;
+            let _ = tx
+                .send(ToolEvent::Progress("📦 正在编译 agent...".to_string()))
+                .await;
 
             let build_result = time::timeout(
                 Duration::from_secs(120), // 编译超时 2 分钟
@@ -82,30 +86,41 @@ impl Tool for SpawnAgent {
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .output(),
-            ).await;
+            )
+            .await;
 
             let build_output = match build_result {
                 Ok(Ok(output)) => output,
                 Ok(Err(e)) => {
-                    let _ = tx.send(ToolEvent::Err(format!("编译失败（启动错误）: {}", e))).await;
+                    let _ = tx
+                        .send(ToolEvent::Err(format!("编译失败（启动错误）: {}", e)))
+                        .await;
                     return;
                 }
                 Err(_) => {
-                    let _ = tx.send(ToolEvent::Err("编译超时（超过 120 秒）".to_string())).await;
+                    let _ = tx
+                        .send(ToolEvent::Err("编译超时（超过 120 秒）".to_string()))
+                        .await;
                     return;
                 }
             };
 
             if !build_output.status.success() {
                 let stderr = String::from_utf8_lossy(&build_output.stderr);
-                let _ = tx.send(ToolEvent::Err(format!(
-                    "编译失败:\n{}",
-                    stderr.chars().take(2000).collect::<String>()
-                ))).await;
+                let _ = tx
+                    .send(ToolEvent::Err(format!(
+                        "编译失败:\n{}",
+                        stderr.chars().take(2000).collect::<String>()
+                    )))
+                    .await;
                 return;
             }
 
-            let _ = tx.send(ToolEvent::Progress("✅ 编译成功，正在派生子 agent...".to_string())).await;
+            let _ = tx
+                .send(ToolEvent::Progress(
+                    "✅ 编译成功，正在派生子 agent...".to_string(),
+                ))
+                .await;
 
             // === Step 2: 启动子 agent 进程 ===
             let binary_path = if cfg!(debug_assertions) {
@@ -124,7 +139,9 @@ impl Tool for SpawnAgent {
             {
                 Ok(child) => child,
                 Err(e) => {
-                    let _ = tx.send(ToolEvent::Err(format!("无法启动子 agent: {}", e))).await;
+                    let _ = tx
+                        .send(ToolEvent::Err(format!("无法启动子 agent: {}", e)))
+                        .await;
                     return;
                 }
             };
@@ -134,7 +151,9 @@ impl Tool for SpawnAgent {
             let child_pid = match child.id() {
                 Some(pid) => pid,
                 None => {
-                    let _ = tx.send(ToolEvent::Err("无法获取子进程 PID".to_string())).await;
+                    let _ = tx
+                        .send(ToolEvent::Err("无法获取子进程 PID".to_string()))
+                        .await;
                     return;
                 }
             };
@@ -154,20 +173,26 @@ impl Tool for SpawnAgent {
                         let mut buf = String::new();
                         let _ = out.read_to_string(&mut buf).await;
                         buf
-                    } else { String::new() };
+                    } else {
+                        String::new()
+                    };
 
                     let stderr = if let Some(mut err) = child_stderr {
                         let mut buf = String::new();
                         let _ = err.read_to_string(&mut buf).await;
                         buf
-                    } else { String::new() };
+                    } else {
+                        String::new()
+                    };
 
                     let exit_code = status.code().unwrap_or(-1);
                     let success = status.success();
                     (stdout, stderr, exit_code, success)
                 }
                 Ok(Err(e)) => {
-                    let _ = tx.send(ToolEvent::Err(format!("子 agent 执行出错: {}", e))).await;
+                    let _ = tx
+                        .send(ToolEvent::Err(format!("子 agent 执行出错: {}", e)))
+                        .await;
                     return;
                 }
                 Err(_) => {
@@ -180,11 +205,15 @@ impl Tool for SpawnAgent {
                         let mut buf = String::new();
                         let _ = out.read_to_string(&mut buf).await;
                         buf
-                    } else { String::new() };
-                    let _ = tx.send(ToolEvent::Err(format!(
-                        "子 agent 执行超时（超过 {} 秒），已终止 (PID: {})\n部分输出:\n{}",
-                        timeout_secs, child_pid, stdout
-                    ))).await;
+                    } else {
+                        String::new()
+                    };
+                    let _ = tx
+                        .send(ToolEvent::Err(format!(
+                            "子 agent 执行超时（超过 {} 秒），已终止 (PID: {})\n部分输出:\n{}",
+                            timeout_secs, child_pid, stdout
+                        )))
+                        .await;
                     return;
                 }
             };
@@ -194,13 +223,15 @@ impl Tool for SpawnAgent {
                 exit_code,
                 stdout.len() + stderr.len(),
             );
-            let _ = tx.send(ToolEvent::Done(serde_json::json!({
-                "exit_code": exit_code,
-                "success": success,
-                "stdout": stdout,
-                "stderr": stderr,
-                "summary": summary,
-            }))).await;
+            let _ = tx
+                .send(ToolEvent::Done(serde_json::json!({
+                    "exit_code": exit_code,
+                    "success": success,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "summary": summary,
+                })))
+                .await;
         });
 
         Box::pin(ReceiverStream::new(rx))

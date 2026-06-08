@@ -466,3 +466,18 @@ Goal 驱动的自动循环中有 3 个地方会注入目标消息到上下文：
 - Memory Agent 有完整的自动提取/合并/清理逻辑
 - General Agent + Verifier Agent 可编译
 - Workflow 定义和执行引擎可编译
+# 修复 AI 忘记调用 `/goal complete` 导致无限循环的问题
+
+## 目标
+增强 Goal 完成检测机制，当 AI 完成任务但忘记显式输出 `/goal complete` 时，系统能自动检测并标记完成，避免无限循环。
+
+## 步骤
+- [ ] 1. 添加 `auto_detect_goal_completion` 函数，检测 PLAN.md 步骤和 AI 回复中的完成信号
+- [ ] 2. 在主循环中集成自动检测逻辑（在 extract_goal_signal 检查之后作为 fallback）
+- [ ] 3. 编译验证 + 派生子 agent 端到端测试
+- [ ] 4. 总结
+
+## 验证标准
+- `cargo check` 通过
+- 当 AI 回复包含"已完成"等关键词但无 `/goal complete` 时，系统自动标记完成
+- 当 PLAN.md 所有步骤为 `[x]` 时，系统自动标记完成

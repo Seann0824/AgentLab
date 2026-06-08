@@ -168,7 +168,10 @@ impl UdsClient {
         );
         client.send_request(&register_req).await?;
 
-        eprintln!("🐝 [Swarm] Client '{}' connected to server", client.agent_id);
+        eprintln!(
+            "🐝 [Swarm] Client '{}' connected to server",
+            client.agent_id
+        );
 
         Ok(client)
     }

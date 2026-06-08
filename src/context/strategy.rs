@@ -35,7 +35,6 @@ fn find_turn_boundaries(messages: &[ContextMessage]) -> Vec<usize> {
         .collect()
 }
 
-
 /// ⭐ 删除孤立的 Tool 消息（没有对应的 Assistant tool_calls 前驱）
 ///
 /// 当压缩操作删除 Assistant(tool_calls) 但保留了对应的 Tool 响应时，
@@ -215,8 +214,7 @@ pub fn tool_call_pruning(
             ChatMessage::Tool { tool_call_id, .. } => tool_call_id.clone(),
             _ => String::new(),
         };
-        messages[action.index].message =
-            ChatMessage::tool(orig_tool_call_id, &action.new_content);
+        messages[action.index].message = ChatMessage::tool(orig_tool_call_id, &action.new_content);
         total_saved += action.saved_tokens;
     }
 
@@ -236,10 +234,7 @@ pub fn tool_call_pruning(
 /// 3. 最近 N 轮对话 → 保留
 ///
 /// 实现方式：构建新列表，而不是原地删除，避免索引管理问题。
-fn sliding_window_compress(
-    messages: &mut Vec<ContextMessage>,
-    max_turns: usize,
-) -> CompressResult {
+fn sliding_window_compress(messages: &mut Vec<ContextMessage>, max_turns: usize) -> CompressResult {
     let turns = count_turns(messages);
     if turns <= max_turns {
         return CompressResult::NotNeeded;
@@ -306,7 +301,9 @@ fn emergency_truncate(
     );
 
     // 1. 找到 System 消息索引
-    let system_idx = messages.iter().position(|m| matches!(&m.message, ChatMessage::System { .. }));
+    let system_idx = messages
+        .iter()
+        .position(|m| matches!(&m.message, ChatMessage::System { .. }));
 
     // 2. 找到 User 消息的位置（用于确定轮次边界）
     let user_positions: Vec<usize> = messages
@@ -534,8 +531,12 @@ pub fn auto_compress(
 
     // ⭐ 情况 B: 先尝试层0 — 工具调用结果修剪（最轻量）
     if enable_tool_pruning {
-        let prune_result =
-            tool_call_pruning(messages, tool_pruning_keep_recent, tool_pruning_max_output_chars, estimator);
+        let prune_result = tool_call_pruning(
+            messages,
+            tool_pruning_keep_recent,
+            tool_pruning_max_output_chars,
+            estimator,
+        );
         if prune_result.did_compress() {
             stats.compressed = true;
             stats.last_compressed_at = Some(Instant::now());
@@ -610,7 +611,9 @@ pub fn auto_compress(
         } else {
             1.0
         };
-        let effective = (max_turns as f64 * (1.0 - reduction_ratio)).max(1.0).round() as usize;
+        let effective = (max_turns as f64 * (1.0 - reduction_ratio))
+            .max(1.0)
+            .round() as usize;
         effective.min(max_turns)
     } else {
         max_turns
@@ -618,8 +621,12 @@ pub fn auto_compress(
 
     eprintln!(
         "[auto_compress] tokens={}/{} ({:.0}%%) turns={} effective_max_turns={} threshold={}",
-        current_tokens, token_limit, current_tokens as f64 / token_limit as f64 * 100.0,
-        turns, effective_max_turns, trigger_threshold,
+        current_tokens,
+        token_limit,
+        current_tokens as f64 / token_limit as f64 * 100.0,
+        turns,
+        effective_max_turns,
+        trigger_threshold,
     );
 
     if turns > effective_max_turns {
@@ -650,17 +657,24 @@ pub fn auto_compress(
             stats.last_compressed_at = Some(Instant::now());
             eprintln!(
                 "[auto_compress] 🔴 hard_truncate: removed {} messages, tokens {} → {}",
-                match &result { CompressResult::HardTruncated { removed_count, .. } => *removed_count, _ => 0 },
+                match &result {
+                    CompressResult::HardTruncated { removed_count, .. } => *removed_count,
+                    _ => 0,
+                },
                 tokens_after,
                 estimate_total_tokens(messages, estimator),
             );
             return result;
         } else {
-            eprintln!("[auto_compress] ⚠️ hard_truncate called but no messages removed (all protected?)");
+            eprintln!(
+                "[auto_compress] ⚠️ hard_truncate called but no messages removed (all protected?)"
+            );
             // 🚨 层4: 紧急截断 — 当所有层都无法截断但 Token 仍然超限时的最后安全网
             let tokens_still = estimate_total_tokens(messages, estimator);
             if tokens_still >= token_limit {
-                eprintln!("[auto_compress] 🚨 Tokens still over limit after hard_truncate, calling emergency_truncate");
+                eprintln!(
+                    "[auto_compress] 🚨 Tokens still over limit after hard_truncate, calling emergency_truncate"
+                );
                 let emergency_result = emergency_truncate(messages, token_limit, estimator);
                 if emergency_result.did_compress() {
                     stats.compressed = true;
@@ -674,7 +688,6 @@ pub fn auto_compress(
 
     CompressResult::NotNeeded
 }
-
 
 /// ⭐ 强制压缩（由 is_blocked 触发，跳过 trigger_threshold 检查直接执行最激进压缩）
 ///
@@ -691,10 +704,7 @@ pub fn force_compress(
     stats: &mut ContextStats,
     summary_tx: Option<mpsc::UnboundedSender<SummaryTask>>,
 ) -> CompressResult {
-    eprintln!(
-        "[force_compress] 🚀 ACTIVATED: {} messages",
-        messages.len(),
-    );
+    eprintln!("[force_compress] 🚀 ACTIVATED: {} messages", messages.len(),);
 
     // 1. 工具调用结果修剪（层0）
     if strategy.tool_pruning_enabled() {
@@ -727,14 +737,16 @@ pub fn force_compress(
         let keep_recent = 10usize;
         let original_len = messages.len();
         if original_len > keep_recent + 1 {
-            let system_idx = messages.iter().position(|m| matches!(&m.message, ChatMessage::System { .. }));
+            let system_idx = messages
+                .iter()
+                .position(|m| matches!(&m.message, ChatMessage::System { .. }));
             let mut new_messages: Vec<ContextMessage> = Vec::new();
-            
+
             // 添加 System
             if let Some(idx) = system_idx {
                 new_messages.push(messages[idx].clone());
             }
-            
+
             // 添加删除范围内的 preserved 消息
             let remove_end = original_len.saturating_sub(keep_recent);
             for i in 0..remove_end {
@@ -742,12 +754,12 @@ pub fn force_compress(
                     new_messages.push(messages[i].clone());
                 }
             }
-            
+
             // 添加最后 keep_recent 条
             new_messages.extend_from_slice(&messages[original_len.saturating_sub(keep_recent)..]);
-            
+
             *messages = new_messages;
-            
+
             // 🔴 清理孤立的 Tool 消息（手动构建消息列表可能破坏 tool_calls→Tool 对应关系）
             let orphaned = remove_orphaned_tool_messages(messages);
             if orphaned > 0 {
@@ -764,7 +776,7 @@ pub fn force_compress(
         ContextStrategy::Auto { token_limit, .. } => *token_limit,
         _ => usize::MAX,
     };
-    
+
     let tokens_before_truncate = estimate_total_tokens(messages, estimator);
     if tokens_before_truncate >= token_limit {
         let _ = hard_truncate(messages, token_limit, estimator);
@@ -842,7 +854,10 @@ mod tests {
         msgs.push(ContextMessage::from(ChatMessage::system("System prompt")));
 
         for i in 0..count {
-            msgs.push(ContextMessage::from(ChatMessage::user(format!("User {}", i))));
+            msgs.push(ContextMessage::from(ChatMessage::user(format!(
+                "User {}",
+                i
+            ))));
             msgs.push(ContextMessage::from(ChatMessage::assistant(format!(
                 "Assistant {}",
                 i
@@ -856,7 +871,10 @@ mod tests {
         msgs.push(ContextMessage::from(ChatMessage::system("System prompt")));
 
         for i in 0..count {
-            msgs.push(ContextMessage::from(ChatMessage::user(format!("User {}", i))));
+            msgs.push(ContextMessage::from(ChatMessage::user(format!(
+                "User {}",
+                i
+            ))));
             msgs.push(ContextMessage::from(ChatMessage::assistant_tool_calls(
                 format!("Thinking {}", i),
                 vec![ToolCall {
@@ -925,7 +943,8 @@ mod tests {
         sliding_window_compress(&mut msgs, 3);
 
         assert!(
-            msgs.iter().any(|m| matches!(&m.message, ChatMessage::System { .. })),
+            msgs.iter()
+                .any(|m| matches!(&m.message, ChatMessage::System { .. })),
             "System message should be preserved"
         );
         assert_eq!(
@@ -993,16 +1012,31 @@ mod tests {
         // 被 preserved 的孤儿 Tool 消息会被清理掉（安全优先）
         // 但 System 和正常的 non-orphan preserved 消息应该保留
         assert!(
-            msgs.iter().any(|m| matches!(&m.message, ChatMessage::System { .. })),
+            msgs.iter()
+                .any(|m| matches!(&m.message, ChatMessage::System { .. })),
             "System message should always survive"
         );
         // 验证没有孤立的 Tool 消息残留
-        let tool_msgs: Vec<_> = msgs.iter().filter(|m| matches!(&m.message, ChatMessage::Tool { .. })).collect();
-        let assistant_tc_ids: Vec<String> = msgs.iter().filter_map(|m| {
-            if let ChatMessage::Assistant { tool_calls, .. } = &m.message {
-                Some(tool_calls.iter().map(|tc| tc.id.clone()).collect::<Vec<_>>())
-            } else { None }
-        }).flatten().collect();
+        let tool_msgs: Vec<_> = msgs
+            .iter()
+            .filter(|m| matches!(&m.message, ChatMessage::Tool { .. }))
+            .collect();
+        let assistant_tc_ids: Vec<String> = msgs
+            .iter()
+            .filter_map(|m| {
+                if let ChatMessage::Assistant { tool_calls, .. } = &m.message {
+                    Some(
+                        tool_calls
+                            .iter()
+                            .map(|tc| tc.id.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
         for tool in &tool_msgs {
             if let ChatMessage::Tool { tool_call_id, .. } = &tool.message {
                 assert!(
@@ -1197,7 +1231,8 @@ mod tests {
 
         assert!(result.did_compress());
         assert!(
-            msgs.iter().any(|m| matches!(&m.message, ChatMessage::System { .. })),
+            msgs.iter()
+                .any(|m| matches!(&m.message, ChatMessage::System { .. })),
             "System must be preserved"
         );
     }

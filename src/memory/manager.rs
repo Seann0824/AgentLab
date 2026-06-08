@@ -60,9 +60,8 @@ impl MemoryManager {
 
     /// 创建一个测试用的 MemoryManager（使用模拟向量，不依赖外部 API）
     pub fn new_mock(store_dir: PathBuf) -> Self {
-        let store = VectorStore::open(store_dir.clone(), 4).unwrap_or_else(|_| {
-            VectorStore::open(store_dir, 4).expect("Failed to create store")
-        });
+        let store = VectorStore::open(store_dir.clone(), 4)
+            .unwrap_or_else(|_| VectorStore::open(store_dir, 4).expect("Failed to create store"));
 
         Self {
             embedding: None,
@@ -103,7 +102,9 @@ impl MemoryManager {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             content.hash(&mut hasher);
             let hash = hasher.finish();
-            (0..dim).map(|i| ((hash >> (i % 8) * 8) & 0xFF) as f32 / 255.0).collect()
+            (0..dim)
+                .map(|i| ((hash >> (i % 8) * 8) & 0xFF) as f32 / 255.0)
+                .collect()
         };
 
         let id = generate_id();
@@ -128,7 +129,11 @@ impl MemoryManager {
     }
 
     /// 搜索相关记忆（使用文本查询，自动向量化）
-    pub async fn search_similar(&self, text: &str, top_k: usize) -> anyhow::Result<Vec<SearchResult>> {
+    pub async fn search_similar(
+        &self,
+        text: &str,
+        top_k: usize,
+    ) -> anyhow::Result<Vec<SearchResult>> {
         if !self.enabled {
             return Ok(Vec::new());
         }
@@ -142,7 +147,9 @@ impl MemoryManager {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             text.hash(&mut hasher);
             let hash = hasher.finish();
-            (0..dim).map(|i| ((hash >> (i % 8) * 8) & 0xFF) as f32 / 255.0).collect()
+            (0..dim)
+                .map(|i| ((hash >> (i % 8) * 8) & 0xFF) as f32 / 255.0)
+                .collect()
         };
 
         let mut results = self.store.search(&query_vector, top_k);
@@ -154,7 +161,11 @@ impl MemoryManager {
     }
 
     /// 获取与当前上下文相关的记忆（用于注入）
-    pub async fn get_relevant_memories(&self, contexts: &[&str], top_k: usize) -> anyhow::Result<Vec<SearchResult>> {
+    pub async fn get_relevant_memories(
+        &self,
+        contexts: &[&str],
+        top_k: usize,
+    ) -> anyhow::Result<Vec<SearchResult>> {
         if !self.enabled || contexts.is_empty() {
             return Ok(Vec::new());
         }
@@ -175,7 +186,9 @@ impl MemoryManager {
             return Ok(String::new());
         }
 
-        let mut text = String::from("\n\n[相关记忆 — 跨会话长期记忆]\n以下是你之前记住的重要信息（按相关度排序）：\n\n");
+        let mut text = String::from(
+            "\n\n[相关记忆 — 跨会话长期记忆]\n以下是你之前记住的重要信息（按相关度排序）：\n\n",
+        );
         for (i, mem) in memories.iter().enumerate() {
             text.push_str(&format!(
                 "{}. {} (来源: {}, 重要性: {:.2})\n",
@@ -246,7 +259,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("memory_mgr_test_{}_{}", std::process::id(), ts));
+        let dir =
+            std::env::temp_dir().join(format!("memory_mgr_test_{}_{}", std::process::id(), ts));
         let _ = std::fs::remove_dir_all(&dir);
         let mgr = MemoryManager::new_mock(dir.clone());
         (mgr, dir)
@@ -256,12 +270,15 @@ mod tests {
     async fn test_save_and_search() {
         let (mut mgr, dir) = create_test_manager();
 
-        let id = mgr.save(
-            "Users prefer Python for data science",
-            &["user-preference".to_string(), "python".to_string()],
-            MemorySource::UserInput,
-            0.8,
-        ).await.unwrap();
+        let id = mgr
+            .save(
+                "Users prefer Python for data science",
+                &["user-preference".to_string(), "python".to_string()],
+                MemorySource::UserInput,
+                0.8,
+            )
+            .await
+            .unwrap();
         assert!(id.starts_with("mem_"));
 
         mgr.save(
@@ -269,7 +286,9 @@ mod tests {
             &["decision".to_string(), "database".to_string()],
             MemorySource::AgentReasoning,
             0.7,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         // Search for related memory
         let results = mgr.search_similar("what database", 5).await.unwrap();
@@ -281,7 +300,10 @@ mod tests {
     #[tokio::test]
     async fn test_forget() {
         let (mut mgr, dir) = create_test_manager();
-        let id = mgr.save("test memory", &[], MemorySource::Manual, 0.5).await.unwrap();
+        let id = mgr
+            .save("test memory", &[], MemorySource::Manual, 0.5)
+            .await
+            .unwrap();
         assert!(mgr.forget(&id));
         assert!(!mgr.forget(&id));
         let _ = std::fs::remove_dir_all(&dir);

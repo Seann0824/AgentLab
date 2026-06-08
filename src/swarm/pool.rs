@@ -129,7 +129,10 @@ impl AgentPool {
             let instance = self.spawn_instance(i).await?;
             self.idle.push_back(instance);
         }
-        eprintln!("🗄️ AgentPool '{}' 初始化完成: {} 个实例", self.name, self.min_size);
+        eprintln!(
+            "🗄️ AgentPool '{}' 初始化完成: {} 个实例",
+            self.name, self.min_size
+        );
         Ok(())
     }
 
@@ -145,7 +148,8 @@ impl AgentPool {
 
         // 启动子 Agent 进程
         let binary = std::env::current_exe().ok();
-        let binary_path = binary.as_deref()
+        let binary_path = binary
+            .as_deref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "agent-lab".to_string());
         let socket_str = self.orchestrator_socket.to_string_lossy().to_string();
@@ -190,7 +194,12 @@ impl AgentPool {
             let id = instance.id.clone();
             self.busy.push(instance);
             let idx = self.busy.len() - 1;
-            eprintln!("🗄️ 分配实例 '{}' (池: {}, 忙碌: {})", id, self.name, self.busy.len());
+            eprintln!(
+                "🗄️ 分配实例 '{}' (池: {}, 忙碌: {})",
+                id,
+                self.name,
+                self.busy.len()
+            );
             Some(&mut self.busy[idx])
         } else if (self.idle.len() + self.busy.len()) < self.max_size {
             // 池未满，创建新实例
@@ -202,7 +211,12 @@ impl AgentPool {
                     let id = instance.id.clone();
                     self.busy.push(instance);
                     let idx = self.busy.len() - 1;
-                    eprintln!("🗄️ 创建并分配实例 '{}' (池: {}, 忙碌: {})", id, self.name, self.busy.len());
+                    eprintln!(
+                        "🗄️ 创建并分配实例 '{}' (池: {}, 忙碌: {})",
+                        id,
+                        self.name,
+                        self.busy.len()
+                    );
                     Some(&mut self.busy[idx])
                 }
                 Err(e) => {
@@ -211,7 +225,10 @@ impl AgentPool {
                 }
             }
         } else {
-            eprintln!("🗄️ 池已满('{}', 最大: {}), 无可用实例", self.name, self.max_size);
+            eprintln!(
+                "🗄️ 池已满('{}', 最大: {}), 无可用实例",
+                self.name, self.max_size
+            );
             None
         }
     }
@@ -223,7 +240,12 @@ impl AgentPool {
             instance.status = AgentInstanceStatus::Idle;
             instance.last_used = Instant::now();
             self.idle.push_back(instance);
-            eprintln!("🗄️ 回收实例 '{}' (池: {}, 空闲: {})", instance_id, self.name, self.idle.len());
+            eprintln!(
+                "🗄️ 回收实例 '{}' (池: {}, 空闲: {})",
+                instance_id,
+                self.name,
+                self.idle.len()
+            );
             Ok(())
         } else {
             anyhow::bail!("未找到忙碌实例 '{}'", instance_id);
@@ -241,12 +263,16 @@ impl AgentPool {
         if before <= min {
             return;
         }
-        self.idle.retain(|instance| {
-            now.duration_since(instance.last_used) < timeout
-        });
+        self.idle
+            .retain(|instance| now.duration_since(instance.last_used) < timeout);
         let recycled = before - self.idle.len();
         if recycled > 0 {
-            eprintln!("🗄️ 回收了 {} 个超时空闲实例 (池: {}, 空闲: {})", recycled, self.name, self.idle.len());
+            eprintln!(
+                "🗄️ 回收了 {} 个超时空闲实例 (池: {}, 空闲: {})",
+                recycled,
+                self.name,
+                self.idle.len()
+            );
         }
     }
 
@@ -304,15 +330,15 @@ impl AgentPoolManager {
             general_pool: AgentPool::new(
                 "general".to_string(),
                 PoolAgentType::General,
-                1,  // min 1
-                5,  // max 5
+                1, // min 1
+                5, // max 5
                 orchestrator_socket.clone(),
             ),
             verifier_pool: AgentPool::new(
                 "verifier".to_string(),
                 PoolAgentType::Verifier,
-                0,  // min 0 (按需创建)
-                3,  // max 3
+                0, // min 0 (按需创建)
+                3, // max 3
                 orchestrator_socket,
             ),
             custom_pools: Vec::new(),
@@ -333,10 +359,7 @@ impl AgentPoolManager {
 
     /// 获取所有池的统计信息
     pub fn all_stats(&self) -> Vec<PoolStats> {
-        let mut stats = vec![
-            self.general_pool.stats(),
-            self.verifier_pool.stats(),
-        ];
+        let mut stats = vec![self.general_pool.stats(), self.verifier_pool.stats()];
         for pool in &self.custom_pools {
             stats.push(pool.stats());
         }

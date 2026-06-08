@@ -8,8 +8,8 @@
 //
 // 设计文档: docs/designs/goal-driven-capability.md
 
-pub mod types;
 pub mod registry;
+pub mod types;
 
+pub use self::registry::{GoalIndexEntry, GoalRegistry};
 pub use self::types::{Goal, GoalStatus};
-pub use self::registry::{GoalRegistry, GoalIndexEntry};

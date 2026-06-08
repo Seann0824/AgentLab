@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use tokio::sync::mpsc;
 use futures_util::StreamExt;
 use serde_json::json;
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::model::{ModelEvent, types::ModelStream};
@@ -33,7 +33,11 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
         Box::new(self.clone())
     }
 
-    fn stream_chat(&self, messages: &[ChatMessage], tools_schema: serde_json::Value) -> ModelStream {
+    fn stream_chat(
+        &self,
+        messages: &[ChatMessage],
+        tools_schema: serde_json::Value,
+    ) -> ModelStream {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let (tx, rx) = mpsc::channel(100);
         let messages = openai_messages(messages);
@@ -47,7 +51,8 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
         });
 
         // 感觉应该先将 messages 做转换，不过这里看着如果所有模型格式都统一的话无所
-        let query_model = self.client
+        let query_model = self
+            .client
             .post(url)
             .bearer_auth(&self.api_key)
             .json(&params)
@@ -72,13 +77,13 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                             buffer.drain(..pos + 1);
                             line = line.trim_end_matches('\r').to_string();
                             if line.is_empty() {
-                                continue
+                                continue;
                             }
 
                             let Some(mut data) = line.strip_prefix("data: ") else {
-                                continue
+                                continue;
                             };
-                            
+
                             data = data.trim();
                             if data == "[DONE]" {
                                 let _ = tx.send(ModelEvent::Done(assistant_message)).await;
@@ -87,71 +92,100 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
 
                             match serde_json::from_str::<serde_json::Value>(data) {
                                 Result::Ok(value) => {
-                                    if let Some(content) = value["choices"][0]["delta"]["content"].as_str() && !content.is_empty() {
+                                    if let Some(content) =
+                                        value["choices"][0]["delta"]["content"].as_str()
+                                        && !content.is_empty()
+                                    {
                                         assistant_message.push_str(content);
-                                        let _ = tx.send(ModelEvent::Text(content.to_string())).await;
+                                        let _ =
+                                            tx.send(ModelEvent::Text(content.to_string())).await;
                                     }
 
-                                    if let Some(reasoning_content) = value["choices"][0]["delta"]["reasoning_content"].as_str() && !reasoning_content.is_empty() {
-                                        let _ = tx.send(ModelEvent::Thinking(reasoning_content.to_string())).await;
+                                    if let Some(reasoning_content) =
+                                        value["choices"][0]["delta"]["reasoning_content"].as_str()
+                                        && !reasoning_content.is_empty()
+                                    {
+                                        let _ = tx
+                                            .send(ModelEvent::Thinking(
+                                                reasoning_content.to_string(),
+                                            ))
+                                            .await;
                                     }
                                     // 工具调用结束直接向外发送事件
                                     // 结束条件要么是 finish 要么是 id 出现。index 作为来区分工具
-                                    if let Some(finish_reason) = value["choices"][0]["finish_reason"].as_str() && finish_reason == "tool_calls" {
+                                    if let Some(finish_reason) =
+                                        value["choices"][0]["finish_reason"].as_str()
+                                        && finish_reason == "tool_calls"
+                                    {
                                         for (_, model_event) in tool_map.into_iter() {
                                             match model_event {
                                                 ModelEvent::ToolCallBlock { .. } => {
                                                     let _ = tx.send(model_event).await;
                                                 }
-                                                _ => ()
+                                                _ => (),
                                             }
                                         }
                                         return;
                                     }
-                                    if let Some(tool_calls) = value["choices"][0]["delta"]["tool_calls"].as_array() {
+                                    if let Some(tool_calls) =
+                                        value["choices"][0]["delta"]["tool_calls"].as_array()
+                                    {
                                         for data in tool_calls.iter() {
                                             // 判断当前索引是否创建
                                             let Some(index) = data["index"].as_u64() else {
-                                                continue
+                                                continue;
                                             };
                                             match tool_map.get_mut(&(index as usize)) {
-                                                Some(tool_call_block) => {
-                                                    match tool_call_block {
-                                                        ModelEvent::ToolCallBlock {  arguments, .. } => {
-                                                            if let Some(delta) = data["function"]["arguments"].as_str() {
-                                                                arguments.push_str(delta);
-                                                            }
+                                                Some(tool_call_block) => match tool_call_block {
+                                                    ModelEvent::ToolCallBlock {
+                                                        arguments, ..
+                                                    } => {
+                                                        if let Some(delta) =
+                                                            data["function"]["arguments"].as_str()
+                                                        {
+                                                            arguments.push_str(delta);
                                                         }
-                                                        _ => ()
                                                     }
-                                                }
+                                                    _ => (),
+                                                },
                                                 None => {
                                                     // 创建一个
                                                     if let (Some(id), Some(name), Some(delta)) = (
                                                         data["id"].as_str(),
                                                         data["function"]["name"].as_str(),
-                                                        data["function"]["arguments"].as_str()
+                                                        data["function"]["arguments"].as_str(),
                                                     ) {
-                                                        tool_map.insert(index as usize, ModelEvent::ToolCallBlock { id: id.to_string(), name: name.to_string(), arguments: delta.to_string() });
+                                                        tool_map.insert(
+                                                            index as usize,
+                                                            ModelEvent::ToolCallBlock {
+                                                                id: id.to_string(),
+                                                                name: name.to_string(),
+                                                                arguments: delta.to_string(),
+                                                            },
+                                                        );
                                                     }
                                                 }
                                             }
                                         }
                                     }
-                                },
+                                }
                                 Err(_) => {
-                                    let _ = tx.send(ModelEvent::Error("json parse error".to_string())).await;
+                                    let _ = tx
+                                        .send(ModelEvent::Error("json parse error".to_string()))
+                                        .await;
                                 }
                             }
                         }
                     }
-                },
+                }
                 Err(_) => {
-                    let _ = tx.send(ModelEvent::Error("request error".to_string())).await;
+                    let _ = tx
+                        .send(ModelEvent::Error("request error".to_string()))
+                        .await;
                 }
             }
         });
-        
+
         Box::pin(ReceiverStream::new(rx))
     }
 }
@@ -159,53 +193,51 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
 fn openai_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
     messages
         .iter()
-        .map(|message| {
-            match message {
-                ChatMessage::System { content } => {
+        .map(|message| match message {
+            ChatMessage::System { content } => {
+                json!({
+                    "role": "system",
+                    "content": content,
+                })
+            }
+            ChatMessage::User { content } => {
+                json!({
+                    "role": "user",
+                    "content": content,
+                })
+            }
+            ChatMessage::Assistant {
+                content,
+                tool_calls,
+            } => {
+                if tool_calls.len() == 0 {
                     json!({
-                        "role": "system",
+                        "role": "assistant",
                         "content": content,
                     })
-                },
-                ChatMessage::User { content } => {
-                    json!({
-                        "role": "user",
-                        "content": content,
-                    })
-                }
-                ChatMessage::Assistant {
-                    content,
-                    tool_calls,
-                } => {
-                    if tool_calls.len() == 0 {
-                        json!({
-                            "role": "assistant",
-                            "content": content,
-                        })
+                } else {
+                    let content = if content.is_empty() {
+                        serde_json::Value::Null
                     } else {
-                        let content = if content.is_empty() {
-                            serde_json::Value::Null
-                        } else {
-                            json!(content)
-                        };
+                        json!(content)
+                    };
 
-                        json!({
-                            "role": "assistant",
-                            "content": content,
-                            "tool_calls": openai_tool_calls(tool_calls),
-                        })
-                    }
-                }
-                ChatMessage::Tool {
-                    tool_call_id,
-                    content,
-                } => {
                     json!({
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
+                        "role": "assistant",
                         "content": content,
+                        "tool_calls": openai_tool_calls(tool_calls),
                     })
                 }
+            }
+            ChatMessage::Tool {
+                tool_call_id,
+                content,
+            } => {
+                json!({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": content,
+                })
             }
         })
         .collect()

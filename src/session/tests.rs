@@ -12,17 +12,19 @@ fn test_sanitize_name() {
 #[test]
 fn test_serialize_deserialize_roundtrip() {
     let original = vec![
-        SerializableMessage::System { content: "system prompt".to_string() },
-        SerializableMessage::User { content: "hello".to_string() },
+        SerializableMessage::System {
+            content: "system prompt".to_string(),
+        },
+        SerializableMessage::User {
+            content: "hello".to_string(),
+        },
         SerializableMessage::Assistant {
             content: "hi there".to_string(),
-            tool_calls: vec![
-                SerializableToolCall {
-                    id: "call_1".to_string(),
-                    name: "shell".to_string(),
-                    arguments: r#"{"command": "ls"}"#.to_string(),
-                },
-            ],
+            tool_calls: vec![SerializableToolCall {
+                id: "call_1".to_string(),
+                name: "shell".to_string(),
+                arguments: r#"{"command": "ls"}"#.to_string(),
+            }],
         },
         SerializableMessage::Tool {
             tool_call_id: "call_1".to_string(),
@@ -41,8 +43,16 @@ fn test_serialize_deserialize_roundtrip() {
             (ChatMessage::User { content: a }, ChatMessage::User { content: b }) => {
                 assert_eq!(a, b);
             }
-            (ChatMessage::Assistant { content: a, tool_calls: tc_a },
-             ChatMessage::Assistant { content: b, tool_calls: tc_b }) => {
+            (
+                ChatMessage::Assistant {
+                    content: a,
+                    tool_calls: tc_a,
+                },
+                ChatMessage::Assistant {
+                    content: b,
+                    tool_calls: tc_b,
+                },
+            ) => {
                 assert_eq!(a, b);
                 assert_eq!(tc_a.len(), tc_b.len());
                 if !tc_a.is_empty() {

@@ -4,10 +4,9 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::tools::types::{Tool, ToolEvent, ToolStream};
 
-
 pub struct BashShell;
 
-const DEAFULT_TIMEOUT: u64 = 30 * 60 * 1000; 
+const DEAFULT_TIMEOUT: u64 = 30 * 60 * 1000;
 impl Tool for BashShell {
     fn name(&self) -> &str {
         "shell"
@@ -38,11 +37,12 @@ impl Tool for BashShell {
     fn execute(&self, args: serde_json::Value) -> ToolStream {
         let command = args["command"].as_str().unwrap_or("").to_string();
         let (tx, rx) = mpsc::channel(1);
- 
 
         tokio::spawn(async move {
             if command.trim().is_empty() {
-                let _ = tx.send(ToolEvent::Err("command is empty".to_string())).await;
+                let _ = tx
+                    .send(ToolEvent::Err("command is empty".to_string()))
+                    .await;
                 return;
             }
 

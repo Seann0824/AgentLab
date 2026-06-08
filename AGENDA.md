@@ -137,3 +137,19 @@
 - 当前步骤：Phase 4 ✅ — Workflow 引擎完成（拓扑排序 + 串行/并行/条件分支 + 编译通过）
 - 剩余：Phase 5 — 端到端验证 + 更新 ROADMAP.md
 - 状态：🟡 进行中
+
+# 🎯 当前任务：修复 AI 忘记调用 `/goal complete` 导致无限循环
+- 进度：0/4 步骤
+- 当前步骤：步骤1 — 实现 auto_detect_goal_completion 函数
+- 状态：⏳ 进行中
+
+## 步骤
+1. ⏳ 实现 auto_detect_goal_completion 函数（检测 PLAN.md 步骤和 AI 回复中的完成信号）
+2. ⏳ 在主循环中集成自动检测逻辑
+3. ⏳ 编译验证 + 端到端测试
+4. ⏳ 总结
+
+## 验证标准
+- cargo check 通过
+- AI 回复包含"已完成"等关键词时自动标记完成
+- PLAN.md 所有步骤为 [x] 时自动标记完成

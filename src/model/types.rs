@@ -29,7 +29,9 @@ pub enum ChatMessage {
 
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
-        ChatMessage::System { content: content.into() }
+        ChatMessage::System {
+            content: content.into(),
+        }
     }
 
     pub fn user(content: impl Into<String>) -> Self {

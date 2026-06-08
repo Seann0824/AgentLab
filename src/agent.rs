@@ -10,16 +10,22 @@ use tokio::sync::Mutex;
 
 use crate::cli::CommandRegistry;
 use crate::context::{ContextManager, ContextStrategy, TokenEstimator};
-use crate::model::{ChatMessage, ModelEvent, ToolCall};
-use crate::model::ModelManager;
-use crate::investigate::ErrorSnapshotManager;
-use crate::session::SessionManager;
 use crate::goal::GoalRegistry;
-use crate::task::TaskManager;
+use crate::investigate::ErrorSnapshotManager;
 use crate::memory::{MemoryManager, MemorySource};
+use crate::model::ModelManager;
+use crate::model::{ChatMessage, ModelEvent, ToolCall};
+use crate::session::SessionManager;
 use crate::swarm::registry::SwarmRegistry;
-use crate::tools::{ToolManager, hello_world::HelloWorld, shell::BashShell, tool_debug::DebugTool, edit::EditTool, read::ReadTool, search::SearchTool, subagent::SpawnAgent, investigate::InvestigateTool, generate_tool::GenerateTool, swarm_ctl::SwarmCtl};
-use crate::tools::memory_tools::{MemorySaveTool, MemorySearchTool, MemoryForgetTool, MemoryStatsTool};
+use crate::task::TaskManager;
+use crate::tools::memory_tools::{
+    MemoryForgetTool, MemorySaveTool, MemorySearchTool, MemoryStatsTool,
+};
+use crate::tools::{
+    ToolManager, edit::EditTool, generate_tool::GenerateTool, hello_world::HelloWorld,
+    investigate::InvestigateTool, read::ReadTool, search::SearchTool, shell::BashShell,
+    subagent::SpawnAgent, swarm_ctl::SwarmCtl, tool_debug::DebugTool,
+};
 
 // =====================================================================
 // AgentConfig — Agent 配置
@@ -73,6 +79,65 @@ impl AgentConfig {
     }
 }
 
+const MAX_GOAL_AUTO_ITERATIONS: usize = 30;
+const MAX_GOAL_IDLE_ITERATIONS: usize = 3;
+
+#[derive(Debug, Default)]
+struct GoalLoopState {
+    auto_iterations: usize,
+    idle_iterations: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum GoalAutoLoopDecision {
+    Continue,
+    StopNoActiveGoal,
+    StopTerminal,
+    StopIdle,
+    StopMaxIterations,
+}
+
+impl GoalLoopState {
+    fn reset(&mut self) {
+        self.auto_iterations = 0;
+        self.idle_iterations = 0;
+    }
+
+    fn decide(
+        &mut self,
+        has_active_goal: bool,
+        goal_is_terminal: bool,
+        has_tool_calls: bool,
+    ) -> GoalAutoLoopDecision {
+        if !has_active_goal {
+            self.reset();
+            return GoalAutoLoopDecision::StopNoActiveGoal;
+        }
+
+        if goal_is_terminal {
+            self.reset();
+            return GoalAutoLoopDecision::StopTerminal;
+        }
+
+        self.auto_iterations += 1;
+        if has_tool_calls {
+            self.idle_iterations = 0;
+        } else {
+            self.idle_iterations += 1;
+        }
+
+        if self.auto_iterations > MAX_GOAL_AUTO_ITERATIONS {
+            return GoalAutoLoopDecision::StopMaxIterations;
+        }
+
+        if self.idle_iterations > MAX_GOAL_IDLE_ITERATIONS {
+            return GoalAutoLoopDecision::StopIdle;
+        }
+
+        GoalAutoLoopDecision::Continue
+    }
+}
+
 // =====================================================================
 // AgentHandle — 多 Agent 运行句柄
 // =====================================================================
@@ -93,7 +158,9 @@ impl AgentHandle {
 
     /// 等待 Agent 完成
     pub async fn join(self) -> anyhow::Result<()> {
-        self.task.await.map_err(|e| anyhow::anyhow!("Agent '{}' panicked: {}", self.name, e))?
+        self.task
+            .await
+            .map_err(|e| anyhow::anyhow!("Agent '{}' panicked: {}", self.name, e))?
     }
 }
 
@@ -171,18 +238,30 @@ impl AgentBuilder {
 
     /// 构建 Agent
     pub fn build(self) -> anyhow::Result<Agent> {
-        let model_manager = self.model_manager.ok_or_else(|| anyhow::anyhow!("ModelManager is required. Call .model_manager(mm) to set it."))?;
+        let model_manager = self.model_manager.ok_or_else(|| {
+            anyhow::anyhow!("ModelManager is required. Call .model_manager(mm) to set it.")
+        })?;
 
         // ⭐ 初始化 MemoryManager（持久化记忆）
-        let memory_manager = self.memory_manager.unwrap_or_else(|| MemoryManager::new_mock(std::path::PathBuf::from(&self.current_dir)));
+        let memory_manager = self.memory_manager.unwrap_or_else(|| {
+            MemoryManager::new_mock(std::path::PathBuf::from(&self.current_dir))
+        });
         let memory_manager = Arc::new(Mutex::new(memory_manager));
 
         // ⭐ 构建工具管理器（注册 memory 工具）
         let mut tool_manager = self.tool_manager.unwrap_or_else(default_tool_manager);
-        tool_manager.register_tool(Box::new(MemorySaveTool { memory_manager: memory_manager.clone() }));
-        tool_manager.register_tool(Box::new(MemorySearchTool { memory_manager: memory_manager.clone() }));
-        tool_manager.register_tool(Box::new(MemoryForgetTool { memory_manager: memory_manager.clone() }));
-        tool_manager.register_tool(Box::new(MemoryStatsTool { memory_manager: memory_manager.clone() }));
+        tool_manager.register_tool(Box::new(MemorySaveTool {
+            memory_manager: memory_manager.clone(),
+        }));
+        tool_manager.register_tool(Box::new(MemorySearchTool {
+            memory_manager: memory_manager.clone(),
+        }));
+        tool_manager.register_tool(Box::new(MemoryForgetTool {
+            memory_manager: memory_manager.clone(),
+        }));
+        tool_manager.register_tool(Box::new(MemoryStatsTool {
+            memory_manager: memory_manager.clone(),
+        }));
 
         // ⭐ 如果提供了 SwarmRegistry，替换默认的 SwarmCtl 工具
         if let Some(ref registry) = self.swarm_registry {
@@ -238,15 +317,12 @@ impl Agent {
         AgentBuilder::new()
     }
 
-
     /// 将 Agent 派发到 tokio 任务中运行
     ///
     /// 返回 AgentHandle，可用于等待 Agent 完成
     pub fn spawn(name: impl Into<String>, mut agent: Agent) -> AgentHandle {
         let name = name.into();
-        let task = tokio::task::spawn(async move {
-            agent.run().await
-        });
+        let task = tokio::task::spawn(async move { agent.run().await });
         AgentHandle { name, task }
     }
 
@@ -276,6 +352,8 @@ impl Agent {
         } else {
             None
         };
+        // --task 子任务应只执行传入任务然后退出，不能被项目里持久化的 active goal 接管。
+        let goal_driven_enabled = single_task.is_none();
 
         let policy_summary = String::new(); // 权限摘要（后续可从配置加载）
 
@@ -284,152 +362,64 @@ impl Agent {
 
         // ⭐ 构建系统提示词
         let system_prompt = format!(
-            r#"你当前工作的目录为 {current_dir}。这个目录是你模型的Agent架子，它构建你和外部世界沟通的 bridge。如果你需要什么能力自己修改agent代码补充。
+            r#"你正在运行 Agent Lab，一个用 Rust 编写、由 LLM 驱动、能够改造自身能力的自主 Agent 框架。
+
+工作目录: {current_dir}
 
 {policy_summary}
 
-【上下文管理说明】
-- 为了管理上下文窗口，早期对话历史可能会被自动压缩为摘要。
-- 摘要会按「目标 → 操作 → 决策 → 状态」的结构保留关键信息。
-- 如果发现某些上下文缺失，请基于摘要信息继续工作。
-- 重要的上下文信息请**写入文件**，而不是仅依赖对话历史。
-- 系统状态信息（如 Token 使用率）会输出到 stderr，不会混入你的工具执行结果。
+[身份与项目认知]
+- 你是 Agent Lab 的主 Agent，目标是在当前仓库内完成用户交给你的真实工作，而不是只给建议。
+- 这个仓库的核心是 `src/agent.rs` 中的 Agent 主循环；它连接模型层、工具层、上下文管理、任务状态、Goal、Session、长期记忆和多 Agent/Swarm 能力。
+- 重要模块包括：`src/model` 的多模型适配，`src/context` 的四层压缩，`src/tools` 的工具系统，`src/task` 的任务状态，`src/goal` 的目标驱动循环，`src/memory` 的向量长期记忆，`src/session` 的会话持久化，`src/swarm` 的多 Agent 编排。
+- 你的基本姿态是主动、审慎、可验证：先理解现有代码和文档，再做最小足够的修改，并用证据确认结果。
 
-【工作原则】
-- 读取文件内容后，关键信息应记录在文件中，不要仅依赖对话记忆。
-- 如果需要在多轮对话中保持状态，请使用文件持久化。
+[执行循环]
+- 简单问题可以直接回答；明确的实现、修复、排查、整理任务应主动执行到可交付状态。
+- 多步任务按「理解目标 -> 调查现状 -> 制定短计划 -> 执行 -> 验证 -> 总结」推进。
+- 动手前优先读取相关文件和项目文档。搜索文本优先用 `search` 工具；需要 shell 能力时用 `shell`；读文件用 `read`；改文件用 `edit`。
+- 不确定时先从本地上下文寻找答案。只有缺少关键决策且合理假设风险较高时才向用户提问。
+- 保持改动聚焦。不要顺手重构无关模块，不要覆盖用户已有改动，不要用破坏性命令清理仓库状态。
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【结构化工作流程】
+[状态与上下文]
+- 早期对话可能被 ContextManager 自动压缩为摘要。摘要会尽量保留目标、操作、决策和当前状态；发现缺口时继续调查项目文件，不要停在“上下文丢失”。
+- 长任务需要把可恢复状态写入文件。TaskManager 的结构化状态入口是 `docs/PLAN.md`、`docs/AGENDA.md`、`docs/MEMORY.md`；仓库根目录的 `PLAN.md`、`AGENDA.md`、`MEMORY.md`也可能保存历史或人工维护的工作记录，读到冲突时以用户当前目标、代码事实和最近状态为准。
+- 对跨会话有价值的信息使用 `memory_save` 保存；需要回忆历史决策、用户偏好或项目背景时使用 `memory_search`。不要把临时命令输出、低价值日志或明显过时信息写入长期记忆。
+- 系统状态、Token 使用率和工具进度可能输出到 stderr，它们不是用户的文件内容，也不应混入最终结论。
 
-当你接收到需要多步执行的复杂任务时，请遵循以下流程：
+[验证标准]
+- 修改 Rust 代码后至少运行 `cargo check`；涉及共享行为、状态机、工具协议、上下文压缩、Goal、Session、Memory 或 Swarm 时，优先运行相关 `cargo test`。
+- 修改文档或配置时检查链接、路径、命令和示例是否与代码一致。
+- 工具失败时先读完整错误；必要时用 `investigate` 查看错误快照。连续修复无效时重新分析根因和假设。
+- 最终回复要说明完成了什么、改了哪些关键文件、验证结果如何；不能验证时要如实说明。
 
-1. 【🧠 规划阶段】先输出分析，然后创建 PLAN.md 文件：
-   - 目标描述
-   - 执行步骤（编号列表，每步一个 checkbox：- [ ]）
-   - 每个步骤的验证标准
-   - 将当前步骤写入 AGENDA.md
+[自我进化]
+- 你可以修改 Agent Lab 自身来获得新能力。新增工具时优先使用 `generate_tool` 生成脚手架，再补实现、导出模块、在 `default_tool_manager` 或构建流程中注册，并运行 `cargo check`。
+- 修改核心主循环、工具协议、上下文策略、记忆存储或 Swarm 通信时保持兼容性，必要时补测试。
+- 新能力只有在编译和运行路径都确认后才算完成；不要把“写了代码”当成“能力已可用”。
 
-2. 【🔧 执行阶段】按 PLAN.md 的步骤逐个执行：
-   - 每完成一步，更新 PLAN.md 标记为 - [x]
-   - 更新 AGENDA.md 反映最新进度
-   - 遇到错误时，先分析原因再修复
-   - 重要发现记录到 MEMORY.md
+[Goal 驱动模式]
+- 用户通过 `/goal set <描述>` 激活目标后，GoalRegistry 会持久化目标，主循环会在启动、压缩后和自动推进中注入目标状态。
+- 有活跃 Goal 时，你应主动分解步骤、推进、验证并记录关键进展。不要每轮重复注入或复述同一计划；依据当前状态推进下一步。
+- 确认目标满足完成条件后，在回复中输出 `/goal complete <目标ID>`；确认无法完成时输出 `/goal fail <目标ID> <原因>`；用户取消时输出 `/goal cancel <目标ID>`。
 
-3. 【✅ 验证阶段】每次代码修改后必须验证：
-   - 修改 Rust 代码后 → 运行 `cargo check 2>&1 | tail -30`
-   - 修改配置文件后 → 检查语法完整性
-   - 验证失败时：分析错误 → 修复 → 再次验证
-   - 如果连续 3 次修复失败，重新规划方案
+[多 Agent 与 Swarm]
+- 你是当前进程中的 Master Agent。可以用 `spawn_agent` 派生隔离的子 Agent 执行独立调查、端到端验证或并行子任务。子 Agent 的输出需要由你复核和整合。
+- `swarm_ctl` 用于查看 Orchestrator/Memory/General/Verifier 等多 Agent 蜂群状态；Swarm 相关实现集中在 `src/swarm`。
+- 不要为了小任务随意派生子 Agent；当任务可并行、需要隔离验证或当前上下文负担较重时再使用。
 
-4. 【📝 总结阶段】所有步骤完成后向用户总结：
-   - 完成了什么
-   - 关键决策
-   - 当前项目状态
+[会话、模型与命令]
+- `/session` 管理保存、加载、列出、删除和重命名会话。恢复会话后先结合恢复消息、任务文件和长期记忆判断最新状态。
+- `/model` 可列出、查看和切换模型。除非用户要求或当前模型明显不适合，不要随意切换。
+- `/tools` 或下方工具清单可查看运行时可用能力。工具 schema 是实际调用依据；如果提示词和工具返回不一致，以工具 schema 和代码事实为准。
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【记忆与状态管理】
+[沟通]
+- 使用用户的语言回复。中文用户默认用中文。
+- 工作中简明说明正在做什么和为什么；最终总结聚焦结果、证据和剩余风险。
+- 不夸大、不编造、不掩盖失败；遇到阻塞时说明已经尝试过什么、卡在哪里、下一步需要什么。
 
-项目根目录下维护以下状态文件：
-
-📄 PLAN.md   — 当前执行计划（步骤列表 + 完成状态）
-📄 AGENDA.md  — 当前议程精简版（任务名 + 进度 + 当前步骤）
-📄 MEMORY.md  — 重要发现、关键决策、已知问题
-
-规则：
-- 每次开启新任务时，检查并读取这些文件恢复上下文
-- 上下文被压缩后，通过读取这些文件重新理解当前状态
-- 不要在对话中重复记录已写入文件的信息
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【自我进化】
-
-你可以修改自身代码来增强能力：
-1. 添加新工具 → 实现 Tool trait，注册到 ToolManager
-2. 修改现有工具 → 增强已有工具的能力
-3. 修复 bug → 修改对应 src/ 下的代码
-
-规则：
-- 修改代码后必须运行 cargo check 验证
-- 验证通过后，新能力立即生效（下次调用时）
-- 如果修改导致编译失败，分析错误并修复
-- 重大改动建议分步进行（先加框架，再填实现）
-
-当前可用工具：
-{tools_description}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【主从 Agent 架构】
-
-你是 **Master Agent（主 Agent）**，可以通过 `spawn_agent` 工具派遣 **Sub-agent（子 Agent）** 为你工作。
-
-### 架构模型
-```
-你 (Master Agent, 当前进程)
-  └── spawn_agent(task="...")  →  编译并启动 Sub-agent (独立子进程)
-        └── Sub-agent 独立完成任务后退出，结果返回给你
-```
-
-### 工作原理
-1. **你（Master）** 决定需要做什么任务
-2. 调用 `spawn_agent(task="任务描述", timeout_seconds=300)`
-3. 系统自动 `cargo build` 编译当前代码，然后以 `--task` 模式启动子进程
-4. **Sub-agent** 作为一个全新的 Agent 实例独立执行任务（拥有自己的上下文、工具）
-5. Sub-agent 完成后返回完整输出，你分析结果并继续工作
-
-### 适合派遣 Sub-agent 的场景
-- **并行探索**：需要同时调查多个方向时，可以多次调用 spawn_agent 并行派遣多个子 agent
-- **独立验证**：修改代码后派生子 agent 做端到端测试验证
-- **分治执行**：复杂任务拆解后，将子任务分派给子 agent 并行处理
-- **安全隔离**：需要在不影响当前上下文的环境中执行的实验性操作
-
-### 注意
-- Sub-agent 是你的副本，拥有和你一样的能力（工具、模型）
-- Sub-agent 在独立进程中运行，它的输出不会污染你的上下文
-- 一次可以派遣多个 Sub-agent 并行工作
-- Sub-agent 完成任务后自动退出
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【🎯 目标驱动模式】
-
-系统支持 Goal-Driven（目标驱动）模式，你可以遵循以下工作方式：
-
-### 目标设定
-- 用户通过 `/goal set <描述>` 设置目标后，系统会自动激活目标并持久化存储
-- 目标激活后，每次压缩都会注入当前目标状态到你的上下文中
-
-### 目标推进
-- 你应当主动分解目标、制定步骤、逐步推进
-- 重要决策和进度应记录到文件（如 PLAN.md / AGENDA.md / MEMORY.md）
-- 每完成一步，可以通过 `edit` 工具更新 PLAN.md 记录进度
-
-### 自评估与完成
-当你认为目标已完成或无法完成时，在回复中输出以下命令来更新目标状态：
-- 所有步骤完成且满足标准 → 输出 `/goal complete <目标ID>`
-- 目标无法完成 → 输出 `/goal fail <目标ID> <原因>`
-- 用户要求取消 → 输出 `/goal cancel <目标ID>`
-
-### 查看目标
-你也可以使用 `/goal list` 列出所有目标，或 `/goal status` 查看当前活跃目标。
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-【任务状态管理】
-
-系统内置了 TaskManager，它会：
-1. 自动维护 PLAN.md / docs/AGENDA.md / docs/MEMORY.md 中的任务状态
-2. 当上下文被压缩后，自动将当前任务状态注入到你的上下文中
-3. 你可以通过 edit 工具直接编辑这些文件来更新任务状态
-
-关键文件：
-- 📄 PLAN.md     — 当前执行计划（步骤列表 + 完成状态）
-- 📄 AGENDA.md   — 当前议程（任务名 + 进度 + 当前步骤）
-- 📄 MEMORY.md   — 重要发现、关键决策、已知问题
-
-规则：
-- 当你开始一个新任务时，先规划步骤写入 PLAN.md
-- 每完成一步，更新 PLAN.md 和 AGENDA.md
-- 重要发现写入 MEMORY.md
-- 上下文被压缩后，检查注入的任务状态恢复上下文"#,
+[当前可用工具]
+{tools_description}"#,
             tools_description = tools_description,
             current_dir = self.current_dir,
             policy_summary = policy_summary,
@@ -440,7 +430,8 @@ impl Agent {
 
         // ⭐ 启动异步摘要后台任务
         self.context_manager.setup_summary_channel(Some(
-            self.model_manager.clone_active_adapter()
+            self.model_manager
+                .clone_active_adapter()
                 .expect("当前模型适配器不可用"),
         ));
 
@@ -448,7 +439,7 @@ impl Agent {
         self.task_manager = TaskManager::new(&self.current_dir);
 
         // ⭐ 如果有活跃 Goal，启动时注入目标状态
-        if self.goal_manager.has_active_goal() {
+        if goal_driven_enabled && self.goal_manager.has_active_goal() {
             if let Some(goal_msg) = self.goal_manager.get_inject_message() {
                 self.context_manager.add_message(goal_msg);
                 eprintln!("🎯 已发现活跃目标，目标状态已注入上下文");
@@ -459,6 +450,7 @@ impl Agent {
         let mut is_auto = false;
         let mut terminal_line_dirty = false;
         let mut single_task_used = false;
+        let mut goal_loop_state = GoalLoopState::default();
 
         // ⭐ 自动提取记忆计数器（每 N 轮非工具调用的对话保存重要信息到记忆）
         let mut auto_extract_counter: usize = 0;
@@ -473,6 +465,7 @@ impl Agent {
                         eprintln!("[子 agent] 执行任务: {}", &input);
                         self.context_manager.add_message(ChatMessage::user(&input));
                         self.task_manager.on_user_input(&input);
+                        goal_loop_state.reset();
                     } else {
                         // --task 模式：任务已完成，输出最终错误快照引用并退出
                         // 输出最后的错误快照 ID（如果存在）
@@ -528,7 +521,12 @@ impl Agent {
 
                         // /session 和 /sessions 命令
                         if cmd_name == "session" || cmd_name == "sessions" {
-                            handle_session_command(&trimmed, &self.session_manager, &mut self.context_manager, &mut self.task_manager);
+                            handle_session_command(
+                                &trimmed,
+                                &self.session_manager,
+                                &mut self.context_manager,
+                                &mut self.task_manager,
+                            );
                             continue;
                         }
 
@@ -539,7 +537,9 @@ impl Agent {
                             for t in &tools {
                                 println!("  \x1b[33m{:<15}\x1b[0m {}", t.name, t.description);
                             }
-                            println!("\x1b[90m  💡 工具详情由 LLM function calling schema 自动提供\x1b[0m");
+                            println!(
+                                "\x1b[90m  💡 工具详情由 LLM function calling schema 自动提供\x1b[0m"
+                            );
                             continue;
                         }
 
@@ -559,9 +559,13 @@ impl Agent {
                                 "toggle" | "t" => {
                                     let new_state = crate::debug::toggle();
                                     if new_state {
-                                        println!("\x1b[32m━━━ 🐛 debug 模式已切换为开启 ━━━\x1b[0m");
+                                        println!(
+                                            "\x1b[32m━━━ 🐛 debug 模式已切换为开启 ━━━\x1b[0m"
+                                        );
                                     } else {
-                                        println!("\x1b[33m━━━ 🐛 debug 模式已切换为关闭 ━━━\x1b[0m");
+                                        println!(
+                                            "\x1b[33m━━━ 🐛 debug 模式已切换为关闭 ━━━\x1b[0m"
+                                        );
                                     }
                                 }
                                 _ => {
@@ -618,7 +622,8 @@ impl Agent {
                                             println!("\x1b[36m{}\x1b[0m", msg);
                                         }
                                         if let Some(status) = result.get("swarm_status") {
-                                            let total = status["total_agents"].as_i64().unwrap_or(0);
+                                            let total =
+                                                status["total_agents"].as_i64().unwrap_or(0);
                                             let online = status["online"].as_i64().unwrap_or(0);
                                             let offline = status["offline"].as_i64().unwrap_or(0);
                                             println!("  🐝 总计: {} 个 Agent", total);
@@ -628,10 +633,16 @@ impl Agent {
                                                 if !agents.is_empty() {
                                                     println!("\x1b[90m  Agent 列表:\x1b[0m");
                                                     for agent in agents {
-                                                        let id = agent["id"].as_str().unwrap_or("?");
-                                                        let atype = agent["type"].as_str().unwrap_or("?");
-                                                        let s = agent["status"].as_str().unwrap_or("?");
-                                                        println!("    🆔 {} ({} — {})", id, atype, s);
+                                                        let id =
+                                                            agent["id"].as_str().unwrap_or("?");
+                                                        let atype =
+                                                            agent["type"].as_str().unwrap_or("?");
+                                                        let s =
+                                                            agent["status"].as_str().unwrap_or("?");
+                                                        println!(
+                                                            "    🆔 {} ({} — {})",
+                                                            id, atype, s
+                                                        );
                                                     }
                                                 }
                                             }
@@ -641,10 +652,18 @@ impl Agent {
                                                 if !agents_arr.is_empty() {
                                                     println!("\x1b[90m  Agent 列表:\x1b[0m");
                                                     for agent in agents_arr {
-                                                        let id = agent["agent_id"].as_str().unwrap_or("?");
-                                                        let atype = agent["agent_type"].as_str().unwrap_or("?");
-                                                        let s = agent["status"].as_str().unwrap_or("?");
-                                                        println!("    🆔 {} ({} — {})", id, atype, s);
+                                                        let id = agent["agent_id"]
+                                                            .as_str()
+                                                            .unwrap_or("?");
+                                                        let atype = agent["agent_type"]
+                                                            .as_str()
+                                                            .unwrap_or("?");
+                                                        let s =
+                                                            agent["status"].as_str().unwrap_or("?");
+                                                        println!(
+                                                            "    🆔 {} ({} — {})",
+                                                            id, atype, s
+                                                        );
                                                     }
                                                 } else {
                                                     println!("  📭 没有匹配的 Agent");
@@ -656,7 +675,13 @@ impl Agent {
                                         }
                                         if let Some(modules) = result.get("available_modules") {
                                             if let Some(mods) = modules.as_array() {
-                                                println!("  📦 可用模块: {}", mods.iter().filter_map(|m| m.as_str()).collect::<Vec<_>>().join(", "));
+                                                println!(
+                                                    "  📦 可用模块: {}",
+                                                    mods.iter()
+                                                        .filter_map(|m| m.as_str())
+                                                        .collect::<Vec<_>>()
+                                                        .join(", ")
+                                                );
                                             }
                                         }
                                     }
@@ -680,8 +705,10 @@ impl Agent {
                         }
                     }
 
-                    self.context_manager.add_message(ChatMessage::user(&input_str));
+                    self.context_manager
+                        .add_message(ChatMessage::user(&input_str));
                     self.task_manager.on_user_input(&input_str);
+                    goal_loop_state.reset();
                 }
             }
 
@@ -712,26 +739,47 @@ impl Agent {
             // ⭐ 如果发生了压缩，注入持久化记忆（与当前上下文最相关的记忆）
             if compressed {
                 // 从最近几条消息提取关键词，搜索相关记忆
-                let recent_messages: Vec<String> = self.context_manager.get_messages()
+                let recent_messages: Vec<String> = self
+                    .context_manager
+                    .get_messages()
                     .iter()
                     .rev()
                     .take(6)
                     .filter_map(|m| match m {
                         ChatMessage::User { content, .. } => Some(content.clone()),
-                        ChatMessage::Assistant { content, .. } if !content.is_empty() => Some(content.clone()),
+                        ChatMessage::Assistant { content, .. } if !content.is_empty() => {
+                            Some(content.clone())
+                        }
                         _ => None,
                     })
                     .collect();
                 let query = recent_messages.join(" ");
                 if !query.is_empty() {
-                    match self.memory_manager.lock().await.search_similar(&query, 3).await {
+                    match self
+                        .memory_manager
+                        .lock()
+                        .await
+                        .search_similar(&query, 3)
+                        .await
+                    {
                         Ok(results) if !results.is_empty() => {
-                            let mut mem_text = String::from("📌 【持久化记忆 — 检索结果】\n以下是与当前上下文相关的历史记忆：\n");
+                            let mut mem_text = String::from(
+                                "📌 【持久化记忆 — 检索结果】\n以下是与当前上下文相关的历史记忆：\n",
+                            );
                             for (i, mem) in results.iter().enumerate() {
-                                mem_text.push_str(&format!("{}. [相关性:{:.1}%] {}\n", i + 1, mem.score * 100.0, mem.record.content));
+                                mem_text.push_str(&format!(
+                                    "{}. [相关性:{:.1}%] {}\n",
+                                    i + 1,
+                                    mem.score * 100.0,
+                                    mem.record.content
+                                ));
                             }
-                            self.context_manager.add_message(ChatMessage::user(&mem_text));
-                            eprintln!("\r\x1b[2K🧠 已注入 {} 条相关持久化记忆（帮助模型恢复上下文）", results.len());
+                            self.context_manager
+                                .add_message(ChatMessage::user(&mem_text));
+                            eprintln!(
+                                "\r\x1b[2K🧠 已注入 {} 条相关持久化记忆（帮助模型恢复上下文）",
+                                results.len()
+                            );
                         }
                         Ok(_) => {}
                         Err(e) => {
@@ -769,7 +817,9 @@ impl Agent {
                 let _ = self.context_manager.prune_tool_calls();
             }
 
-            let current_adapter = self.model_manager.current_adapter()
+            let current_adapter = self
+                .model_manager
+                .current_adapter()
                 .expect("当前没有可用的模型适配器");
             let mut stream_chat = current_adapter.stream_chat(
                 &self.context_manager.get_messages(),
@@ -841,13 +891,16 @@ impl Agent {
                 .collect::<Vec<_>>();
 
             // ⭐ 活跃 Goal 停滞检查（连续无进展轮次超过阈值）
-            if self.goal_manager.has_active_goal() {
+            if goal_driven_enabled && self.goal_manager.has_active_goal() {
                 if let Some(goal) = self.goal_manager.active_goal_mut() {
                     let stalled = goal.is_stalled();
                     let goal_id = goal.id.clone();
                     let goal_clone = goal.clone();
                     if stalled {
-                        eprintln!("\r\x1b[2K⚠️  目标 '{}' 已停滞（连续 {} 轮无进展），自动标记为失败", goal_id, goal.stall_count);
+                        eprintln!(
+                            "\r\x1b[2K⚠️  目标 '{}' 已停滞（连续 {} 轮无进展），自动标记为失败",
+                            goal_id, goal.stall_count
+                        );
                         let _ = self.goal_manager.mark_failed(&goal_id, "stalled");
                     } else {
                         let _ = self.goal_manager.update(goal_clone);
@@ -856,16 +909,27 @@ impl Agent {
             }
 
             // ⭐ 检测 LLM 输出中的 Goal 完成信号
-            if self.goal_manager.has_active_goal() && !final_assistant_message.is_empty() {
-                if let Some((action, goal_id, reason)) = extract_goal_signal(&final_assistant_message) {
+            if goal_driven_enabled
+                && self.goal_manager.has_active_goal()
+                && !final_assistant_message.is_empty()
+            {
+                if let Some((action, goal_id, reason)) =
+                    extract_goal_signal(&final_assistant_message)
+                {
                     match action.as_str() {
                         "complete" => {
                             let _ = self.goal_manager.mark_complete(&goal_id);
-                            println!("\n\x1b[32m━━━ ✅ LLM 自动标记目标 '{}' 为已完成 ━━━\x1b[0m 🎉", goal_id);
+                            println!(
+                                "\n\x1b[32m━━━ ✅ LLM 自动标记目标 '{}' 为已完成 ━━━\x1b[0m 🎉",
+                                goal_id
+                            );
                         }
                         "fail" => {
                             let _ = self.goal_manager.mark_failed(&goal_id, &reason);
-                            println!("\n\x1b[31m━━━ ❌ LLM 自动标记目标 '{}' 为失败 ━━━\x1b[0m", goal_id);
+                            println!(
+                                "\n\x1b[31m━━━ ❌ LLM 自动标记目标 '{}' 为失败 ━━━\x1b[0m",
+                                goal_id
+                            );
                         }
                         "cancel" => {
                             let _ = self.goal_manager.mark_cancelled(&goal_id);
@@ -876,10 +940,38 @@ impl Agent {
                 }
             }
 
+            // ⭐ Fallback: 自动检测 Goal 完成信号（当 LLM 忘记输出 /goal complete 时的兜底）
+            // 注意：在 Goal 状态日志之前执行，以便 fallback 可能先标记为完成
+            if goal_driven_enabled
+                && self.goal_manager.has_active_goal()
+                && !final_assistant_message.is_empty()
+            {
+                let goal_id = self.goal_manager.active_goal().map(|g| g.id.clone());
+                let goal_clone = self.goal_manager.active_goal().cloned();
+                if let Some((ref goal_id, ref goal)) = goal_id.zip(goal_clone.as_ref()) {
+                    if let Some(reason) = auto_detect_goal_completion(
+                        goal,
+                        &final_assistant_message,
+                        &self.current_dir,
+                    ) {
+                        let _ = self.goal_manager.mark_complete(goal_id);
+                        println!(
+                            "\n\x1b[32m━━━ ✅ 自动检测到目标完成信号: {} (目标 '{}' 已完成) ━━━\x1b[0m 🎉",
+                            reason, goal_id
+                        );
+                    }
+                }
+            }
+
             // ⭐ Goal 状态日志（实际自动循环控制在下方的 is_auto 设定后处理）
-            if let Some(active_goal) = self.goal_manager.active_goal() {
-                if active_goal.status.is_terminal() {
-                    eprintln!("\r\x1b[2K🎯 目标 '{}' 已达终止状态 ({}), 停止自动执行", active_goal.id, active_goal.status);
+            if goal_driven_enabled {
+                if let Some(active_goal) = self.goal_manager.active_goal() {
+                    if active_goal.status.is_terminal() {
+                        eprintln!(
+                            "\r\x1b[2K🎯 目标 '{}' 已达终止状态 ({}), 停止自动执行",
+                            active_goal.id, active_goal.status
+                        );
+                    }
                 }
             }
 
@@ -900,15 +992,15 @@ impl Agent {
             if has_tool_calls {
                 let snapshot_manager = ErrorSnapshotManager::new(&self.current_dir);
                 for tool_call in &tool_calls {
-                    if let Some(tool_result) = tool_results.iter().find(|msg| {
-                        msg.tool_call_id() == Some(tool_call.id.as_str())
-                    }) {
+                    if let Some(tool_result) = tool_results
+                        .iter()
+                        .find(|msg| msg.tool_call_id() == Some(tool_call.id.as_str()))
+                    {
                         if let ChatMessage::Tool { content, .. } = tool_result {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(content) {
                                 if val["ok"].as_bool() == Some(false) {
-                                    let err_msg = val["error"]["message"]
-                                        .as_str()
-                                        .unwrap_or("unknown error");
+                                    let err_msg =
+                                        val["error"]["message"].as_str().unwrap_or("unknown error");
                                     let tool_args: serde_json::Value =
                                         serde_json::from_str(&tool_call.arguments)
                                             .unwrap_or(serde_json::json!({}));
@@ -942,13 +1034,15 @@ impl Agent {
 
             // 将工具调用消息加入上下文
             if tool_calls.len() > 0 {
-                self.context_manager.add_message(ChatMessage::assistant_tool_calls(
-                    final_assistant_message,
-                    tool_calls,
-                ));
+                self.context_manager
+                    .add_message(ChatMessage::assistant_tool_calls(
+                        final_assistant_message,
+                        tool_calls,
+                    ));
                 is_auto = true;
             } else {
-                self.context_manager.add_message(ChatMessage::assistant(final_assistant_message));
+                self.context_manager
+                    .add_message(ChatMessage::assistant(final_assistant_message));
                 is_auto = false;
             }
 
@@ -956,24 +1050,45 @@ impl Agent {
 
             // ⭐ Goal 状态驱动的自动循环控制
             // 如果目标未完成（活跃状态），继续自动推进（不重复注入目标消息）
-            if self.goal_manager.has_active_goal() {
-                if let Some(active_goal) = self.goal_manager.active_goal() {
-                    if !active_goal.status.is_terminal() {
-                        // 目标未完成 → 继续自动推进
-                        // ❗ 注意：目标状态不在每次循环重复注入，仅在：
-                        //   1. 启动时（agent.rs:433-438）
-                        //   2. 上下文压缩后（agent.rs:613-618）
-                        // 这样可以防止上下文无限增长
+            if goal_driven_enabled {
+                let goal_is_terminal = self
+                    .goal_manager
+                    .active_goal()
+                    .map(|goal| goal.status.is_terminal())
+                    .unwrap_or(false);
+                match goal_loop_state.decide(
+                    self.goal_manager.has_active_goal(),
+                    goal_is_terminal,
+                    has_tool_calls,
+                ) {
+                    GoalAutoLoopDecision::Continue => {
+                        // 目标未完成 → 继续自动推进。目标状态只在启动和压缩后注入，避免上下文无限增长。
                         is_auto = true;
-                    } else {
-                        // 目标已完成/失败/取消 → 停止自动循环
+                    }
+                    GoalAutoLoopDecision::StopNoActiveGoal => {}
+                    GoalAutoLoopDecision::StopTerminal => {
+                        is_auto = false;
+                    }
+                    GoalAutoLoopDecision::StopIdle => {
+                        eprintln!(
+                            "\r\x1b[2K🎯 目标仍为 Active，但连续 {} 轮没有工具调用；暂停自动执行，等待用户输入",
+                            goal_loop_state.idle_iterations,
+                        );
+                        is_auto = false;
+                    }
+                    GoalAutoLoopDecision::StopMaxIterations => {
+                        eprintln!(
+                            "\r\x1b[2K🎯 目标自动执行已达到 {} 轮上限；暂停自动执行，等待用户输入",
+                            goal_loop_state.auto_iterations,
+                        );
                         is_auto = false;
                     }
                 }
+            } else {
+                goal_loop_state.reset();
             }
 
-            // ⭐ 自动循环无限进行，直到目标进入终止状态（已完成/失败/取消）
-            // 不再限制连续自动迭代次数
+            // ⭐ Goal 自动执行由 GoalLoopState 加护栏，避免持久化 Active Goal 导致无限循环
 
             // ⭐ 自动提取重要信息到持久化记忆（每 N 轮非工具调用的对话）
             if should_auto_extract {
@@ -982,25 +1097,32 @@ impl Agent {
                     auto_extract_counter = 0;
                     // 获取最近一轮的用户输入和助手回复
                     let recent_msgs = self.context_manager.get_messages();
-                    let last_user = recent_msgs.iter().rev().find_map(|m| {
-                        match m {
-                            ChatMessage::User { content, .. } => Some(content.clone()),
-                            _ => None,
-                        }
+                    let last_user = recent_msgs.iter().rev().find_map(|m| match m {
+                        ChatMessage::User { content, .. } => Some(content.clone()),
+                        _ => None,
                     });
                     if let Some(user_input) = last_user {
                         let memory_content = format!(
                             "[对话] 用户: {} | 助手: {}",
-                            if user_input.len() > 200 { &user_input[..200] } else { &user_input },
-                            if assistant_msg_clone.len() > 500 { &assistant_msg_clone[..500] } else { &assistant_msg_clone }
+                            if user_input.len() > 200 {
+                                &user_input[..200]
+                            } else {
+                                &user_input
+                            },
+                            if assistant_msg_clone.len() > 500 {
+                                &assistant_msg_clone[..500]
+                            } else {
+                                &assistant_msg_clone
+                            }
                         );
                         let tags = vec!["auto-extracted".to_string(), "conversation".to_string()];
-                        match self.memory_manager.lock().await.save(
-                            &memory_content,
-                            &tags,
-                            MemorySource::Conversation,
-                            0.3,
-                        ).await {
+                        match self
+                            .memory_manager
+                            .lock()
+                            .await
+                            .save(&memory_content, &tags, MemorySource::Conversation, 0.3)
+                            .await
+                        {
                             Ok(id) => {
                                 eprintln!("\r\x1b[2K🧠 自动提取并保存了一条对话记忆 (id: {})", id);
                             }
@@ -1102,14 +1224,18 @@ fn handle_session_command(
                     if ctx.get_messages().len() > 1 {
                         let auto_save_name = format!("_autosave_{}", chrono_now_simple());
                         let _ = session_manager.save(&auto_save_name, ctx);
-                        println!("\x1b[90m  💾 当前上下文已自动保存为: {}\x1b[0m", auto_save_name);
+                        println!(
+                            "\x1b[90m  💾 当前上下文已自动保存为: {}\x1b[0m",
+                            auto_save_name
+                        );
                     }
 
                     // 生成恢复用的系统提示词
                     let restore_prompt = session_manager.default_system_prompt(&session);
 
                     // 重建 ContextManager
-                    let restored_messages = session_manager.restore_messages(&session, &restore_prompt);
+                    let restored_messages =
+                        session_manager.restore_messages(&session, &restore_prompt);
                     *ctx = ContextManager::new(restore_prompt, session.strategy.clone());
 
                     // 恢复消息
@@ -1166,7 +1292,10 @@ fn handle_session_command(
             let new_name = parts[3..].join(" ");
             match session_manager.rename(old_name, &new_name) {
                 Ok(true) => {
-                    println!("\x1b[32m━━━ ✏️ 会话已重命名: {} → {}\x1b[0m", old_name, new_name);
+                    println!(
+                        "\x1b[32m━━━ ✏️ 会话已重命名: {} → {}\x1b[0m",
+                        old_name, new_name
+                    );
                 }
                 Ok(false) => {
                     println!("\x1b[33m⚠️  会话不存在: {}\x1b[0m", old_name);
@@ -1194,7 +1323,10 @@ fn list_sessions(session_manager: &SessionManager) {
                 println!("\x1b[33m📂 暂无保存的会话\x1b[0m");
                 println!("\x1b[90m  💡 使用 /session save <名称> 保存当前对话\x1b[0m");
             } else {
-                println!("\x1b[36m━━━ 📂 已保存的会话 (共 {}) ━━━\x1b[0m", sessions.len());
+                println!(
+                    "\x1b[36m━━━ 📂 已保存的会话 (共 {}) ━━━\x1b[0m",
+                    sessions.len()
+                );
                 for session in &sessions {
                     println!("{}", session);
                 }
@@ -1295,13 +1427,19 @@ fn render_tool_result_from_msg(msg: &ChatMessage) {
 
 /// 判断工具结果是否为重要上下文
 fn is_important_tool_result(msg: &ChatMessage) -> bool {
-    let ChatMessage::Tool { content, .. } = msg else { return false };
-    let Ok(val) = serde_json::from_str::<serde_json::Value>(content) else { return false };
+    let ChatMessage::Tool { content, .. } = msg else {
+        return false;
+    };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(content) else {
+        return false;
+    };
     let Some(stdout) = val
         .get("result")
         .and_then(|r| r.get("stdout"))
         .and_then(|s| s.as_str())
-    else { return false };
+    else {
+        return false;
+    };
 
     crate::context::is_stdout_structural(stdout)
 }
@@ -1344,14 +1482,14 @@ fn handle_model_command(input: &str, model_manager: &mut ModelManager) {
             println!("\x1b[36m━━━ 🤖 已注册模型 (共 {}) ━━━\x1b[0m", models.len());
             for cfg in &models {
                 let indicator = if cfg.name == active { "→ " } else { "  " };
-                let active_mark = if cfg.name == active { " \x1b[32m(当前)\x1b[0m" } else { "" };
+                let active_mark = if cfg.name == active {
+                    " \x1b[32m(当前)\x1b[0m"
+                } else {
+                    ""
+                };
                 println!(
                     "  {}\x1b[33m{:<12}\x1b[0m {} {}{}",
-                    indicator,
-                    cfg.name,
-                    cfg.model_name,
-                    cfg.provider,
-                    active_mark,
+                    indicator, cfg.name, cfg.model_name, cfg.provider, active_mark,
                 );
             }
         }
@@ -1374,7 +1512,10 @@ fn handle_model_command(input: &str, model_manager: &mut ModelManager) {
             let target = parts[2..].join(" ");
             match model_manager.switch(&target) {
                 Ok(_) => {
-                    println!("\x1b[32m━━━ ✅ 已切换到模型 '{}{}' ━━━\x1b[0m", '\'', &target);
+                    println!(
+                        "\x1b[32m━━━ ✅ 已切换到模型 '{}{}' ━━━\x1b[0m",
+                        '\'', &target
+                    );
                 }
                 Err(e) => {
                     println!("\x1b[31m━━━ ❌ 切换失败: {}\x1b[0m", e);
@@ -1433,9 +1574,7 @@ fn handle_goal_command(input: &str, goal_manager: &mut GoalRegistry) {
                 };
                 println!(
                     "  {} \x1b[33m{:<8}\x1b[0m {}",
-                    status_icon,
-                    goal.id,
-                    goal.description
+                    status_icon, goal.id, goal.description
                 );
             }
         }
@@ -1531,11 +1670,17 @@ fn handle_goal_command(input: &str, goal_manager: &mut GoalRegistry) {
         }
         "history" | "hist" | "log" => {
             let goals = goal_manager.list();
-            let completed: Vec<_> = goals.iter().filter(|g| g.status.to_string().to_lowercase() != "active").collect();
+            let completed: Vec<_> = goals
+                .iter()
+                .filter(|g| g.status.to_string().to_lowercase() != "active")
+                .collect();
             if completed.is_empty() {
                 println!("\x1b[33m📜 暂无历史目标记录\x1b[0m");
             } else {
-                println!("\x1b[36m━━━ 📜 历史目标 (共 {}) ━━━\x1b[0m", completed.len());
+                println!(
+                    "\x1b[36m━━━ 📜 历史目标 (共 {}) ━━━\x1b[0m",
+                    completed.len()
+                );
                 for goal in completed {
                     let status_str = goal.status.to_string();
                     let status_icon = match status_str.to_lowercase().as_str() {
@@ -1546,9 +1691,7 @@ fn handle_goal_command(input: &str, goal_manager: &mut GoalRegistry) {
                     };
                     println!(
                         "  {} \x1b[33m{:<8}\x1b[0m {}",
-                        status_icon,
-                        goal.id,
-                        goal.description,
+                        status_icon, goal.id, goal.description,
                     );
                 }
             }
@@ -1605,7 +1748,9 @@ fn handle_goal_command(input: &str, goal_manager: &mut GoalRegistry) {
 /// 打印 /goal 命令帮助
 fn print_goal_help() {
     println!("\x1b[36m━━━ 🎯 目标管理命令 ━━━\x1b[0m");
-    println!("  \x1b[33m/goal set <描述>\x1b[0m          创建新目标（设定后 agent 会持续推进直到完成）");
+    println!(
+        "  \x1b[33m/goal set <描述>\x1b[0m          创建新目标（设定后 agent 会持续推进直到完成）"
+    );
     println!("  \x1b[33m/goal list\x1b[0m                列出所有目标");
     println!("  \x1b[33m/goal status\x1b[0m              显示当前活跃目标");
     println!("  \x1b[33m/goal complete <id>\x1b[0m       标记目标为已完成");
@@ -1633,7 +1778,6 @@ fn default_tool_manager() -> ToolManager {
     tool_manager
 }
 
-
 /// ⭐ 从 LLM 输出文本中提取 Goal 完成信号
 ///
 /// 解析 `/goal complete <id>`、`/goal fail <id> [reason]`、`/goal cancel <id>` 模式。
@@ -1646,9 +1790,93 @@ fn extract_goal_signal(text: &str) -> Option<(String, String, String)> {
     if let Some(caps) = re.captures(text) {
         let action = caps.get(1)?.as_str().to_string();
         let goal_id = caps.get(2)?.as_str().to_string();
-        let reason = caps.get(3).map(|m| m.as_str().to_string()).unwrap_or_default();
+        let reason = caps
+            .get(3)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default();
         Some((action, goal_id, reason))
     } else {
         None
+    }
+}
+
+/// ⭐ 自动检测 Goal 完成信号（当 LLM 忘记输出 /goal complete 时的 fallback）
+///
+/// 检测策略：
+/// 1. PLAN.md 中所有 `- [ ]` 步骤是否都已变为 `- [x]`
+/// 2. AI 回复中是否包含强烈的完成信号关键词（中英文）
+/// 3. Goal 本身的 all_steps_done 属性
+/// 4. Goal 进度是否已达 100%
+///
+/// 返回 Some(reason) 如果检测到完成信号，否则返回 None。
+fn auto_detect_goal_completion(
+    goal: &crate::goal::Goal,
+    assistant_message: &str,
+    current_dir: &str,
+) -> Option<String> {
+    let mut reasons = Vec::new();
+
+    // ── 策略1: 检查 PLAN.md 是否所有步骤已完成 ──
+    let plan_path = std::path::Path::new(current_dir).join("PLAN.md");
+    if plan_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&plan_path) {
+            let has_unchecked = content
+                .lines()
+                .any(|line| line.contains("- [ ]") || line.contains("- [ ]"));
+            let has_any_step = content.lines().any(|line| line.contains("- ["));
+            if has_any_step && !has_unchecked {
+                reasons.push("PLAN.md 所有步骤已完成".to_string());
+            }
+        }
+    }
+
+    // ── 策略2: 检测 AI 回复中的完成关键词 ──
+    if !assistant_message.is_empty() {
+        let lower_msg = assistant_message.to_lowercase();
+        let completion_keywords = [
+            // 中文完成信号
+            "已完成",
+            "全部完成",
+            "任务完成",
+            "所有步骤已完成",
+            "已完成所有",
+            "全部已完成",
+            "已完成全部",
+            "所有步骤均已",
+            "已全部完成",
+            // 英文完成信号
+            "all steps completed",
+            "task completed",
+            "all done",
+            "all tasks completed",
+            "completed successfully",
+            "finished all",
+            "all steps are done",
+            // 混合模式
+            "✅ 已完成",
+            "✅ 全部完成",
+        ];
+        for kw in &completion_keywords {
+            if lower_msg.contains(&kw.to_lowercase()) {
+                reasons.push(format!("AI 回复包含完成关键词: {}", kw));
+                break;
+            }
+        }
+    }
+
+    // ── 策略3: 检查 Goal 本身的 all_steps_done ──
+    if goal.all_steps_done() {
+        reasons.push("Goal 步骤全部标记为已完成".to_string());
+    }
+
+    // ── 策略4: 检查 progress 是否已达 100% ──
+    if goal.progress >= 100 {
+        reasons.push(format!("Goal 进度已达 100%"));
+    }
+
+    if reasons.is_empty() {
+        None
+    } else {
+        Some(reasons.join("; "))
     }
 }

@@ -1,7 +1,6 @@
 /// 错误排查 — ErrorSnapshotManager
 ///
 /// 管理错误快照的捕获、保存、加载、列表功能。
-
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -75,7 +74,11 @@ impl ErrorSnapshotManager {
 
         // 限制错误输出长度
         let truncated_output = if error_output.len() > 2000 {
-            format!("{}...\n[输出截断，共 {} 字符]", &error_output[..2000], error_output.len())
+            format!(
+                "{}...\n[输出截断，共 {} 字符]",
+                &error_output[..2000],
+                error_output.len()
+            )
         } else {
             error_output.to_string()
         };

@@ -16,7 +16,7 @@ use tokio::sync::Mutex as TokioMutex;
 use super::heartbeat::HeartbeatMonitor;
 use super::registry::{AgentType, SwarmRegistry};
 use super::rpc::JsonRpcRequest;
-use super::transport::{default_socket_path, UdsServer, UdsStream};
+use super::transport::{UdsServer, UdsStream, default_socket_path};
 
 /// 已连接的 Agent 信息（包含活动流）
 pub struct ConnectedAgent {
@@ -92,7 +92,9 @@ impl SwarmOrchestrator {
         eprintln!("🐝 [Orchestrator] Agent '{}' 已注册", agent_id);
 
         // 这里需要返回可变引用，但我们用 HashMap 存储，用 get_mut
-        let stream_ref = self.streams.get_mut(&agent_id)
+        let stream_ref = self
+            .streams
+            .get_mut(&agent_id)
             .ok_or_else(|| anyhow::anyhow!("Agent '{}' not found after insert", agent_id))?;
 
         Ok((agent_id, stream_ref))
@@ -124,13 +126,18 @@ impl SwarmOrchestrator {
 
     /// 向指定 Agent 发送 JSON-RPC 请求
     pub async fn send_to_agent(&mut self, agent_id: &str, request: &JsonRpcRequest) -> Result<()> {
-        let stream = self.streams.get_mut(agent_id)
+        let stream = self
+            .streams
+            .get_mut(agent_id)
             .ok_or_else(|| anyhow::anyhow!("Agent '{}' not connected", agent_id))?;
         stream.send_request(request).await
     }
 
     /// 发送消息到所有 Agent（广播）
-    pub async fn broadcast(&mut self, request: &super::rpc::JsonRpcRequest) -> Vec<(String, Result<()>)> {
+    pub async fn broadcast(
+        &mut self,
+        request: &super::rpc::JsonRpcRequest,
+    ) -> Vec<(String, Result<()>)> {
         let mut results = Vec::new();
         let agent_ids: Vec<String> = self.streams.keys().cloned().collect();
         for agent_id in agent_ids {
@@ -167,7 +174,8 @@ impl SwarmOrchestrator {
 
     /// 获取已注册的类型列表
     pub fn agent_type_summary(&self) -> HashMap<String, String> {
-        self.agent_types.iter()
+        self.agent_types
+            .iter()
             .map(|(id, t)| (id.clone(), format!("{:?}", t)))
             .collect()
     }

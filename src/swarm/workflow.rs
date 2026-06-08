@@ -182,9 +182,18 @@ impl WorkflowEngine {
 
     /// 执行 Workflow
     pub async fn execute(&mut self, workflow: &Workflow) -> Result<WorkflowState> {
-        let execution_id = format!("wf-{}-{}", workflow.name, 
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs());
-        eprintln!("📋 [Workflow] 开始执行: {} (id: {})", workflow.name, execution_id);
+        let execution_id = format!(
+            "wf-{}-{}",
+            workflow.name,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        );
+        eprintln!(
+            "📋 [Workflow] 开始执行: {} (id: {})",
+            workflow.name, execution_id
+        );
 
         // 初始化 Workflow 状态
         let mut state = WorkflowState {
@@ -199,16 +208,19 @@ impl WorkflowEngine {
 
         // 初始化所有步骤为 Pending
         for step in &workflow.steps {
-            state.step_results.insert(step.id.clone(), StepResult {
-                step_id: step.id.clone(),
-                step_name: step.name.clone(),
-                status: StepStatus::Pending,
-                output: None,
-                error: None,
-                started_at: String::new(),
-                completed_at: None,
-                duration_ms: 0,
-            });
+            state.step_results.insert(
+                step.id.clone(),
+                StepResult {
+                    step_id: step.id.clone(),
+                    step_name: step.name.clone(),
+                    status: StepStatus::Pending,
+                    output: None,
+                    error: None,
+                    started_at: String::new(),
+                    completed_at: None,
+                    duration_ms: 0,
+                },
+            );
         }
 
         // 保存到活跃列表
@@ -253,9 +265,10 @@ impl WorkflowEngine {
                     let step_name = step.name.clone();
 
                     // 启动并行执行
-                    let handle = tokio::spawn(async move {
-                        execute_step(pool_mgr, &task_desc, step_name).await
-                    });
+                    let handle =
+                        tokio::spawn(
+                            async move { execute_step(pool_mgr, &task_desc, step_name).await },
+                        );
                     handles.push((step_id.clone(), handle, step.name.clone()));
                 }
             }
@@ -289,10 +302,16 @@ impl WorkflowEngine {
         }
 
         // 更新最终状态
-        let failed_count = state.step_results.values()
-            .filter(|r| r.status == StepStatus::Failed).count();
-        let success_count = state.step_results.values()
-            .filter(|r| r.status == StepStatus::Success).count();
+        let failed_count = state
+            .step_results
+            .values()
+            .filter(|r| r.status == StepStatus::Failed)
+            .count();
+        let success_count = state
+            .step_results
+            .values()
+            .filter(|r| r.status == StepStatus::Success)
+            .count();
 
         state.status = if failed_count == 0 && success_count > 0 {
             WorkflowStatus::Completed
@@ -311,8 +330,10 @@ impl WorkflowEngine {
             active.insert(execution_id, state.clone());
         }
 
-        eprintln!("📋 [Workflow] 执行完成: {} (成功: {}, 失败: {})",
-            workflow.name, success_count, failed_count);
+        eprintln!(
+            "📋 [Workflow] 执行完成: {} (成功: {}, 失败: {})",
+            workflow.name, success_count, failed_count
+        );
 
         Ok(state)
     }
@@ -336,7 +357,8 @@ impl WorkflowEngine {
             }
         }
 
-        let mut queue: Vec<&str> = in_degree.iter()
+        let mut queue: Vec<&str> = in_degree
+            .iter()
             .filter(|&(_, deg)| *deg == 0)
             .map(|(id, _)| *id)
             .collect();
@@ -377,24 +399,24 @@ impl WorkflowEngine {
     /// 评估条件
     async fn evaluate_condition(&self, condition: &Condition, state: &WorkflowState) -> bool {
         match condition.condition_type {
-            ConditionType::Success => {
-                state.step_results.values()
-                    .all(|r| r.status == StepStatus::Success)
-            }
-            ConditionType::Failure => {
-                state.step_results.values()
-                    .any(|r| r.status == StepStatus::Failed)
-            }
-            ConditionType::OutputContains => {
-                state.step_results.values()
-                    .filter_map(|r| r.output.as_ref())
-                    .any(|out| out.contains(&condition.value))
-            }
-            ConditionType::OutputEquals => {
-                state.step_results.values()
-                    .filter_map(|r| r.output.as_ref())
-                    .any(|out| out == &condition.value)
-            }
+            ConditionType::Success => state
+                .step_results
+                .values()
+                .all(|r| r.status == StepStatus::Success),
+            ConditionType::Failure => state
+                .step_results
+                .values()
+                .any(|r| r.status == StepStatus::Failed),
+            ConditionType::OutputContains => state
+                .step_results
+                .values()
+                .filter_map(|r| r.output.as_ref())
+                .any(|out| out.contains(&condition.value)),
+            ConditionType::OutputEquals => state
+                .step_results
+                .values()
+                .filter_map(|r| r.output.as_ref())
+                .any(|out| out == &condition.value),
         }
     }
 
@@ -443,10 +465,16 @@ async fn execute_step(
         }
     };
 
-    eprintln!("📋 [Workflow] 步骤 '{}' 使用实例 '{}'", step_name, instance_id);
+    eprintln!(
+        "📋 [Workflow] 步骤 '{}' 使用实例 '{}'",
+        step_name, instance_id
+    );
     // 模拟执行（真实场景中通过 UDS 发送任务给 Agent）
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let result = format!("步骤 '{}' 执行完成，使用了实例 '{}'", step_name, instance_name);
+    let result = format!(
+        "步骤 '{}' 执行完成，使用了实例 '{}'",
+        step_name, instance_name
+    );
 
     // 释放实例回池
     {
@@ -459,7 +487,9 @@ async fn execute_step(
 
 /// 获取当前时间字符串（ISO 8601 格式）
 fn format_now() -> String {
-    let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let dur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     let secs = dur.as_secs();
     let millis = dur.subsec_millis();
     // 转换为 ISO 8601 格式
@@ -468,11 +498,16 @@ fn format_now() -> String {
     let hours = time_secs / 3600;
     let minutes = (time_secs % 3600) / 60;
     let seconds = time_secs % 60;
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        1970 + (days / 365) as u32, // 近似年份
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        1970 + (days / 365) as u32,     // 近似年份
         ((days % 365) / 30 + 1) as u32, // 近似月份
         ((days % 365) % 30 + 1) as u32, // 近似日
-        hours, minutes, seconds, millis)
+        hours,
+        minutes,
+        seconds,
+        millis
+    )
 }
 
 // ─── 测试 ───────────────────────────────────────────────

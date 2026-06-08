@@ -13,7 +13,10 @@ fn format_messages_for_summary(messages: &[ContextMessage]) -> String {
         let line = match &msg.message {
             ChatMessage::System { content } => format!("[系统]: {}", content),
             ChatMessage::User { content } => format!("[用户]: {}", content),
-            ChatMessage::Assistant { content, tool_calls } => {
+            ChatMessage::Assistant {
+                content,
+                tool_calls,
+            } => {
                 if tool_calls.is_empty() {
                     format!("[助手]: {}", content)
                 } else {
@@ -164,8 +167,7 @@ impl AsyncSummarizer {
                         task.messages[..split_point]
                             .iter()
                             .filter(|m| {
-                                !m.preserved
-                                    && !matches!(&m.message, ChatMessage::System { .. })
+                                !m.preserved && !matches!(&m.message, ChatMessage::System { .. })
                             })
                             .cloned()
                             .collect::<Vec<_>>()
@@ -174,8 +176,7 @@ impl AsyncSummarizer {
                         .messages
                         .iter()
                         .filter(|m| {
-                            !m.preserved
-                                && !matches!(&m.message, ChatMessage::System { .. })
+                            !m.preserved && !matches!(&m.message, ChatMessage::System { .. })
                         })
                         .cloned()
                         .collect(),
@@ -271,9 +272,8 @@ impl AsyncSummarizer {
             content
         ));
 
-        let system_msg = ChatMessage::system(
-            "你是一个精准的结构化摘要助手。输出简洁，保留可操作信息。",
-        );
+        let system_msg =
+            ChatMessage::system("你是一个精准的结构化摘要助手。输出简洁，保留可操作信息。");
 
         let mut stream =
             model.stream_chat(&vec![system_msg, summary_prompt], serde_json::json!([]));

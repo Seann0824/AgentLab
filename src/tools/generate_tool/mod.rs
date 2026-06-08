@@ -83,7 +83,9 @@ impl Tool for GenerateTool {
             let tool_name = match args["tool_name"].as_str() {
                 Some(name) => name.to_string(),
                 None => {
-                    let _ = tx.send(ToolEvent::Err("tool_name is required".to_string())).await;
+                    let _ = tx
+                        .send(ToolEvent::Err("tool_name is required".to_string()))
+                        .await;
                     return;
                 }
             };
@@ -91,7 +93,9 @@ impl Tool for GenerateTool {
             let description = match args["description"].as_str() {
                 Some(d) => d.to_string(),
                 None => {
-                    let _ = tx.send(ToolEvent::Err("description is required".to_string())).await;
+                    let _ = tx
+                        .send(ToolEvent::Err("description is required".to_string()))
+                        .await;
                     return;
                 }
             };
@@ -99,7 +103,9 @@ impl Tool for GenerateTool {
             let params = match args["params"].as_array() {
                 Some(arr) => arr.clone(),
                 None => {
-                    let _ = tx.send(ToolEvent::Err("params must be an array".to_string())).await;
+                    let _ = tx
+                        .send(ToolEvent::Err("params must be an array".to_string()))
+                        .await;
                     return;
                 }
             };
@@ -115,7 +121,10 @@ impl Tool for GenerateTool {
 
             // === 生成工具代码 ===
             let struct_name = to_pascal_case(&tool_name);
-            let tool_dir = PathBuf::from(&project_root).join("src").join("tools").join(&tool_name);
+            let tool_dir = PathBuf::from(&project_root)
+                .join("src")
+                .join("tools")
+                .join(&tool_name);
             let tool_file = tool_dir.join("mod.rs");
 
             // 生成 JSON Schema properties
@@ -182,7 +191,8 @@ impl Tool for GenerateTool {
                 });
             }
 
-            let code = format!(r#"// src/tools/{tool_dir_name}/mod.rs
+            let code = format!(
+                r#"// src/tools/{tool_dir_name}/mod.rs
 //
 // {struct_name} — {description}
 //
@@ -254,23 +264,30 @@ impl Tool for {struct_name} {{
 
             // 创建目录并写入文件
             match tokio::fs::create_dir_all(&tool_dir).await {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(e) => {
-                    let _ = tx.send(ToolEvent::Err(format!("Failed to create directory: {}", e))).await;
+                    let _ = tx
+                        .send(ToolEvent::Err(format!("Failed to create directory: {}", e)))
+                        .await;
                     return;
                 }
             }
 
             match tokio::fs::write(&tool_file, &code).await {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(e) => {
-                    let _ = tx.send(ToolEvent::Err(format!("Failed to write file: {}", e))).await;
+                    let _ = tx
+                        .send(ToolEvent::Err(format!("Failed to write file: {}", e)))
+                        .await;
                     return;
                 }
             }
 
             // 更新 src/tools/mod.rs 添加模块声明
-            let mod_path = PathBuf::from(&project_root).join("src").join("tools").join("mod.rs");
+            let mod_path = PathBuf::from(&project_root)
+                .join("src")
+                .join("tools")
+                .join("mod.rs");
             match tokio::fs::read_to_string(&mod_path).await {
                 Ok(content) => {
                     let mod_decl = format!("pub mod {};", tool_name);
@@ -280,7 +297,10 @@ impl Tool for {struct_name} {{
                         // 在 types 之后、最后一个 pub mod 之前插入
                         let new_content = if let Some(pos) = content.rfind("pub mod ") {
                             // 找到最后一个 pub mod 声明，在其后插入
-                            let insert_pos = content[pos..].find('\n').map(|p| pos + p + 1).unwrap_or(content.len());
+                            let insert_pos = content[pos..]
+                                .find('\n')
+                                .map(|p| pos + p + 1)
+                                .unwrap_or(content.len());
                             let mut updated = content.clone();
                             updated.insert_str(insert_pos, &format!("pub mod {};\n", tool_name));
                             updated
@@ -309,15 +329,22 @@ impl Tool for {struct_name} {{
                                     ]
                                 });
                                 let _ = tx.send(ToolEvent::Done(result)).await;
-                            },
+                            }
                             Err(e) => {
-                                let _ = tx.send(ToolEvent::Err(format!("File created but failed to update mod.rs: {}", e))).await;
+                                let _ = tx
+                                    .send(ToolEvent::Err(format!(
+                                        "File created but failed to update mod.rs: {}",
+                                        e
+                                    )))
+                                    .await;
                             }
                         }
                     }
-                },
+                }
                 Err(e) => {
-                    let _ = tx.send(ToolEvent::Err(format!("Failed to read mod.rs: {}", e))).await;
+                    let _ = tx
+                        .send(ToolEvent::Err(format!("Failed to read mod.rs: {}", e)))
+                        .await;
                 }
             }
         });
@@ -353,5 +380,13 @@ fn simple_timestamp() -> String {
     let years = 1970 + (days / 365);
     let month = ((days % 365) / 30) + 1;
     let day = ((days % 365) % 30) + 1;
-    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", years, month.min(12), day.min(28), hours, minutes, secs % 60)
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        years,
+        month.min(12),
+        day.min(28),
+        hours,
+        minutes,
+        secs % 60
+    )
 }

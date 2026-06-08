@@ -18,9 +18,9 @@ use tokio::time::interval;
 
 use crate::memory::manager::MemoryManager;
 use crate::memory::types::MemorySource;
-use crate::swarm::transport::{UdsClient, default_socket_path};
-use crate::swarm::rpc::JsonRpcRequest;
 use crate::swarm::heartbeat::create_heartbeat_request;
+use crate::swarm::rpc::JsonRpcRequest;
+use crate::swarm::transport::{UdsClient, default_socket_path};
 
 /// Memory Agent — 记忆管理 Agent
 pub struct MemoryAgent {
@@ -102,7 +102,10 @@ impl MemoryAgent {
                         }
                     }
                     if removed > 0 {
-                        eprintln!("🧠 [维护] 清理了 {} 条低重要性记忆 (threshold=0.2)", removed);
+                        eprintln!(
+                            "🧠 [维护] 清理了 {} 条低重要性记忆 (threshold=0.2)",
+                            removed
+                        );
                     }
                     // 触发 compact
                     let _ = mgr.flush();
@@ -128,7 +131,8 @@ impl MemoryAgent {
                         let content_i = entries[i].content.trim();
                         let content_j = entries[j].content.trim();
                         if content_i == content_j
-                            || (content_i.len() > 20 && content_j.len() > 20
+                            || (content_i.len() > 20
+                                && content_j.len() > 20
                                 && (content_i.contains(content_j) || content_j.contains(content_i)))
                         {
                             // 保留重要性更高的那条
@@ -182,26 +186,36 @@ impl MemoryAgent {
     async fn handle_request(&self, request: JsonRpcRequest) {
         match request.method.as_str() {
             "memory_save" => {
-                let content = request.params
+                let content = request
+                    .params
                     .as_ref()
                     .and_then(|p| p.get("content"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let importance = request.params
+                let importance = request
+                    .params
                     .as_ref()
                     .and_then(|p| p.get("importance"))
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.5) as f32;
-                let tags: Vec<String> = request.params
+                let tags: Vec<String> = request
+                    .params
                     .as_ref()
                     .and_then(|p| p.get("tags"))
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
                     .unwrap_or_default();
 
                 let mut mgr = self.memory_manager.lock().await;
-                match mgr.save(&content, &tags, MemorySource::Manual, importance).await {
+                match mgr
+                    .save(&content, &tags, MemorySource::Manual, importance)
+                    .await
+                {
                     Ok(id) => {
                         eprintln!("🧠 记忆已保存: id={}", id);
                         if let Some(ref client_arc) = self.client {
@@ -215,7 +229,9 @@ impl MemoryAgent {
                                     "content": content,
                                 }
                             });
-                            let _ = client.send_raw(&serde_json::to_string(&resp).unwrap()).await;
+                            let _ = client
+                                .send_raw(&serde_json::to_string(&resp).unwrap())
+                                .await;
                         }
                     }
                     Err(e) => {
@@ -224,13 +240,15 @@ impl MemoryAgent {
                 }
             }
             "memory_search" => {
-                let query = request.params
+                let query = request
+                    .params
                     .as_ref()
                     .and_then(|p| p.get("query"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let top_k = request.params
+                let top_k = request
+                    .params
                     .as_ref()
                     .and_then(|p| p.get("top_k"))
                     .and_then(|v| v.as_u64())
@@ -241,16 +259,19 @@ impl MemoryAgent {
                     Ok(results) => {
                         if let Some(ref client_arc) = self.client {
                             let mut client = client_arc.lock().await;
-                            let memories: Vec<serde_json::Value> = results.iter().map(|m| {
-                                serde_json::json!({
-                                    "id": m.record.id,
-                                    "content": m.record.content,
-                                    "importance": m.record.importance,
-                                    "tags": m.record.tags,
-                                    "score": m.score,
-                                    "source": m.record.source,
+                            let memories: Vec<serde_json::Value> = results
+                                .iter()
+                                .map(|m| {
+                                    serde_json::json!({
+                                        "id": m.record.id,
+                                        "content": m.record.content,
+                                        "importance": m.record.importance,
+                                        "tags": m.record.tags,
+                                        "score": m.score,
+                                        "source": m.record.source,
+                                    })
                                 })
-                            }).collect();
+                                .collect();
                             let resp = serde_json::json!({
                                 "jsonrpc": "2.0",
                                 "id": request.id,
@@ -260,7 +281,9 @@ impl MemoryAgent {
                                     "count": memories.len(),
                                 }
                             });
-                            let _ = client.send_raw(&serde_json::to_string(&resp).unwrap()).await;
+                            let _ = client
+                                .send_raw(&serde_json::to_string(&resp).unwrap())
+                                .await;
                         }
                     }
                     Err(e) => {
@@ -269,7 +292,8 @@ impl MemoryAgent {
                 }
             }
             "memory_forget" => {
-                let memory_id = request.params
+                let memory_id = request
+                    .params
                     .as_ref()
                     .and_then(|p| p.get("id"))
                     .and_then(|v| v.as_str())
@@ -289,7 +313,9 @@ impl MemoryAgent {
                                 "message": format!("记忆 {} 已删除", memory_id),
                             }
                         });
-                        let _ = client.send_raw(&serde_json::to_string(&resp).unwrap()).await;
+                        let _ = client
+                            .send_raw(&serde_json::to_string(&resp).unwrap())
+                            .await;
                     }
                 } else {
                     eprintln!("🧠 记忆删除失败: id={} 不存在", memory_id);
@@ -312,7 +338,9 @@ impl MemoryAgent {
                             },
                         }
                     });
-                    let _ = client.send_raw(&serde_json::to_string(&resp).unwrap()).await;
+                    let _ = client
+                        .send_raw(&serde_json::to_string(&resp).unwrap())
+                        .await;
                 }
             }
             "shutdown" => {

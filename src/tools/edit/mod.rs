@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use tokio::{sync::mpsc, fs};
+use tokio::{fs, sync::mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::tools::types::{Tool, ToolEvent, ToolStream};
@@ -188,7 +188,11 @@ async fn read_file_lines_or_create(file_path: &str) -> Result<(String, Vec<Strin
 async fn write_file_lines(file_path: &str, lines: &[String]) -> Result<(), String> {
     let content = lines.join("\n");
     // 确保文件末尾有换行
-    let content = if content.ends_with('\n') { content } else { content + "\n" };
+    let content = if content.ends_with('\n') {
+        content
+    } else {
+        content + "\n"
+    };
     fs::write(file_path, &content)
         .await
         .map_err(|e| format!("failed to write file: {}", e))
@@ -219,11 +223,25 @@ fn format_diff_lines(old_lines: &[String], new_lines: &[String]) -> String {
     let start = 1;
     let _end = max_len;
 
-    diff.push_str(&format!("@@ -{},{} +{},{} @@\n", start, old_lines.len(), start, new_lines.len()));
+    diff.push_str(&format!(
+        "@@ -{},{} +{},{} @@\n",
+        start,
+        old_lines.len(),
+        start,
+        new_lines.len()
+    ));
 
     for i in 0..max_len {
-        let old_line = if i < old_lines.len() { &old_lines[i] } else { "" };
-        let new_line = if i < new_lines.len() { &new_lines[i] } else { "" };
+        let old_line = if i < old_lines.len() {
+            &old_lines[i]
+        } else {
+            ""
+        };
+        let new_line = if i < new_lines.len() {
+            &new_lines[i]
+        } else {
+            ""
+        };
 
         if i < min_len {
             if old_line != new_line {
@@ -245,7 +263,11 @@ fn format_diff_lines(old_lines: &[String], new_lines: &[String]) -> String {
 }
 
 /// 操作1: search_replace - 搜索并替换
-async fn search_replace(file_path: &str, args: &serde_json::Value, dry_run: bool) -> Result<EditResult, String> {
+async fn search_replace(
+    file_path: &str,
+    args: &serde_json::Value,
+    dry_run: bool,
+) -> Result<EditResult, String> {
     let search = args["search"]
         .as_str()
         .ok_or_else(|| "search is required for search_replace operation".to_string())?;
@@ -302,7 +324,11 @@ async fn search_replace(file_path: &str, args: &serde_json::Value, dry_run: bool
 /// 操作2: insert - 在指定位置插入内容
 ///
 /// 文件不存在时自动创建（视为空文件），行号 1 有效。
-async fn insert_content(file_path: &str, args: &serde_json::Value, dry_run: bool) -> Result<EditResult, String> {
+async fn insert_content(
+    file_path: &str,
+    args: &serde_json::Value,
+    dry_run: bool,
+) -> Result<EditResult, String> {
     let content_str = args["content"]
         .as_str()
         .ok_or_else(|| "content is required for insert operation".to_string())?;
@@ -333,7 +359,8 @@ async fn insert_content(file_path: &str, args: &serde_json::Value, dry_run: bool
         // 使用搜索文本定位
         if lines.is_empty() {
             return Err(format!(
-                "文件为空，无法通过搜索文本定位插入位置：{}", search
+                "文件为空，无法通过搜索文本定位插入位置：{}",
+                search
             ));
         }
         let found = lines.iter().position(|l| l.contains(search));
@@ -342,9 +369,7 @@ async fn insert_content(file_path: &str, args: &serde_json::Value, dry_run: bool
                 insert_line = idx + 1; // 1-based
             }
             None => {
-                return Err(format!(
-                    "未找到包含指定文本的行：{}", search
-                ));
+                return Err(format!("未找到包含指定文本的行：{}", search));
             }
         }
     } else {
@@ -398,7 +423,11 @@ async fn insert_content(file_path: &str, args: &serde_json::Value, dry_run: bool
 }
 
 /// 操作3: delete - 删除内容
-async fn delete_content(file_path: &str, args: &serde_json::Value, dry_run: bool) -> Result<EditResult, String> {
+async fn delete_content(
+    file_path: &str,
+    args: &serde_json::Value,
+    dry_run: bool,
+) -> Result<EditResult, String> {
     let (_, mut lines) = read_file_lines(file_path).await?;
     let original_lines = lines.clone();
 
@@ -425,17 +454,16 @@ async fn delete_content(file_path: &str, args: &serde_json::Value, dry_run: bool
                 });
             }
             None => {
-                return Err(format!(
-                    "未找到包含指定文本的行：{}", search
-                ));
+                return Err(format!("未找到包含指定文本的行：{}", search));
             }
         }
     }
 
     // 方式B: 通过行范围删除
-    let line_start = args["line_start"].as_u64().ok_or_else(|| {
-        "delete 操作需要提供 search 或 line_start/line_end 参数".to_string()
-    })? as usize;
+    let line_start = args["line_start"]
+        .as_u64()
+        .ok_or_else(|| "delete 操作需要提供 search 或 line_start/line_end 参数".to_string())?
+        as usize;
     let line_end = args["line_end"].as_u64().unwrap_or(line_start as u64) as usize;
 
     if line_start < 1 || line_start > lines.len() {
@@ -456,7 +484,10 @@ async fn delete_content(file_path: &str, args: &serde_json::Value, dry_run: bool
     // 删除行范围（1-based 转 0-based）
     let drain: Vec<String> = lines.drain((line_start - 1)..line_end).collect();
     let removed_count = drain.len();
-    let diff_summary = format!("删除 {} 行（第 {}-{} 行）", removed_count, line_start, line_end);
+    let diff_summary = format!(
+        "删除 {} 行（第 {}-{} 行）",
+        removed_count, line_start, line_end
+    );
     let diff = format_diff_lines(&original_lines, &lines);
 
     if !dry_run {
@@ -476,7 +507,11 @@ async fn delete_content(file_path: &str, args: &serde_json::Value, dry_run: bool
 /// 操作4: append - 在文件末尾追加内容
 ///
 /// 文件不存在时自动创建。
-async fn append_content(file_path: &str, args: &serde_json::Value, dry_run: bool) -> Result<EditResult, String> {
+async fn append_content(
+    file_path: &str,
+    args: &serde_json::Value,
+    dry_run: bool,
+) -> Result<EditResult, String> {
     let content_str = args["content"]
         .as_str()
         .ok_or_else(|| "content is required for append operation".to_string())?;

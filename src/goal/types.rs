@@ -48,7 +48,10 @@ impl GoalStatus {
 
     /// 是否为终止状态（完成后不再自动执行）
     pub fn is_terminal(&self) -> bool {
-        matches!(self, GoalStatus::Completed | GoalStatus::Failed | GoalStatus::Cancelled)
+        matches!(
+            self,
+            GoalStatus::Completed | GoalStatus::Failed | GoalStatus::Cancelled
+        )
     }
 }
 
@@ -206,7 +209,9 @@ fn generate_id() -> String {
     let secs = dur.as_secs();
     let micros = dur.subsec_micros();
     // 使用一个简单的随机数
-    let rand_val = (micros as u64).wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let rand_val = (micros as u64)
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     let short_id = rand_val % 100_000;
     format!("g{:x}{:05x}", secs % 0xFFFF, short_id)
 }
@@ -225,7 +230,14 @@ pub(crate) fn chrono_now() -> String {
     let year = 1970 + (days as f64 / 365.25) as u64;
     let month = 1 + ((days as f64 % 365.25) / 30.44) as u64;
     let day = 1 + (days as f64 % 30.44) as u64;
-    format!("{:04}-{:02}-{:02} {:02}:{:02}", year, month.min(12), day.min(31), hours, minutes)
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        year,
+        month.min(12),
+        day.min(31),
+        hours,
+        minutes
+    )
 }
 
 #[cfg(test)]
@@ -247,11 +259,7 @@ mod tests {
 
     #[test]
     fn test_goal_lifecycle() {
-        let mut goal = Goal::new(
-            "测试".to_string(),
-            "".to_string(),
-            vec![],
-        );
+        let mut goal = Goal::new("测试".to_string(), "".to_string(), vec![]);
         assert_eq!(goal.status, GoalStatus::Proposed);
 
         goal.activate();
@@ -266,11 +274,7 @@ mod tests {
 
     #[test]
     fn test_goal_progress() {
-        let mut goal = Goal::new(
-            "测试".to_string(),
-            "".to_string(),
-            vec![],
-        );
+        let mut goal = Goal::new("测试".to_string(), "".to_string(), vec![]);
         goal.steps = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         assert_eq!(goal.progress, 0);
 
@@ -288,11 +292,7 @@ mod tests {
 
     #[test]
     fn test_stall_detection() {
-        let mut goal = Goal::new(
-            "测试".to_string(),
-            "".to_string(),
-            vec![],
-        );
+        let mut goal = Goal::new("测试".to_string(), "".to_string(), vec![]);
         goal.steps = vec!["a".to_string()];
         goal.record_step_completed("a".to_string());
         assert_eq!(goal.stall_count, 0);

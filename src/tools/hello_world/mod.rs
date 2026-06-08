@@ -50,10 +50,8 @@ impl Tool for HelloWorld {
         let (tx, rx) = mpsc::channel(1);
 
         tokio::spawn(async move {
-        let _name: String = args["name"]
-            .as_str().unwrap_or("").to_string();
-        let _greeting: String = args["greeting"]
-            .as_str().unwrap_or("").to_string();
+            let _name: String = args["name"].as_str().unwrap_or("").to_string();
+            let _greeting: String = args["greeting"].as_str().unwrap_or("").to_string();
 
             // TODO: 实现工具逻辑
             let result = serde_json::json!({

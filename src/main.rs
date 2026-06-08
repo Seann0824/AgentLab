@@ -41,7 +41,8 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let agent_type = parse_agent_type(&cli.agent_type);
-    let socket_path = cli.socket_path
+    let socket_path = cli
+        .socket_path
         .map(PathBuf::from)
         .unwrap_or_else(default_socket_path);
 
@@ -73,7 +74,9 @@ async fn run_orchestrator(socket_path: PathBuf) -> anyhow::Result<()> {
 
     let model_manager = ModelManager::from_env();
     if !model_manager.has_models() {
-        anyhow::bail!("未从环境变量发现任何模型配置。请设置 <PREFIX>_API_KEY 和 <PREFIX>_BASE_URL 环境变量。");
+        anyhow::bail!(
+            "未从环境变量发现任何模型配置。请设置 <PREFIX>_API_KEY 和 <PREFIX>_BASE_URL 环境变量。"
+        );
     }
 
     // 创建 SwarmOrchestrator（绑定 UDS Server + 启动心跳监控）
@@ -91,7 +94,10 @@ async fn run_orchestrator(socket_path: PathBuf) -> anyhow::Result<()> {
         let orch = orch_arc.lock().await;
         orch.get_registry_snapshot().await
     };
-    eprintln!("🐝 [Orchestrator] 蜂群注册表已就绪: {} 个 Agent 已注册", registry.online_count());
+    eprintln!(
+        "🐝 [Orchestrator] 蜂群注册表已就绪: {} 个 Agent 已注册",
+        registry.online_count()
+    );
 
     // 启动交互式 Agent（Orchestrator 模式 = 主 Agent）
     let mut agent = Agent::builder()
@@ -106,7 +112,9 @@ async fn run_orchestrator(socket_path: PathBuf) -> anyhow::Result<()> {
 fn spawn_memory_agent(orchestrator_socket: &std::path::Path) {
     let socket_str = orchestrator_socket.to_string_lossy().to_string();
     let binary = std::env::current_exe().ok();
-    let binary_path = binary.as_deref().map(|p| p.to_string_lossy().to_string())
+    let binary_path = binary
+        .as_deref()
+        .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "agent-lab".to_string());
 
     eprintln!("🐝 [Orchestrator] 启动 Memory Agent 子进程...");
@@ -121,7 +129,10 @@ fn spawn_memory_agent(orchestrator_socket: &std::path::Path) {
         .spawn()
     {
         Ok(child) => {
-            eprintln!("🐝 [Orchestrator] Memory Agent 子进程已启动 (PID: {})", child.id());
+            eprintln!(
+                "🐝 [Orchestrator] Memory Agent 子进程已启动 (PID: {})",
+                child.id()
+            );
             // 不等待子进程——它独立运行
             std::mem::drop(child);
         }
@@ -132,7 +143,10 @@ fn spawn_memory_agent(orchestrator_socket: &std::path::Path) {
 }
 
 /// 启动 Memory Agent（非交互式，通过 UDS 通信）
-async fn run_memory_agent(socket_path: PathBuf, orchestrator_socket: Option<String>) -> anyhow::Result<()> {
+async fn run_memory_agent(
+    socket_path: PathBuf,
+    orchestrator_socket: Option<String>,
+) -> anyhow::Result<()> {
     eprintln!("🧠 启动 Memory Agent (socket: {:?})", socket_path);
 
     // 初始化 MemoryManager
@@ -142,25 +156,37 @@ async fn run_memory_agent(socket_path: PathBuf, orchestrator_socket: Option<Stri
 
     // 创建并连接 Memory Agent
     let mut memory_agent = MemoryAgent::new(memory_manager);
-    memory_agent.connect(orchestrator_socket.map(PathBuf::from)).await?;
+    memory_agent
+        .connect(orchestrator_socket.map(PathBuf::from))
+        .await?;
     memory_agent.run().await
 }
 
 /// 启动 General Agent（非交互式，通过 UDS 通信）
-async fn run_general_agent(_socket_path: PathBuf, orchestrator_socket: Option<String>) -> anyhow::Result<()> {
+async fn run_general_agent(
+    _socket_path: PathBuf,
+    orchestrator_socket: Option<String>,
+) -> anyhow::Result<()> {
     eprintln!("🔧 启动 General Agent");
 
     let mut general_agent = GeneralAgent::new();
-    general_agent.connect(orchestrator_socket.map(PathBuf::from)).await?;
+    general_agent
+        .connect(orchestrator_socket.map(PathBuf::from))
+        .await?;
     general_agent.run().await
 }
 
 /// 启动 Verifier Agent（非交互式，通过 UDS 通信）
-async fn run_verifier_agent(_socket_path: PathBuf, orchestrator_socket: Option<String>) -> anyhow::Result<()> {
+async fn run_verifier_agent(
+    _socket_path: PathBuf,
+    orchestrator_socket: Option<String>,
+) -> anyhow::Result<()> {
     eprintln!("✅ 启动 Verifier Agent");
 
     let project_path = PathBuf::from(".");
     let mut verifier_agent = VerifierAgent::new(Some(project_path));
-    verifier_agent.connect(orchestrator_socket.map(PathBuf::from)).await?;
+    verifier_agent
+        .connect(orchestrator_socket.map(PathBuf::from))
+        .await?;
     verifier_agent.run().await
 }

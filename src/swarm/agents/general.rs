@@ -17,9 +17,9 @@ use serde_json::json;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::interval;
 
-use crate::swarm::transport::{UdsClient, default_socket_path};
-use crate::swarm::rpc::JsonRpcRequest;
 use crate::swarm::heartbeat::create_heartbeat_request;
+use crate::swarm::rpc::JsonRpcRequest;
+use crate::swarm::transport::{UdsClient, default_socket_path};
 
 /// General Agent — 通用任务执行 Agent
 pub struct GeneralAgent {
@@ -109,14 +109,16 @@ impl GeneralAgent {
     async fn handle_request(&mut self, request: JsonRpcRequest) {
         match request.method.as_str() {
             "execute_task" => {
-                let task = request.params
+                let task = request
+                    .params
                     .as_ref()
                     .and_then(|p| p.get("task"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
 
-                let params = request.params
+                let params = request
+                    .params
                     .as_ref()
                     .and_then(|p| p.get("params"))
                     .cloned();
@@ -142,7 +144,9 @@ impl GeneralAgent {
                             "result": result,
                         }
                     });
-                    let _ = client.send_raw(&serde_json::to_string(&resp).unwrap()).await;
+                    let _ = client
+                        .send_raw(&serde_json::to_string(&resp).unwrap())
+                        .await;
                 }
             }
             "ping" => {
@@ -157,7 +161,9 @@ impl GeneralAgent {
                             "agent_id": self.agent_id,
                         }
                     });
-                    let _ = client.send_raw(&serde_json::to_string(&resp).unwrap()).await;
+                    let _ = client
+                        .send_raw(&serde_json::to_string(&resp).unwrap())
+                        .await;
                 }
             }
             "shutdown" => {

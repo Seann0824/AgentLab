@@ -210,7 +210,10 @@ impl CommandRegistry {
             cmd.name
         ));
         output.push_str(&format!("  {}\n", cmd.description));
-        output.push_str(&format!("  \x1b[90m用法:\x1b[0m \x1b[33m{}\x1b[0m\n", cmd.usage));
+        output.push_str(&format!(
+            "  \x1b[90m用法:\x1b[0m \x1b[33m{}\x1b[0m\n",
+            cmd.usage
+        ));
 
         if !cmd.examples.is_empty() {
             output.push_str(&format!("  \x1b[90m示例:\x1b[0m\n"));
@@ -224,8 +227,7 @@ impl CommandRegistry {
             for sub in cmd.subcommands {
                 output.push_str(&format!(
                     "    \x1b[33m{:<25}\x1b[0m {}\n",
-                    sub.usage,
-                    sub.description
+                    sub.usage, sub.description
                 ));
             }
         }
@@ -254,11 +256,12 @@ impl CommandRegistry {
 
     /// ⭐ 显示未知命令提示
     pub fn print_unknown_command(&self, input: &str) {
-        let cmd_name = input.trim_start_matches('/').split_whitespace().next().unwrap_or("");
-        println!(
-            "\x1b[33m⚠️  未知命令: /\x1b[31m{}\x1b[0m",
-            cmd_name
-        );
+        let cmd_name = input
+            .trim_start_matches('/')
+            .split_whitespace()
+            .next()
+            .unwrap_or("");
+        println!("\x1b[33m⚠️  未知命令: /\x1b[31m{}\x1b[0m", cmd_name);
         println!("\x1b[90m  输入 /help 查看所有可用命令\x1b[0m");
         println!();
         self.print_help_short();
@@ -312,7 +315,10 @@ mod tests {
         let registry = CommandRegistry::new();
         let all = registry.all_commands();
         for i in 1..all.len() {
-            assert!(all[i-1].name <= all[i].name, "commands should be sorted by name");
+            assert!(
+                all[i - 1].name <= all[i].name,
+                "commands should be sorted by name"
+            );
         }
     }
 }

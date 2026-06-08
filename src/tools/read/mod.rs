@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use tokio::{sync::mpsc, fs};
+use tokio::{fs, sync::mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::tools::types::{Tool, ToolEvent, ToolStream};
@@ -104,7 +104,9 @@ async fn execute_read(args: serde_json::Value) -> Result<ReadOutput, String> {
         .to_string();
 
     let show_line_numbers = args["show_line_numbers"].as_bool().unwrap_or(true);
-    let max_length = args["max_length"].as_u64().unwrap_or(DEFAULT_MAX_LENGTH as u64) as usize;
+    let max_length = args["max_length"]
+        .as_u64()
+        .unwrap_or(DEFAULT_MAX_LENGTH as u64) as usize;
 
     let path = Path::new(&file_path);
     if !path.exists() {
@@ -126,13 +128,15 @@ async fn execute_read(args: serde_json::Value) -> Result<ReadOutput, String> {
     }
     if start_line > total_lines {
         return Err(format!(
-            "start_line ({}) 超出文件总行数 ({})", start_line, total_lines
+            "start_line ({}) 超出文件总行数 ({})",
+            start_line, total_lines
         ));
     }
     let end_line = end_line.min(total_lines);
     if end_line < start_line {
         return Err(format!(
-            "end_line ({}) 不能小于 start_line ({})", end_line, start_line
+            "end_line ({}) 不能小于 start_line ({})",
+            end_line, start_line
         ));
     }
 

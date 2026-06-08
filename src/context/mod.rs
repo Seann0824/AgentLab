@@ -6,11 +6,11 @@ mod types;
 
 pub use config::{ContextConfig, ContextStrategy};
 pub use strategy::force_compress as force_compress_strategy;
-pub use summarizer::{rule_based_summary, AsyncSummarizer};
+pub use summarizer::{AsyncSummarizer, rule_based_summary};
 pub use tokenizer::TokenEstimator;
 pub use types::{
-    CompressResult, ContextMessage, ContextStats, MessageImportance, PrunedToolCall,
-    SummaryResult, SummaryScope, SummaryTask, is_stdout_structural,
+    CompressResult, ContextMessage, ContextStats, MessageImportance, PrunedToolCall, SummaryResult,
+    SummaryScope, SummaryTask, is_stdout_structural,
 };
 
 use std::time::Instant;
@@ -130,11 +130,8 @@ impl ContextManager {
     fn check_and_compress(&mut self) -> bool {
         match &self.strategy {
             ContextStrategy::SlidingWindow { max_turns } => {
-                let result = strategy::sliding_window_mode(
-                    &mut self.messages,
-                    *max_turns,
-                    &mut self.stats,
-                );
+                let result =
+                    strategy::sliding_window_mode(&mut self.messages, *max_turns, &mut self.stats);
                 self.handle_compress_result(&result)
             }
             ContextStrategy::Auto { .. } => {
@@ -165,8 +162,7 @@ impl ContextManager {
                 // ⭐ 缓存失效，需要全量重算 token
                 self.recalculate_token_cache();
                 self.stats.message_count = self.messages.len();
-                self.stats.preserved_count =
-                    self.messages.iter().filter(|m| m.preserved).count();
+                self.stats.preserved_count = self.messages.iter().filter(|m| m.preserved).count();
                 true
             }
             CompressResult::AsyncSummaryDispatched { .. } => true,
@@ -185,7 +181,6 @@ impl ContextManager {
         self.cache_valid = true;
         self.stats.estimated_tokens = self.cached_token_count;
     }
-
 
     /// ⭐ 检查是否有异步摘要结果需要注入
     ///
@@ -436,8 +431,11 @@ impl ContextManager {
     /// 在 is_blocked() 返回 true 时调用。
     /// 先发送异步摘要任务，然后执行同步压缩。
     pub fn force_compress(&mut self) -> CompressResult {
-        eprintln!("[ContextManager] force_compress called (usage={:.0}%)", self.stats.usage_ratio * 100.0);
-        
+        eprintln!(
+            "[ContextManager] force_compress called (usage={:.0}%)",
+            self.stats.usage_ratio * 100.0
+        );
+
         let result = crate::context::force_compress_strategy(
             &mut self.messages,
             &self.strategy,

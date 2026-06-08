@@ -1,7 +1,6 @@
 /// 错误排查 — 数据类型
 ///
 /// 工具调用报错时自动保存的「错误现场」快照
-
 use serde::{Deserialize, Serialize};
 
 use crate::session::types::SerializableMessage;

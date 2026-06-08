@@ -13,9 +13,9 @@ use std::fmt;
 /// JSON-RPC 2.0 请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
-    pub jsonrpc: String,           // "2.0"
-    pub id: String,                // 请求 ID（UUID）
-    pub method: String,            // 方法名
+    pub jsonrpc: String, // "2.0"
+    pub id: String,      // 请求 ID（UUID）
+    pub method: String,  // 方法名
     #[serde(skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
 }
@@ -34,8 +34,8 @@ impl JsonRpcRequest {
 /// JSON-RPC 2.0 响应
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
-    pub jsonrpc: String,           // "2.0"
-    pub id: String,                // 对应请求 ID
+    pub jsonrpc: String, // "2.0"
+    pub id: String,      // 对应请求 ID
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -169,10 +169,13 @@ mod tests {
 
     #[test]
     fn test_json_rpc_request_serialization() {
-        let req = JsonRpcRequest::new("register", Some(serde_json::json!({
-            "agent_id": "test-agent",
-            "agent_type": "memory"
-        })));
+        let req = JsonRpcRequest::new(
+            "register",
+            Some(serde_json::json!({
+                "agent_id": "test-agent",
+                "agent_type": "memory"
+            })),
+        );
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"jsonrpc\":\"2.0\""));
         assert!(json.contains("\"method\":\"register\""));

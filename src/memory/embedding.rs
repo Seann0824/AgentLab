@@ -25,10 +25,10 @@ impl EmbeddingClient {
     /// - LLM_EMBEDDING_MODEL: 嵌入模型名（默认 text-embedding-3-small）
     /// - LLM_EMBEDDING_DIM: 向量维度（默认 1536）
     pub fn from_env() -> anyhow::Result<Self> {
-        let base_url = env::var("LLM_BASE_URL")
-            .map_err(|_| anyhow::anyhow!("LLM_BASE_URL not set"))?;
-        let api_key = env::var("LLM_API_KEY")
-            .map_err(|_| anyhow::anyhow!("LLM_API_KEY not set"))?;
+        let base_url =
+            env::var("LLM_BASE_URL").map_err(|_| anyhow::anyhow!("LLM_BASE_URL not set"))?;
+        let api_key =
+            env::var("LLM_API_KEY").map_err(|_| anyhow::anyhow!("LLM_API_KEY not set"))?;
         let model = env::var("LLM_EMBEDDING_MODEL")
             .unwrap_or_else(|_| "text-embedding-3-small".to_string());
         let vector_dim = env::var("LLM_EMBEDDING_DIM")
@@ -71,7 +71,8 @@ impl EmbeddingClient {
             "input": text,
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .bearer_auth(&self.api_key)
             .json(&body)
@@ -81,13 +82,19 @@ impl EmbeddingClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("Embedding API error ({}): {}", status, text));
+            return Err(anyhow::anyhow!(
+                "Embedding API error ({}): {}",
+                status,
+                text
+            ));
         }
 
         let data: serde_json::Value = resp.json().await?;
         let vector = data["data"][0]["embedding"]
             .as_array()
-            .ok_or_else(|| anyhow::anyhow!("Invalid embedding response: missing 'data[0].embedding'"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!("Invalid embedding response: missing 'data[0].embedding'")
+            })?
             .iter()
             .map(|v| v.as_f64().unwrap_or(0.0) as f32)
             .collect();
@@ -104,7 +111,8 @@ impl EmbeddingClient {
             "input": inputs,
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&url)
             .bearer_auth(&self.api_key)
             .json(&body)
@@ -114,7 +122,11 @@ impl EmbeddingClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("Embedding API error ({}): {}", status, text));
+            return Err(anyhow::anyhow!(
+                "Embedding API error ({}): {}",
+                status,
+                text
+            ));
         }
 
         let data: serde_json::Value = resp.json().await?;
@@ -130,7 +142,11 @@ impl EmbeddingClient {
             for item in &sorted {
                 let vector = item["embedding"]
                     .as_array()
-                    .map(|arr| arr.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+                            .collect()
+                    })
                     .unwrap_or_default();
                 results.push(vector);
             }

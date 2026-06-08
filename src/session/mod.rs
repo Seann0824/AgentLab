@@ -19,10 +19,9 @@
 
 use std::path::PathBuf;
 
+use self::types::*;
 use crate::context::ContextManager;
 use crate::model::ChatMessage;
-use self::types::*;
-
 
 /// ⭐ 会话管理器
 pub struct SessionManager {
@@ -57,7 +56,8 @@ impl SessionManager {
     /// 获取会话文件路径
     fn session_path(&self, name: &str) -> PathBuf {
         let safe_name = sanitize_name(name);
-        self.sessions_dir.join(format!("{}.session.json", safe_name))
+        self.sessions_dir
+            .join(format!("{}.session.json", safe_name))
     }
 
     /// ⭐ 保存当前上下文为会话
@@ -71,17 +71,16 @@ impl SessionManager {
         let now = crate::task::types::chrono_now();
 
         // 从 ContextManager 中提取消息（跳过系统提示词，系统提示词会重建）
-        let messages: Vec<SerializedContextMessage> = ctx.get_messages()
+        let messages: Vec<SerializedContextMessage> = ctx
+            .get_messages()
             .iter()
             .filter(|m| {
                 // 过滤掉系统提示词（由 strategy 重建）
                 !matches!(m, ChatMessage::System { .. })
             })
-            .map(|msg| {
-                SerializedContextMessage {
-                    message: SerializableMessage::from(msg),
-                    preserved: false,
-                }
+            .map(|msg| SerializedContextMessage {
+                message: SerializableMessage::from(msg),
+                preserved: false,
             })
             .collect();
 
@@ -131,14 +130,10 @@ impl SessionManager {
         // 提取消息（跳过系统提示词）
         let serialized_messages: Vec<SerializedContextMessage> = messages
             .iter()
-            .filter(|cm| {
-                !matches!(cm.message, ChatMessage::System { .. })
-            })
-            .map(|cm| {
-                SerializedContextMessage {
-                    message: SerializableMessage::from(&cm.message),
-                    preserved: cm.preserved,
-                }
+            .filter(|cm| !matches!(cm.message, ChatMessage::System { .. }))
+            .map(|cm| SerializedContextMessage {
+                message: SerializableMessage::from(&cm.message),
+                preserved: cm.preserved,
             })
             .collect();
 
@@ -200,15 +195,23 @@ impl SessionManager {
     /// 获取默认的系统提示词（从 session 的策略中重建）
     pub fn default_system_prompt(&self, session: &SessionData) -> String {
         format!(
-            "你当前工作的目录为 {}。这个目录是你模型的Agent架子，它构建你和外部世界沟通的 bridge。如果你需要什么能力自己修改agent代码补充。\n\n\
-            这是从上次保存的会话恢复的对话。继续之前的工作。\n\
+            "你正在从已保存会话恢复 Agent Lab 对话。\n\n\
+            工作目录: {}\n\
             会话名称: {}\n\
             会话创建于: {}\n\
-            最后更新于: {}",
-            session.current_dir,
-            session.name,
-            session.created_at,
-            session.updated_at,
+            最后更新于: {}\n\n\
+            [恢复原则]\n\
+            - 先结合恢复的消息、用户最新输入、任务文件和长期记忆判断当前目标，不要假设旧计划仍然有效。\n\
+            - Agent Lab 是一个 Rust 编写的自我进化 Agent 框架；核心模块包括 agent 主循环、模型适配、工具系统、上下文压缩、Task/Goal/Session、长期记忆和 Swarm 多 Agent 编排。\n\
+            - 简单问题直接回答；明确的实现、修复、排查任务应主动执行到可验证状态。\n\
+            - 多步任务按「理解目标 -> 调查现状 -> 制定短计划 -> 执行 -> 验证 -> 总结」推进。\n\
+            - 优先读取本地代码和文档，改动保持聚焦，不覆盖用户已有修改，不执行破坏性仓库操作。\n\
+            - TaskManager 的结构化状态入口是 docs/PLAN.md、docs/AGENDA.md、docs/MEMORY.md；根目录同名文件可能保存历史或人工记录，冲突时以当前用户目标、代码事实和最近状态为准。\n\
+            - 修改 Rust 代码后运行 cargo check；涉及共享行为、上下文、Goal、Session、Memory、工具协议或 Swarm 时优先运行相关 cargo test。\n\
+            - 可以使用 memory_search/memory_save 管理长期记忆，使用 spawn_agent 进行独立验证或并行调查，使用 investigate 分析错误快照，使用 generate_tool 扩展新工具能力。\n\
+            - 有活跃 Goal 时主动推进并验证；确认完成后输出 /goal complete <目标ID>，无法完成时输出 /goal fail <目标ID> <原因>。\n\
+            - 最终回复用用户语言，说明完成内容、关键文件、验证结果和剩余风险。",
+            session.current_dir, session.name, session.created_at, session.updated_at,
         )
     }
 
@@ -226,15 +229,14 @@ impl SessionManager {
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("json")
-                && path.file_name()
+                && path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .map_or(false, |n| n.ends_with(".session.json"))
             {
                 if let Ok(json) = std::fs::read_to_string(&path) {
                     if let Ok(data) = serde_json::from_str::<SessionData>(&json) {
-                        let file_size = std::fs::metadata(&path)
-                            .map(|m| m.len())
-                            .unwrap_or(0);
+                        let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                         sessions.push(SessionInfo {
                             name: data.name,
                             created_at: data.created_at,
@@ -244,13 +246,12 @@ impl SessionManager {
                         });
                     } else {
                         // 如果解析失败，尝试从文件名提取名称
-                        if let Some(name) = path.file_stem()
+                        if let Some(name) = path
+                            .file_stem()
                             .and_then(|n| n.to_str())
                             .map(|n| n.trim_end_matches(".session"))
                         {
-                            let file_size = std::fs::metadata(&path)
-                                .map(|m| m.len())
-                                .unwrap_or(0);
+                            let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                             sessions.push(SessionInfo {
                                 name: name.to_string(),
                                 created_at: "未知".to_string(),
@@ -354,10 +355,7 @@ impl std::fmt::Display for SessionInfo {
         write!(
             f,
             "  📁 {:<20} 消息: {:<4} 大小: {:<8} 更新: {}",
-            self.name,
-            self.message_count,
-            size_str,
-            self.updated_at,
+            self.name, self.message_count, size_str, self.updated_at,
         )
     }
 }

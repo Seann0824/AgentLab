@@ -75,7 +75,6 @@ impl ModelManager {
         }
     }
 
-
     /// 从环境变量自动发现模型配置
     ///
     /// 扫描所有环境变量，寻找 `{PREFIX}_API_KEY` + `{PREFIX}_BASE_URL` 配对。
@@ -125,13 +124,8 @@ impl ModelManager {
 
             if let (Some(api_key), Some(base_url)) = (api_key, base_url) {
                 let name = prefix.to_lowercase();
-                let config = ModelConfig::new(
-                    &name,
-                    "openai-compatible",
-                    &base_url,
-                    &api_key,
-                    &model_name,
-                );
+                let config =
+                    ModelConfig::new(&name, "openai-compatible", &base_url, &api_key, &model_name);
                 configs.push(config);
             }
         }
@@ -180,7 +174,10 @@ impl ModelManager {
     /// 返回 Ok(true) 表示切换成功，Ok(false) 表示该模型已存在但适配器未构建
     pub fn switch(&mut self, name: &str) -> Result<bool, String> {
         if !self.configs.contains_key(name) {
-            return Err(format!("未知模型 '{}'。使用 /model list 查看可用模型", name));
+            return Err(format!(
+                "未知模型 '{}'。使用 /model list 查看可用模型",
+                name
+            ));
         }
 
         if name == self.active_name {
@@ -211,9 +208,8 @@ impl ModelManager {
         let name = config.name.clone();
 
         // 构建适配器
-        let adapter = build_adapter(&config).map_err(|e| {
-            format!("构建模型 '{}' 的适配器失败: {}", name, e)
-        })?;
+        let adapter = build_adapter(&config)
+            .map_err(|e| format!("构建模型 '{}' 的适配器失败: {}", name, e))?;
 
         let is_first = self.active_name == "none";
         self.configs.insert(name.clone(), config);
@@ -270,8 +266,11 @@ mod tests {
     #[test]
     fn test_from_configs_single() {
         let cfg = ModelConfig::new(
-            "test", "openai-compatible",
-            "https://test.com", "sk-key", "test-model",
+            "test",
+            "openai-compatible",
+            "https://test.com",
+            "sk-key",
+            "test-model",
         );
         let mm = ModelManager::from_configs(vec![cfg]);
         assert!(mm.has_models());
@@ -283,8 +282,11 @@ mod tests {
     #[test]
     fn test_switch_unknown() {
         let cfg = ModelConfig::new(
-            "a", "openai-compatible",
-            "https://a.com", "key-a", "model-a",
+            "a",
+            "openai-compatible",
+            "https://a.com",
+            "key-a",
+            "model-a",
         );
         let mut mm = ModelManager::from_configs(vec![cfg]);
         let result = mm.switch("unknown");
@@ -295,8 +297,11 @@ mod tests {
     #[test]
     fn test_switch_same() {
         let cfg = ModelConfig::new(
-            "a", "openai-compatible",
-            "https://a.com", "key-a", "model-a",
+            "a",
+            "openai-compatible",
+            "https://a.com",
+            "key-a",
+            "model-a",
         );
         let mut mm = ModelManager::from_configs(vec![cfg]);
         assert!(mm.switch("a").unwrap());
@@ -307,8 +312,11 @@ mod tests {
     fn test_add_model() {
         let mut mm = ModelManager::from_configs(vec![]);
         let cfg = ModelConfig::new(
-            "new", "openai-compatible",
-            "https://new.com", "key-new", "new-model",
+            "new",
+            "openai-compatible",
+            "https://new.com",
+            "key-new",
+            "new-model",
         );
         assert!(mm.add_model(cfg).is_ok());
         assert!(mm.has_models());
@@ -327,8 +335,11 @@ mod tests {
     #[test]
     fn test_clone() {
         let cfg = ModelConfig::new(
-            "test", "openai-compatible",
-            "https://test.com", "sk-key", "test-model",
+            "test",
+            "openai-compatible",
+            "https://test.com",
+            "sk-key",
+            "test-model",
         );
         let mm = ModelManager::from_configs(vec![cfg]);
         let cloned = mm.clone();

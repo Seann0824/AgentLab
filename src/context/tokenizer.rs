@@ -116,8 +116,8 @@ impl TokenEstimator {
     pub fn estimate_message(&self, msg: &ChatMessage) -> usize {
         // ChatML 格式的消息结构开销（参考 OpenAI 官方 tokenizer 行为）
         let overhead = match msg {
-            ChatMessage::System { .. } => 4,  // <|im_start|>system\n ... <|im_end|>\n
-            ChatMessage::User { .. } => 3,    // <|im_start|>user\n ... <|im_end|>
+            ChatMessage::System { .. } => 4, // <|im_start|>system\n ... <|im_end|>\n
+            ChatMessage::User { .. } => 3,   // <|im_start|>user\n ... <|im_end|>
             ChatMessage::Assistant { .. } => 3,
             ChatMessage::Tool { .. } => 3,
         };
@@ -149,10 +149,7 @@ impl TokenEstimator {
     /// 全量估算消息列表的 token 总数（用于缓存失效后的重新计算）
     /// 复杂度 O(n)，仅在缓存失效时调用
     pub fn estimate_messages(&self, messages: &[ChatMessage]) -> usize {
-        messages
-            .iter()
-            .map(|msg| self.estimate_message(msg))
-            .sum()
+        messages.iter().map(|msg| self.estimate_message(msg)).sum()
     }
 
     /// 校准：用实际 token 计数调整校准系数

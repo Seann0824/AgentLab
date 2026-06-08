@@ -50,9 +50,7 @@ impl Tool for DebugTool {
         let (tx, rx) = mpsc::channel(1);
 
         tokio::spawn(async move {
-            let action = args["action"]
-                .as_str()
-                .unwrap_or("status");
+            let action = args["action"].as_str().unwrap_or("status");
 
             let result = match action {
                 "enable" => {

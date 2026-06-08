@@ -145,9 +145,7 @@ pub enum CompressResult {
         removed_turns: usize,
     },
     /// 已触发异步摘要任务（摘要完成后会自动注入）
-    AsyncSummaryDispatched {
-        task_id: u64,
-    },
+    AsyncSummaryDispatched { task_id: u64 },
     /// 保底截断（所有方法都无效时的最后手段）
     HardTruncated {
         removed_count: usize,
@@ -195,8 +193,7 @@ impl CompressResult {
             } => {
                 format!(
                     "🔧 工具调用结果修剪: 修剪 {} 个工具输出，节省约 {} tokens",
-                    pruned_count,
-                    saved_tokens,
+                    pruned_count, saved_tokens,
                 )
             }
             CompressResult::SlidingWindowCompressed {
@@ -209,7 +206,10 @@ impl CompressResult {
                 )
             }
             CompressResult::AsyncSummaryDispatched { task_id } => {
-                format!("📋 异步摘要已派发 (任务 #{})，完成后自动注入上下文", task_id)
+                format!(
+                    "📋 异步摘要已派发 (任务 #{})，完成后自动注入上下文",
+                    task_id
+                )
             }
             CompressResult::HardTruncated {
                 removed_count,
@@ -299,10 +299,7 @@ mod tests {
 
     #[test]
     fn test_auto_classify_tool_simple() {
-        let msg = ChatMessage::tool(
-            "call_2",
-            r#"{"ok": true, "result": {"stdout": "ok\n"}}"#,
-        );
+        let msg = ChatMessage::tool("call_2", r#"{"ok": true, "result": {"stdout": "ok\n"}}"#);
         assert_eq!(
             ContextMessage::auto_classify(&msg),
             MessageImportance::Normal
@@ -337,16 +334,54 @@ mod tests {
     #[test]
     fn test_compress_result_did_compress() {
         assert!(!CompressResult::NotNeeded.did_compress());
-        assert!(CompressResult::ToolCallsPruned { pruned_count: 1, saved_tokens: 100 }.did_compress());
-        assert!(CompressResult::SlidingWindowCompressed { removed_count: 5, removed_turns: 2 }.did_compress());
-        assert!(CompressResult::HardTruncated { removed_count: 3, kept_count: 10 }.did_compress());
-        assert!(CompressResult::EmergencyTruncated { removed_count: 5, kept_count: 2 }.did_compress());
+        assert!(
+            CompressResult::ToolCallsPruned {
+                pruned_count: 1,
+                saved_tokens: 100
+            }
+            .did_compress()
+        );
+        assert!(
+            CompressResult::SlidingWindowCompressed {
+                removed_count: 5,
+                removed_turns: 2
+            }
+            .did_compress()
+        );
+        assert!(
+            CompressResult::HardTruncated {
+                removed_count: 3,
+                kept_count: 10
+            }
+            .did_compress()
+        );
+        assert!(
+            CompressResult::EmergencyTruncated {
+                removed_count: 5,
+                kept_count: 2
+            }
+            .did_compress()
+        );
     }
 
     #[test]
     fn test_compress_result_description() {
         assert_eq!(CompressResult::NotNeeded.description(), "无需压缩");
-        assert_eq!(CompressResult::ToolCallsPruned { pruned_count: 1, saved_tokens: 100 }.description(), "工具调用结果修剪");
-        assert_eq!(CompressResult::EmergencyTruncated { removed_count: 5, kept_count: 2 }.description(), "🚨 紧急截断");
+        assert_eq!(
+            CompressResult::ToolCallsPruned {
+                pruned_count: 1,
+                saved_tokens: 100
+            }
+            .description(),
+            "工具调用结果修剪"
+        );
+        assert_eq!(
+            CompressResult::EmergencyTruncated {
+                removed_count: 5,
+                kept_count: 2
+            }
+            .description(),
+            "🚨 紧急截断"
+        );
     }
 }

@@ -2,7 +2,6 @@
 ///
 /// 当工具调用报错时，agent 可以调用此工具加载错误现场的上下文快照，
 /// 在完整上下文中分析错误根因。
-
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -61,7 +60,9 @@ impl Tool for InvestigateTool {
 
         tokio::spawn(async move {
             if snapshot_id.is_empty() {
-                let _ = tx.send(ToolEvent::Err("snapshot_id is required".to_string())).await;
+                let _ = tx
+                    .send(ToolEvent::Err("snapshot_id is required".to_string()))
+                    .await;
                 return;
             }
 
@@ -71,14 +72,18 @@ impl Tool for InvestigateTool {
                 // 列出所有快照
                 match manager.list() {
                     Ok(list) => {
-                        let _ = tx.send(ToolEvent::Done(serde_json::json!({
-                            "snapshots": list,
-                            "count": list.len(),
-                            "hint": "使用 investigate(\"snapshot_id\") 分析某个快照"
-                        }))).await;
+                        let _ = tx
+                            .send(ToolEvent::Done(serde_json::json!({
+                                "snapshots": list,
+                                "count": list.len(),
+                                "hint": "使用 investigate(\"snapshot_id\") 分析某个快照"
+                            })))
+                            .await;
                     }
                     Err(e) => {
-                        let _ = tx.send(ToolEvent::Err(format!("无法列出快照: {}", e))).await;
+                        let _ = tx
+                            .send(ToolEvent::Err(format!("无法列出快照: {}", e)))
+                            .await;
                     }
                 }
                 return;
@@ -108,9 +113,12 @@ impl Tool for InvestigateTool {
                     }))).await;
                 }
                 Err(e) => {
-                    let _ = tx.send(ToolEvent::Err(format!(
-                        "无法加载快照 '{}': {}。使用 investigate(\"list\") 查看可用快照。", snapshot_id, e
-                    ))).await;
+                    let _ = tx
+                        .send(ToolEvent::Err(format!(
+                            "无法加载快照 '{}': {}。使用 investigate(\"list\") 查看可用快照。",
+                            snapshot_id, e
+                        )))
+                        .await;
                 }
             }
         });

@@ -44,19 +44,20 @@ impl From<&ChatMessage> for SerializableMessage {
             ChatMessage::User { content } => SerializableMessage::User {
                 content: content.clone(),
             },
-            ChatMessage::Assistant { content, tool_calls } => {
-                SerializableMessage::Assistant {
-                    content: content.clone(),
-                    tool_calls: tool_calls
-                        .iter()
-                        .map(|tc| SerializableToolCall {
-                            id: tc.id.clone(),
-                            name: tc.name.clone(),
-                            arguments: tc.arguments.clone(),
-                        })
-                        .collect(),
-                }
-            }
+            ChatMessage::Assistant {
+                content,
+                tool_calls,
+            } => SerializableMessage::Assistant {
+                content: content.clone(),
+                tool_calls: tool_calls
+                    .iter()
+                    .map(|tc| SerializableToolCall {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        arguments: tc.arguments.clone(),
+                    })
+                    .collect(),
+            },
             ChatMessage::Tool {
                 tool_call_id,
                 content,
@@ -73,7 +74,10 @@ impl From<SerializableMessage> for ChatMessage {
         match msg {
             SerializableMessage::System { content } => ChatMessage::system(content),
             SerializableMessage::User { content } => ChatMessage::user(content),
-            SerializableMessage::Assistant { content, tool_calls } => {
+            SerializableMessage::Assistant {
+                content,
+                tool_calls,
+            } => {
                 let tcs: Vec<ToolCall> = tool_calls
                     .into_iter()
                     .map(|tc| ToolCall {

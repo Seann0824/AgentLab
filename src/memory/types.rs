@@ -139,7 +139,10 @@ fn chrono_now_from_secs(secs: u64) -> String {
 
     // Calculate year/month/day from days since epoch (1970-01-01)
     let (year, month, day) = days_to_date(days_since_epoch as i64);
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", year, month, day, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        year, month, day, hours, minutes, seconds
+    )
 }
 
 /// Convert days since unix epoch to year/month/day

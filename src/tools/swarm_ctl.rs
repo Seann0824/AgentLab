@@ -67,14 +67,17 @@ impl Tool for SwarmCtl {
             let result = match action {
                 "list" => {
                     if let Some(registry) = &registry {
-                        let agents: Vec<serde_json::Value> = registry.all_agents()
+                        let agents: Vec<serde_json::Value> = registry
+                            .all_agents()
                             .iter()
-                            .map(|a| serde_json::json!({
-                                "agent_id": a.agent_id,
-                                "agent_type": a.agent_type.as_str(),
-                                "status": a.status.as_str(),
-                                "hostname": a.hostname,
-                            }))
+                            .map(|a| {
+                                serde_json::json!({
+                                    "agent_id": a.agent_id,
+                                    "agent_type": a.agent_type.as_str(),
+                                    "status": a.status.as_str(),
+                                    "hostname": a.hostname,
+                                })
+                            })
                             .collect();
                         serde_json::json!({
                             "success": true,
@@ -94,13 +97,16 @@ impl Tool for SwarmCtl {
                     let agent_type = AgentType::from_str(agent_type_str);
 
                     if let Some(registry) = &registry {
-                        let agents: Vec<serde_json::Value> = registry.query_by_type(&agent_type)
+                        let agents: Vec<serde_json::Value> = registry
+                            .query_by_type(&agent_type)
                             .iter()
-                            .map(|a| serde_json::json!({
-                                "agent_id": a.agent_id,
-                                "status": a.status.as_str(),
-                                "hostname": a.hostname,
-                            }))
+                            .map(|a| {
+                                serde_json::json!({
+                                    "agent_id": a.agent_id,
+                                    "status": a.status.as_str(),
+                                    "hostname": a.hostname,
+                                })
+                            })
                             .collect();
                         serde_json::json!({
                             "success": true,

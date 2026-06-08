@@ -118,15 +118,17 @@ impl GoalRegistry {
 
     /// ⭐ 保存索引文件
     fn save_index(&self) -> anyhow::Result<()> {
-        let entries: Vec<GoalIndexEntry> = self.goals.values().map(|g| {
-            GoalIndexEntry {
+        let entries: Vec<GoalIndexEntry> = self
+            .goals
+            .values()
+            .map(|g| GoalIndexEntry {
                 id: g.id.clone(),
                 name: g.name.clone(),
                 status: g.status.to_string(),
                 progress: g.progress,
                 updated_at: g.updated_at.clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
         let index = GoalIndex {
             goals: entries,
@@ -200,7 +202,9 @@ impl GoalRegistry {
 
     /// ⭐ 获取活跃 Goal 的可变引用
     pub fn active_goal_mut(&mut self) -> Option<&mut Goal> {
-        self.goals.values_mut().find(|g| g.status == GoalStatus::Active)
+        self.goals
+            .values_mut()
+            .find(|g| g.status == GoalStatus::Active)
     }
 
     /// ⭐ 是否有活跃的 Goal
@@ -247,16 +251,13 @@ impl GoalRegistry {
     pub fn create_goal(&mut self, description: String) -> anyhow::Result<Goal> {
         use super::types::Goal;
         let now = super::types::chrono_now();
-        let goal = Goal::new(
-            description.clone(),
-            description,
-            vec![],
-        );
+        let goal = Goal::new(description.clone(), description, vec![]);
         let id = goal.id.clone();
         self.create(goal)?;
         // 自动激活 - clone first to avoid borrow conflict
         let loaded_clone = {
-            let loaded = self.get_mut(&id)
+            let loaded = self
+                .get_mut(&id)
                 .ok_or_else(|| anyhow::anyhow!("goal not found after creation"))?;
             loaded.activate();
             loaded.updated_at = now;
@@ -416,11 +417,7 @@ mod tests {
         let root = tmp_dir.path().to_string_lossy().to_string();
 
         let mut registry = GoalRegistry::new(&root);
-        let mut goal = Goal::new(
-            "测试".to_string(),
-            "".to_string(),
-            vec![],
-        );
+        let mut goal = Goal::new("测试".to_string(), "".to_string(), vec![]);
         let id = goal.id.clone();
         registry.create(goal).unwrap();
 

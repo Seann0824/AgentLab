@@ -10,7 +10,6 @@
 //   - 限制最大匹配行数
 //   - 显示匹配行号及上下文
 
-
 use regex::Regex;
 use tokio::{sync::mpsc, task};
 use tokio_stream::wrappers::ReceiverStream;
@@ -134,15 +133,18 @@ async fn execute_search(args: serde_json::Value) -> Result<SearchOutput, String>
     let search_path = args["path"].as_str().unwrap_or(".").to_string();
     let is_regex = args["regex"].as_bool().unwrap_or(false);
     let ignore_case = args["ignore_case"].as_bool().unwrap_or(true);
-    let max_results = args["max_results"].as_u64().unwrap_or(DEFAULT_MAX_RESULTS as u64) as usize;
+    let max_results = args["max_results"]
+        .as_u64()
+        .unwrap_or(DEFAULT_MAX_RESULTS as u64) as usize;
     let context_lines = args["context_lines"].as_u64().unwrap_or(0) as usize;
 
     // 解析包含的扩展名
-    let include_ext: Option<Vec<String>> = args.get("include_ext").and_then(|v| v.as_str()).map(|s| {
-        s.split(',')
-            .map(|ext| ext.trim().trim_start_matches('.').to_lowercase())
-            .collect()
-    });
+    let include_ext: Option<Vec<String>> =
+        args.get("include_ext").and_then(|v| v.as_str()).map(|s| {
+            s.split(',')
+                .map(|ext| ext.trim().trim_start_matches('.').to_lowercase())
+                .collect()
+        });
 
     // 解析排除的目录
     let exclude_dirs: Vec<String> = args
@@ -157,7 +159,8 @@ async fn execute_search(args: serde_json::Value) -> Result<SearchOutput, String>
     let search_pattern: Box<dyn Fn(&str) -> bool + Send + Sync> = if is_regex {
         let regex_str = pattern_str.clone();
         let re = if ignore_case {
-            Regex::new(&format!("(?i){}", regex_str)).map_err(|e| format!("正则表达式无效: {}", e))?
+            Regex::new(&format!("(?i){}", regex_str))
+                .map_err(|e| format!("正则表达式无效: {}", e))?
         } else {
             Regex::new(&regex_str).map_err(|e| format!("正则表达式无效: {}", e))?
         };
@@ -183,7 +186,8 @@ async fn execute_search(args: serde_json::Value) -> Result<SearchOutput, String>
 
     let result = task::spawn_blocking(move || {
         let mut matches: Vec<SearchMatch> = Vec::new();
-        let mut files_with_matches: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut files_with_matches: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
 
         for entry in WalkDir::new(&search_path_buf)
             .into_iter()
@@ -244,7 +248,11 @@ async fn execute_search(args: serde_json::Value) -> Result<SearchOutput, String>
 
                     // 上下文行
                     let before: Vec<String> = if context_lines > 0 {
-                        let start = if i >= context_lines { i - context_lines } else { 0 };
+                        let start = if i >= context_lines {
+                            i - context_lines
+                        } else {
+                            0
+                        };
                         lines[start..i]
                             .iter()
                             .enumerate()

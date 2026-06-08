@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn test_debug_toggle() {
         disable();
-        assert!(toggle());  // false -> true
+        assert!(toggle()); // false -> true
         assert!(is_enabled());
         assert!(!toggle()); // true -> false
         assert!(!is_enabled());

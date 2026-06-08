@@ -3,19 +3,19 @@
 //
 // 设计文档: docs/designs/multi-agent-swarm-architecture.md
 
-pub mod transport;
-pub mod rpc;
-pub mod registry;
-pub mod heartbeat;
 pub mod agents;
+pub mod heartbeat;
 pub mod orchestrator;
+pub mod registry;
+pub mod rpc;
+pub mod transport;
 
 pub mod pool;
 pub mod workflow;
 
 // 重新导出核心类型
-pub use transport::{UdsServer, UdsClient};
-pub use rpc::{JsonRpcRequest, JsonRpcResponse, JsonRpcError, SwarmMethod};
-pub use registry::{SwarmRegistry, AgentInfo, AgentStatus, AgentType};
 pub use heartbeat::HeartbeatMonitor;
 pub use orchestrator::SwarmOrchestrator;
+pub use registry::{AgentInfo, AgentStatus, AgentType, SwarmRegistry};
+pub use rpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, SwarmMethod};
+pub use transport::{UdsClient, UdsServer};

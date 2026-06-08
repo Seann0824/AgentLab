@@ -9,12 +9,12 @@
 // - 跨会话记忆注入
 // - 记忆生命周期管理
 
-pub mod types;
 pub mod embedding;
-pub mod store;
 pub mod manager;
+pub mod store;
+pub mod types;
 
-pub use types::*;
 pub use embedding::EmbeddingClient;
-pub use store::VectorStore;
 pub use manager::MemoryManager;
+pub use store::VectorStore;
+pub use types::*;

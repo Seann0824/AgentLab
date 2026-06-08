@@ -62,7 +62,8 @@ impl TaskState {
 
         if let Some(task) = &self.current_task {
             lines.push(format!("  任务: {}", task));
-            lines.push(format!("  进度: {}% ({}/{})",
+            lines.push(format!(
+                "  进度: {}% ({}/{})",
                 self.progress_pct(),
                 self.completed_steps.len(),
                 self.completed_steps.len() + self.pending_steps.len(),
@@ -122,7 +123,14 @@ pub(crate) fn chrono_now() -> String {
     let month = 1 + ((days as f64 % 365.25) / 30.44) as u64;
     let day = 1 + (days as f64 % 30.44) as u64;
 
-    format!("{:04}-{:02}-{:02} {:02}:{:02}", year, month.min(12), day.min(31), hours, minutes)
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        year,
+        month.min(12),
+        day.min(31),
+        hours,
+        minutes
+    )
 }
 
 #[cfg(test)]

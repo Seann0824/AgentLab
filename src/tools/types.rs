@@ -2,10 +2,7 @@ use std::pin::Pin;
 
 use futures_util::Stream;
 
-
-
 pub type ToolStream = Pin<Box<dyn Stream<Item = ToolEvent> + Send + 'static>>;
-
 
 #[derive(Debug, Clone)]
 pub enum ToolEvent {

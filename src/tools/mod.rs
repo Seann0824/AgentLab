@@ -13,19 +13,18 @@ pub struct ToolInfo {
     pub description: String,
 }
 
-pub mod types;
-pub mod shell;
-pub mod tool_debug;
 pub mod edit;
-pub mod read;
-pub mod search;
-pub mod subagent;
-pub mod investigate;
-pub mod memory_tools;
 pub mod generate_tool;
 pub mod hello_world;
+pub mod investigate;
+pub mod memory_tools;
+pub mod read;
+pub mod search;
+pub mod shell;
+pub mod subagent;
 pub mod swarm_ctl;
-
+pub mod tool_debug;
+pub mod types;
 
 pub struct ToolManager {
     tools: HashMap<String, Box<dyn Tool>>,
@@ -43,18 +42,18 @@ impl ToolManager {
     }
 
     pub fn get_tools_scehma(&self) -> serde_json::Value {
-        let tools_schema = self.tools
+        let tools_schema = self
+            .tools
             .values()
-            .map(|tool| {
-                tool.parameters_schema()
-            })
+            .map(|tool| tool.parameters_schema())
             .collect::<Vec<serde_json::Value>>();
         serde_json::json!(tools_schema)
     }
 
     /// 返回所有已注册工具的摘要信息列表，用于动态生成系统提示词和 `/tools` 命令
     pub fn list_tools(&self) -> Vec<ToolInfo> {
-        let mut tools: Vec<ToolInfo> = self.tools
+        let mut tools: Vec<ToolInfo> = self
+            .tools
             .values()
             .map(|tool| ToolInfo {
                 name: tool.name().to_string(),
@@ -119,7 +118,7 @@ impl ToolManager {
                 });
 
                 tool_message(&id, content)
-            },
+            }
             _ => {
                 let content = serde_json::json!({
                     "ok": false,
@@ -130,7 +129,7 @@ impl ToolManager {
                 });
 
                 tool_message(&id, content)
-            },
+            }
         }
     }
 }

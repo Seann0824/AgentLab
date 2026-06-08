@@ -16,9 +16,9 @@ use serde_json::json;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::interval;
 
-use crate::swarm::transport::{UdsClient, default_socket_path};
-use crate::swarm::rpc::JsonRpcRequest;
 use crate::swarm::heartbeat::create_heartbeat_request;
+use crate::swarm::rpc::JsonRpcRequest;
+use crate::swarm::transport::{UdsClient, default_socket_path};
 
 /// Verifier Agent — 代码验证 Agent
 pub struct VerifierAgent {
@@ -113,7 +113,8 @@ impl VerifierAgent {
                 self.send_response(&request.id, result).await;
             }
             "run_cargo_test" => {
-                let test_filter = request.params
+                let test_filter = request
+                    .params
                     .as_ref()
                     .and_then(|p| p.get("test_filter"))
                     .and_then(|v| v.as_str())
@@ -135,7 +136,9 @@ impl VerifierAgent {
                             "agent_id": self.agent_id,
                         }
                     });
-                    let _ = client.send_raw(&serde_json::to_string(&resp).unwrap()).await;
+                    let _ = client
+                        .send_raw(&serde_json::to_string(&resp).unwrap())
+                        .await;
                 }
             }
             "shutdown" => {
@@ -247,7 +250,9 @@ impl VerifierAgent {
                     "result": result,
                 }
             });
-            let _ = client.send_raw(&serde_json::to_string(&resp).unwrap()).await;
+            let _ = client
+                .send_raw(&serde_json::to_string(&resp).unwrap())
+                .await;
         }
     }
 

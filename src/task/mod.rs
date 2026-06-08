@@ -351,7 +351,9 @@ mod tests {
         tm.state.completed_steps.push("分析".to_string());
         tm.state.pending_steps.push("编码".to_string());
         tm.state.pending_steps.push("测试".to_string());
-        tm.state.important_facts.push("需要处理边界情况".to_string());
+        tm.state
+            .important_facts
+            .push("需要处理边界情况".to_string());
         tm.mark_dirty();
         tm.save().unwrap();
 
@@ -427,6 +429,11 @@ _最后更新: 2024-06-07_
         assert_eq!(tm.state.current_task.as_deref(), Some("数据库迁移"));
         assert!(tm.state.completed_steps.contains(&"分析表结构".to_string()));
         assert!(tm.state.pending_steps.contains(&"编写迁移脚本".to_string()));
-        assert!(tm.state.important_facts.iter().any(|f| f.contains("外键约束")));
+        assert!(
+            tm.state
+                .important_facts
+                .iter()
+                .any(|f| f.contains("外键约束"))
+        );
     }
 }
