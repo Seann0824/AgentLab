@@ -409,6 +409,18 @@ impl ContextManager {
 
     /// ⭐ 检查上下文是否阻塞（Token 使用率 >= 95%）
     /// 阻塞意味着需要强制压缩才能继续
+    /// ⭐ 消费压缩标志（返回当前值并重置）
+    ///
+    /// 修复：`stats.compressed` 在压缩后会被设为 true，但永不重置。
+    /// 这导致 agent loop 中每次迭代都认为"刚发生了压缩"，从而重复注入 goal/task/memory。
+    /// 使用此方法消费后立即重置，确保只在压缩发生的那个迭代注入一次。
+    pub fn consume_compressed_flag(&mut self) -> bool {
+        let was_compressed = self.stats.compressed;
+        self.stats.compressed = false;
+        was_compressed
+    }
+
+    /// ⭐ 检查上下文是否阻塞（Token 使用率 >= 95%）
     pub fn is_blocked(&self) -> bool {
         self.stats.usage_ratio >= 0.95
     }

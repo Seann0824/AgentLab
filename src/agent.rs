@@ -687,13 +687,14 @@ impl Agent {
 
             // ⭐ 检查是否有异步摘要结果需要注入
             let injected = self.context_manager.poll_summary_results();
-            let compressed = injected > 0;
+            // ⭐ 消费压缩标志（解决：stats.compressed 永不重置导致每次循环都注入的问题）
+            let compressed = injected > 0 || self.context_manager.consume_compressed_flag();
             if injected > 0 {
                 eprintln!("\r\x1b[2K📋 异步摘要已生成并注入上下文 ({} 条)", injected);
             }
 
             // ⭐ 如果发生了压缩，注入当前任务状态
-            if compressed || self.context_manager.stats().compressed {
+            if compressed {
                 if let Some(task_msg) = self.task_manager.get_inject_message() {
                     self.context_manager.add_message(task_msg);
                     eprintln!("\r\x1b[2K📋 已注入当前任务状态（帮助模型恢复上下文）");
@@ -701,7 +702,7 @@ impl Agent {
             }
 
             // ⭐ 如果发生了压缩，注入活跃目标状态
-            if compressed || self.context_manager.stats().compressed {
+            if compressed {
                 if let Some(goal_msg) = self.goal_manager.get_inject_message() {
                     self.context_manager.add_message(goal_msg);
                     eprintln!("\r\x1b[2K🎯 已注入当前活跃目标状态（帮助模型持续朝着目标推进）");
@@ -709,7 +710,7 @@ impl Agent {
             }
 
             // ⭐ 如果发生了压缩，注入持久化记忆（与当前上下文最相关的记忆）
-            if compressed || self.context_manager.stats().compressed {
+            if compressed {
                 // 从最近几条消息提取关键词，搜索相关记忆
                 let recent_messages: Vec<String> = self.context_manager.get_messages()
                     .iter()
