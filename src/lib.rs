@@ -10,5 +10,6 @@ pub mod investigate;
 pub mod memory;
 pub mod model;
 pub mod session;
+pub mod swarm;
 pub mod task;
 pub mod tools;

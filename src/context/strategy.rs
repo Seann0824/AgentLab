@@ -132,7 +132,7 @@ pub fn tool_call_pruning(
         let ctx_msg = &messages[i];
 
         // 只处理 Tool 消息
-        let (tool_call_id, content) = match &ctx_msg.message {
+        let (_tool_call_id, content) = match &ctx_msg.message {
             ChatMessage::Tool {
                 tool_call_id,
                 content,

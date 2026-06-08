@@ -128,6 +128,35 @@ impl CommandRegistry {
             examples: &["/tools"],
             subcommands: &[],
         });
+
+        self.register(&Command {
+            name: "swarm",
+            description: "蜂群控制：查询和管理多 Agent 蜂群状态",
+            usage: "/swarm [子命令]",
+            examples: &["/swarm", "/swarm status", "/swarm list"],
+            subcommands: &[
+                Subcommand {
+                    name: "status",
+                    description: "显示蜂群概览",
+                    usage: "/swarm status",
+                },
+                Subcommand {
+                    name: "list",
+                    description: "列出所有已注册的 Agent",
+                    usage: "/swarm list",
+                },
+                Subcommand {
+                    name: "query",
+                    description: "按 Agent 类型查询",
+                    usage: "/swarm query <orchestrator|memory|general|verifier>",
+                },
+                Subcommand {
+                    name: "help",
+                    description: "显示蜂群控制帮助",
+                    usage: "/swarm help",
+                },
+            ],
+        });
     }
 
     fn register(&mut self, cmd: &'static Command) {

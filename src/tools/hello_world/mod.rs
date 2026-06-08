@@ -50,9 +50,9 @@ impl Tool for HelloWorld {
         let (tx, rx) = mpsc::channel(1);
 
         tokio::spawn(async move {
-        let name: String = args["name"]
+        let _name: String = args["name"]
             .as_str().unwrap_or("").to_string();
-        let greeting: String = args["greeting"]
+        let _greeting: String = args["greeting"]
             .as_str().unwrap_or("").to_string();
 
             // TODO: 实现工具逻辑

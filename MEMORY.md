@@ -144,3 +144,67 @@ agent.rs 在 build() 方法中集成 MemoryManager 时有 3 个编译错误：
 ## 下一步
 **Phase 4 Step 1 — 配置文件系统 [P0]**
 开始实现 YAML/TOML 配置文件系统。
+
+
+# 2024 — SwarmRegistry 持久化 + Agent 集成
+
+## 决策
+1. **SwarmRegistry 使用 `new_with_persistence(dir)` 构造函数**：在构造时指定持久化目录，load_from_disk 在构造时自动调用。
+2. **Agent 通过 AgentBuilder.swarm_registry() 传入**：Agent 使用 `Option<SwarmRegistry>` 类型，构建时如果提供了 registry 则自动替换默认的 SwarmCtl 工具。
+3. **自动持久化**：register_agent() 和 update_agent_status() 每次操作后自动调用 save_to_disk()。
+4. **Fallback 机制**：如果未提供 swarm_registry，/swarm 命令仍然可以用（但无实际数据持久化）。
+
+## 文件变更
+- `src/swarm/registry.rs` — 新增 persistence_dir 字段，save_to_disk/load_from_disk/load_all 方法
+- `src/agent.rs` — Agent 新增 swarm_registry 字段，AgentBuilder 新增 swarm_registry() 方法，build() 中替换 SwarmCtl 工具
+- `src/tools/swarm_ctl/mod.rs` — SwarmCtl::new() 接受 Option<SwarmRegistry>
+
+
+## [2025-06-15] 🐝 多 Agent 蜂群架构 — Phase 2 Memory Agent 实现
+
+### 已完成
+1. **Phase 2.1: main.rs 支持 `--agent-type` 和 `--socket-path`** — 使用 clap 解析 CLI 参数，支持 orchestrator/memory/general/verifier 四种类型启动
+2. **Phase 2.2: Memory Agent 主循环** — `src/swarm/agents/memory.rs` 完整的 MemoryAgent 实现：
+   - 通过 UDS 连接到 Orchestrator 并自动注册
+   - 处理 4 种记忆操作：memory_save/memory_search/memory_forget/memory_stats
+   - 后台心跳任务（每 15 秒向 Orchestrator 发送心跳）
+   - 使用 `Arc<TokioMutex<>>` 共享 client 给心跳任务
+3. **UdsClient 增强** — 新增 `read_request()` 和 `send_raw()` 方法，支持双向通信
+4. **SwarmRegistry 在 Orchestrator 模式自动初始化** — `run_orchestrator()` 中创建并注册 orchestrator-1
+
+### 关键设计决策
+- UdsClient 使用 `read_request()`（而非仅在 server 端）使 Agent 可以接收 Orchestrator 主动派发的任务
+- Memory Agent 不依赖 LLM（不需要 model），只使用 MemoryManager 的记忆存储能力
+- Agent 类型通过 clap 的 `--agent-type` 参数指定，默认 `orchestrator`
+
+## [2025-06-xx] 🐝 Phase 4 完成 — Workflow 引擎
+
+### 完成内容
+1. **Workflow 引擎** (`src/swarm/workflow.rs`) — 完整的任务编排引擎
+   - Workflow 定义（名称、描述、步骤列表、全局超时）
+   - WorkflowStep（ID、名称、执行模式、依赖、任务描述、条件分支、超时、重试）
+
+2. **三种执行模式**
+   - **串行 (Serial)**: 按拓扑排序顺序执行
+   - **并行 (Parallel)**: 无依赖的步骤自动并行执行（Kahn 拓扑排序）
+   - **条件 (Conditional)**: 支持 OutputContains / OutputEquals / Success / Failure 四种条件类型
+
+3. **引擎核心能力**
+   - Kahn 算法拓扑排序，自动确定执行顺序
+   - 并行分组执行，每组内无依赖步骤同时运行
+   - 条件评估，条件不满足的步骤跳过
+   - 完整的状态追踪（Pending/Running/Success/Failed/Skipped/Skipped/Cancelled）
+   - Workflow 取消功能
+   - 与 Agent Pool 集成：使用 Pool 中的实例执行每个步骤
+
+4. **模块注册** — 已注册到 `src/swarm/mod.rs`
+
+### 验证
+- `cargo check` 通过（仅 warnings，无 errors）
+- 拓扑排序单元测试通过（3层4节点→3组：[step1], [step2a, step2b], [step3]）
+
+### 剩余工作（Phase 5）
+- 端到端验证：spawn_agent 验证蜂群可启动
+- 更新 AGENDA.md 和 MEMORY.md
+- 更新 ROADMAP.md 反映完成状态
+- 修复所有编译 warnings

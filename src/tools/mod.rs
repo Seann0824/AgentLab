@@ -24,6 +24,7 @@ pub mod investigate;
 pub mod memory_tools;
 pub mod generate_tool;
 pub mod hello_world;
+pub mod swarm_ctl;
 
 
 pub struct ToolManager {

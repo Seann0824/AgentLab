@@ -279,3 +279,190 @@ Goal 驱动的自动循环中有 3 个地方会注入目标消息到上下文：
 ## 验证标准
 - cargo check 编译通过
 - 代码中不再有 goal 的轮次限制逻辑
+
+# 🐝 多 Agent 蜂群架构实现
+
+## 目标
+按照 `docs/designs/multi-agent-swarm-architecture.md` 设计文档，实现完整的多 Agent 蜂群架构。
+
+---
+
+## Phase 0 — 基础通信层（UDS + JSON-RPC 2.0）✅ 已完成
+
+- [x] 0.1 创建 `src/swarm/mod.rs` — 模块入口，重新导出所有子模块
+- [x] 0.2 实现 UDS 传输层 — `src/swarm/transport.rs`（UdsServer + UdsClient）
+- [x] 0.3 实现 JSON-RPC 2.0 协议 — `src/swarm/rpc.rs`（请求/响应/错误/方法枚举）
+- [x] 0.4 实现 Agent 注册协议 — `src/swarm/registry.rs`（SwarmRegistry + 注册/注销/发现）
+- [x] 0.5 实现心跳检测 — `src/swarm/heartbeat.rs`（心跳发送/检查/超时处理）
+- [x] 0.6 注册 swarm 模块到 `src/lib.rs`
+- [x] 0.7 验证编译 — `cargo check` ✅（仅 warnings，无 errors）
+
+## Phase 1 — Swarm Registry & CLI
+
+- [ ] 1.1 完善 SwarmRegistry 数据结构（类型查询、状态管理）
+- [ ] 1.2 实现 Agent 注册/注销/发现完整 API
+- [ ] 1.3 实现 `query_swarm` CLI 命令（`/swarm status`）
+- [ ] 1.4 创建 `swarm_ctl` 工具 — 蜂群控制工具
+- [ ] 1.5 验证编译 — `cargo check`
+
+## Phase 2 — Memory Agent
+
+- [ ] 2.1 `main.rs` 支持 `--agent-type` 参数
+- [ ] 2.2 创建 Memory Agent 主循环
+- [ ] 2.3 实现自动记忆提取逻辑
+- [ ] 2.4 Orchestrator 集成：自动派发记忆任务
+- [ ] 2.5 验证编译 — `cargo check`
+
+## Phase 3 — General Agent + Verifier Agent ✅
+
+- [x] 3.1 创建 General Agent 主循环 ✅
+- [x] 3.2 实现 Agent Pool 管理 ✅
+- [x] 3.3 创建 Verifier Agent 主循环 ✅
+- [x] 3.4 Orchestrator 集成：`dispatch_task` 工具 ✅
+- [x] 3.5 验证编译 — `cargo check` ✅
+
+## Phase 4 — 任务编排引擎 ✅
+
+- [x] 4.1 实现 Workflow 定义与解析 ✅
+- [x] 4.2 实现串行/并行/条件分支执行 ✅
+- [x] 4.3 验证编译 — `cargo check` ✅
+
+## 验证标准
+- UDS Server/Client 可正常通信
+- Agent 启动后自动注册到 Orchestrator
+- `/swarm status` 可查看所有 Agent 状态
+- Memory Agent 可独立启动并注册
+- 所有代码编译通过（cargo check）
+
+# 🐝 当前任务：多 Agent 蜂群架构完成 — Phase 0+1 整合
+
+## 目标
+完成多 Agent 蜂群架构的基础层整合（Phase 0 + Phase 1），包括：Agent 集成 SwarmRegistry、修复 `/swarm` 命令使其可用、编写测试、验证编译。
+
+---
+
+## 步骤
+
+- [x] 步骤1：修复 Goal 的 name/description（当前被错误拼接）
+- [ ] 步骤2：Agent 结构体添加 `swarm_registry` 字段
+- [ ] 步骤3：AgentBuilder 添加 `with_swarm_registry()` 方法
+- [ ] 步骤4：修复 `/swarm` CLI 命令使用 Agent 持有的 registry
+- [ ] 步骤5：为 heartbeat.rs 编写单元测试
+- [ ] 步骤6：增强 transport.rs 的测试（Client 连接测试）
+- [ ] 步骤7：运行 `cargo check` 验证编译通过
+- [ ] 步骤8：运行 `cargo test` 验证所有测试通过
+- [ ] 步骤9：更新 AGENDA.md 和 MEMORY.md
+
+## 验证标准
+- `cargo check` 通过
+- `cargo test` 中 swarm 模块测试全部通过
+- `/swarm status` 命令返回正确的蜂群状态（不再报 registry 未初始化）
+- Goal 的名称正确显示为设计文档标题
+
+# 🐝 多 Agent 蜂群架构实现（续）— Phase 2~4
+
+## 目标
+按照 `docs/designs/multi-agent-swarm-architecture.md` 设计文档，继续实现多 Agent 蜂群架构的剩余 Phase。
+
+## 已完成状态
+- ✅ Phase 0 — 基础通信层（UDS + JSON-RPC 2.0）：全部完成
+- ✅ Phase 1 — Swarm Registry & CLI：全部完成
+  - SwarmRegistry 数据结构完整（register/unregister/heartbeat/query/query_by_type/query_by_status）
+  - SwarmRegistry 持久化（save_to_disk / load_from_disk）
+  - SwarmRegistry 集成到 Agent 结构体 + AgentBuilder
+  - SwarmCtl 工具已创建并使用实际 registry
+  - `/swarm` CLI 命令已注册并实现（status/list/query/help）
+  - cargo check 编译通过
+
+## 剩余工作
+
+### Phase 2 — Memory Agent（记忆型 Agent）
+- [x] 2.1 `main.rs` 支持 `--agent-type` 和 `--socket-path` 参数，启动不同类型 Agent ✅
+- [x] 2.2 创建 Memory Agent 主循环（非交互式，通过 UDS 接收任务）✅
+- [ ] **2.3 实现自动记忆提取 + 内存维护逻辑** — Memory Agent 后台任务：内存合并/压缩/去重
+- [ ] **2.4 Orchestrator 集成：自动启动 Memory Agent** — UDS Server + spawn Memory Agent 子进程
+- [ ] 2.5 验证编译 — `cargo check`
+
+## Phase 2.4 详细步骤
+
+- [x] **2.4.1 创建 SwarmOrchestrator** — `src/swarm/orchestrator.rs` ✅
+- [ ] **2.4.2 run_orchestrator() 集成 SwarmOrchestrator** — 启动 UDS Server + spawn Memory Agent
+- [ ] **2.4.3 Agent 注册消息处理** — accept 循环 + SwarmRegistry + 双向流存储
+- [ ] **2.4.4 心跳监控后台任务** — HeartbeatMonitor 定期检查超时
+- [ ] **2.4.5 验证 cargo check**
+
+> **状态**: 2.4.1 ✅ — 下一步：2.4.2 run_orchestrator() 集成
+
+### Phase 3 — General Agent + Verifier Agent ✅
+- [x] 3.1 创建 General Agent 主循环（非交互式任务执行器）✅
+- [x] 3.2 实现 Agent Pool 管理（可复用 Agent 实例池）✅
+- [x] 3.3 创建 Verifier Agent 主循环（代码验证专用）✅
+- [x] 3.4 Orchestrator 集成：`dispatch_task` 工具派发任务给指定 Agent ✅
+- [x] 3.5 `orchestrator` 模式自动启动、管理所有子 Agent ✅
+- [x] 3.6 验证编译 — `cargo check` ✅
+
+### Phase 4 — 任务编排引擎 ✅
+- [x] 4.1 实现 Workflow 定义与解析（串行/并行/条件）✅
+- [x] 4.2 实现 Workflow 执行引擎 ✅
+- [ ] 4.3 Orchestrator 集成 workflow 执行
+- [x] 4.4 验证编译 — `cargo check` ✅
+
+### Phase 5 — 端到端验证与文档
+- [ ] 5.1 `cargo test` 全部通过
+- [ ] 5.2 用 spawn_agent 验证 Memory Agent 可独立启动
+- [ ] 5.3 更新 AGENDA.md 和 MEMORY.md
+- [ ] 5.4 更新 ROADMAP.md 反映完成状态
+
+## 验证标准
+- `--agent-type memory` 可启动 Memory Agent 并注册到 Orchestrator
+- General Agent 可接收任务并返回结果
+- Verifier Agent 可运行 cargo check 验证
+- `/swarm status` 显示所有 Agent 状态
+- 所有代码编译通过（cargo check）
+
+# 🐝（当前任务）完成多 Agent 蜂群架构 — Phase 2~4
+
+## 目标
+按照 `docs/designs/multi-agent-swarm-architecture.md` 设计文档，完成多 Agent 蜂群架构的剩余 Phase（2~4），实现可用的多 Agent 协作系统。
+
+## 已完成状态
+- ✅ Phase 0 — 基础通信层（UDS + JSON-RPC 2.0）：transport / rpc / registry / heartbeat / mod.rs
+- ✅ Phase 1 — Swarm Registry & CLI：SwarmRegistry 持久化、Agent 集成、SwarmCtl 工具、/swarm 命令
+- ✅ Phase 2.1 — main.rs 支持 --agent-type / --socket-path / --orchestrator-socket 参数
+- ✅ Phase 2.2 — Memory Agent 主循环（注册、心跳、请求处理）
+- ✅ Phase 2.4.1 — SwarmOrchestrator 已创建（UDS Server + 子进程管理 + 消息路由）
+
+## 剩余工作
+
+### Phase 2 — Memory Agent（记忆型 Agent）
+- [x] **2.3 实现自动记忆提取 + 内存维护逻辑** — Memory Agent 后台任务：自动提取/合并/去重/清理 ✅
+- [x] **2.4 完整 Orchestrator 集成** — run_orchestrator() 完善 SwarmOrchestrator 集成 ✅
+  - [x] 2.4.2 run_orchestrator 完全集成 SwarmOrchestrator（从 orch_arc 提取 registry）✅
+  - [x] 2.4.3 Agent 注册消息处理（accept 循环 + 双向通信）✅
+  - [x] 2.4.4 心跳监控后台任务改进 ✅
+  - [x] 2.4.5 验证 cargo check ✅
+- [x] 2.5 验证编译 — cargo check ✅
+
+### Phase 3 — General Agent + Verifier Agent
+- [x] 3.1 创建 General Agent 主循环 — src/swarm/agents/general.rs（非交互式任务执行器）✅
+- [x] 3.2 实现 Agent Pool 管理 — src/swarm/pool.rs（可复用 Agent 实例池）✅
+- [x] 3.3 创建 Verifier Agent 主循环 — src/swarm/agents/verifier.rs（代码验证专用）✅
+- [x] 3.4 Orchestrator 集成：dispatch_task 工具 + run_general/verifier_agent ✅
+- [x] 3.5 验证编译 — cargo check ✅
+
+### Phase 4 — 任务编排引擎（Workflow）✅
+- [x] 4.1 实现 Workflow 定义与解析 — src/swarm/workflow.rs ✅
+- [x] 4.2 实现串行/并行/条件分支执行引擎 ✅
+- [x] 4.3 验证编译 — cargo check ✅
+
+### Phase 5 — 端到端验证与收尾
+- [ ] 5.1 用 spawn_agent 验证蜂群可启动
+- [ ] 5.2 更新 AGENDA.md 和 MEMORY.md
+- [ ] 5.3 更新 ROADMAP.md 反映完成状态
+- [ ] 5.4 修复所有编译 warnings
+
+## 验证标准
+- `cargo check` 通过
+- Memory Agent 有完整的自动提取/合并/清理逻辑
+- General Agent + Verifier Agent 可编译
+- Workflow 定义和执行引擎可编译

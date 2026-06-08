@@ -8,7 +8,7 @@
 // 3. 维护 index.json 索引文件
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::types::{Goal, GoalStatus, chrono_now};
 

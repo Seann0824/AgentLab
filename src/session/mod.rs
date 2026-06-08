@@ -17,11 +17,10 @@
 //   /session delete my-work → 删除 "my-work" 会话
 //   /session rename old new → 将会话 "old" 重命名为 "new"
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::context::{ContextManager, ContextStrategy};
-use crate::model::{ChatMessage, ToolCall};
+use crate::context::ContextManager;
+use crate::model::ChatMessage;
 use self::types::*;
 
 

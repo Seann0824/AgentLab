@@ -100,3 +100,40 @@
 当前任务: 去掉 Goal 的最大迭代次数限制（无限）
 当前步骤: 步骤1 — 移除 Goal 结构体中的 turn_count 和 max_turns 字段及相关方法
 进度: 0/5
+
+# 🐝 当前任务：多 Agent 蜂群架构实现 — Phase 0
+- 进度：0/7
+- 当前步骤：0.1 创建 src/swarm/mod.rs
+- 状态：进行中
+
+# 🐝 当前任务：多 Agent 蜂群架构完成 — Phase 0+1 整合
+- 进度：0/9 步骤
+- 当前步骤：步骤1 — 修复 Goal 名称
+- 状态：进行中
+
+# 🐝 当前任务：SwarmRegistry 持久化 + Agent 集成
+- 进度：3/3 ✅ 全部完成
+- 当前步骤：全部完成
+- 状态：✅ 已完成
+
+已完成项：
+1. ✅ SwarmRegistry 持久化（save_to_disk / load_from_disk）
+2. ✅ SwarmRegistry 集成到 Agent 结构体（swarm_registry 字段、AgentBuilder、build()）
+3. ✅ SwarmCtl 工具使用实际 registry（而非 None）
+
+# 🐝 当前任务：多 Agent 蜂群架构 — Phase 2: Memory Agent
+- 进度：0/5 步骤
+- 当前步骤：2.1 main.rs 支持 --agent-type 和 --socket-path 参数
+2.1 ✅ main.rs 支持 --agent-type 参数 — 已完成
+- 状态：进行中
+
+# 🐝 当前任务：完成多 Agent 蜂群架构 — Phase 2~4
+- 进度：0/16 步骤
+- 当前步骤：2.3 — 实现 Memory Agent 自动记忆提取 + 内存维护逻辑
+- 状态：进行中
+
+# 🐝 当前任务：完成多 Agent 蜂群架构 — Phase 2~4 ✅
+- 进度：14/16 步骤
+- 当前步骤：Phase 4 ✅ — Workflow 引擎完成（拓扑排序 + 串行/并行/条件分支 + 编译通过）
+- 剩余：Phase 5 — 端到端验证 + 更新 ROADMAP.md
+- 状态：🟡 进行中

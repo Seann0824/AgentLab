@@ -197,7 +197,7 @@ async fn write_file_lines(file_path: &str, lines: &[String]) -> Result<(), Strin
 /// 生成 diff 摘要
 fn generate_diff_summary(lines: &[String], old_lines: &[String]) -> String {
     let added = lines.len() as isize - old_lines.len() as isize;
-    let changed = if added >= 0 { added } else { -added };
+    let _changed = if added >= 0 { added } else { -added };
     let change_type = if added > 0 {
         format!("+{} 行", added)
     } else if added < 0 {
@@ -217,7 +217,7 @@ fn format_diff_lines(old_lines: &[String], new_lines: &[String]) -> String {
     let min_len = old_lines.len().min(new_lines.len());
     let max_len = old_lines.len().max(new_lines.len());
     let start = 1;
-    let end = max_len;
+    let _end = max_len;
 
     diff.push_str(&format!("@@ -{},{} +{},{} @@\n", start, old_lines.len(), start, new_lines.len()));
 
@@ -310,7 +310,7 @@ async fn insert_content(file_path: &str, args: &serde_json::Value, dry_run: bool
     let mode = args["mode"].as_str().unwrap_or("after");
 
     // ⭐ 使用 read_file_lines_or_create：文件不存在时视为空文件
-    let (_, mut lines) = read_file_lines_or_create(file_path).await?;
+    let (_, lines) = read_file_lines_or_create(file_path).await?;
     let original_lines = lines.clone();
 
     // 确定插入位置

@@ -11,13 +11,14 @@ use tokio::sync::Mutex;
 use crate::cli::CommandRegistry;
 use crate::context::{ContextManager, ContextStrategy, TokenEstimator};
 use crate::model::{ChatMessage, ModelEvent, ToolCall};
-use crate::model::{ModelManager, ModelConfig};
+use crate::model::ModelManager;
 use crate::investigate::ErrorSnapshotManager;
 use crate::session::SessionManager;
 use crate::goal::GoalRegistry;
 use crate::task::TaskManager;
 use crate::memory::{MemoryManager, MemorySource};
-use crate::tools::{ToolManager, hello_world::HelloWorld, shell::BashShell, tool_debug::DebugTool, edit::EditTool, read::ReadTool, search::SearchTool, subagent::SpawnAgent, investigate::InvestigateTool, generate_tool::GenerateTool};
+use crate::swarm::registry::SwarmRegistry;
+use crate::tools::{ToolManager, hello_world::HelloWorld, shell::BashShell, tool_debug::DebugTool, edit::EditTool, read::ReadTool, search::SearchTool, subagent::SpawnAgent, investigate::InvestigateTool, generate_tool::GenerateTool, swarm_ctl::SwarmCtl};
 use crate::tools::memory_tools::{MemorySaveTool, MemorySearchTool, MemoryForgetTool, MemoryStatsTool};
 
 // =====================================================================
@@ -107,6 +108,7 @@ pub struct AgentBuilder {
     config: AgentConfig,
     current_dir: String,
     memory_manager: Option<MemoryManager>,
+    swarm_registry: Option<SwarmRegistry>,
 }
 
 impl Default for AgentBuilder {
@@ -120,6 +122,7 @@ impl Default for AgentBuilder {
                 .display()
                 .to_string(),
             memory_manager: None,
+            swarm_registry: None,
         }
     }
 }
@@ -160,6 +163,12 @@ impl AgentBuilder {
         self
     }
 
+    /// 设置 SwarmRegistry（蜂群注册表）
+    pub fn swarm_registry(mut self, registry: SwarmRegistry) -> Self {
+        self.swarm_registry = Some(registry);
+        self
+    }
+
     /// 构建 Agent
     pub fn build(self) -> anyhow::Result<Agent> {
         let model_manager = self.model_manager.ok_or_else(|| anyhow::anyhow!("ModelManager is required. Call .model_manager(mm) to set it."))?;
@@ -174,6 +183,12 @@ impl AgentBuilder {
         tool_manager.register_tool(Box::new(MemorySearchTool { memory_manager: memory_manager.clone() }));
         tool_manager.register_tool(Box::new(MemoryForgetTool { memory_manager: memory_manager.clone() }));
         tool_manager.register_tool(Box::new(MemoryStatsTool { memory_manager: memory_manager.clone() }));
+
+        // ⭐ 如果提供了 SwarmRegistry，替换默认的 SwarmCtl 工具
+        if let Some(ref registry) = self.swarm_registry {
+            let swarm_ctl = crate::tools::swarm_ctl::SwarmCtl::new(Some(registry.clone()));
+            tool_manager.register_tool(Box::new(swarm_ctl));
+        }
 
         let strategy = self.config.to_strategy();
 
@@ -192,6 +207,7 @@ impl AgentBuilder {
             command_registry: CommandRegistry::new(),
             current_dir: self.current_dir,
             memory_manager,
+            swarm_registry: self.swarm_registry,
         })
     }
 }
@@ -213,6 +229,7 @@ pub struct Agent {
     session_manager: SessionManager,
     command_registry: CommandRegistry,
     current_dir: String,
+    swarm_registry: Option<SwarmRegistry>,
 }
 
 impl Agent {
@@ -577,6 +594,81 @@ impl Agent {
                             continue;
                         }
 
+                        // /swarm 命令：蜂群控制
+                        if cmd_name == "swarm" {
+                            use crate::tools::swarm_ctl::SwarmCtl;
+                            use crate::tools::types::Tool;
+                            use futures_util::StreamExt;
+
+                            let tool = SwarmCtl::new(self.swarm_registry.clone());
+                            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                            let action = parts.get(1).copied().unwrap_or("status");
+
+                            let mut args = serde_json::json!({ "action": action });
+                            if let Some(agent_type) = parts.get(2) {
+                                args["agent_type"] = serde_json::json!(agent_type);
+                            }
+
+                            let mut stream = tool.execute(args);
+                            while let Some(event) = stream.next().await {
+                                match event {
+                                    crate::tools::types::ToolEvent::Done(result) => {
+                                        let msg = result["message"].as_str().unwrap_or("");
+                                        if !msg.is_empty() {
+                                            println!("\x1b[36m{}\x1b[0m", msg);
+                                        }
+                                        if let Some(status) = result.get("swarm_status") {
+                                            let total = status["total_agents"].as_i64().unwrap_or(0);
+                                            let online = status["online"].as_i64().unwrap_or(0);
+                                            let offline = status["offline"].as_i64().unwrap_or(0);
+                                            println!("  🐝 总计: {} 个 Agent", total);
+                                            println!("  ✅ 在线: {}", online);
+                                            println!("  ❌ 离线: {}", offline);
+                                            if let Some(agents) = status["agents"].as_array() {
+                                                if !agents.is_empty() {
+                                                    println!("\x1b[90m  Agent 列表:\x1b[0m");
+                                                    for agent in agents {
+                                                        let id = agent["id"].as_str().unwrap_or("?");
+                                                        let atype = agent["type"].as_str().unwrap_or("?");
+                                                        let s = agent["status"].as_str().unwrap_or("?");
+                                                        println!("    🆔 {} ({} — {})", id, atype, s);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if let Some(agents) = result.get("agents") {
+                                            if let Some(agents_arr) = agents.as_array() {
+                                                if !agents_arr.is_empty() {
+                                                    println!("\x1b[90m  Agent 列表:\x1b[0m");
+                                                    for agent in agents_arr {
+                                                        let id = agent["agent_id"].as_str().unwrap_or("?");
+                                                        let atype = agent["agent_type"].as_str().unwrap_or("?");
+                                                        let s = agent["status"].as_str().unwrap_or("?");
+                                                        println!("    🆔 {} ({} — {})", id, atype, s);
+                                                    }
+                                                } else {
+                                                    println!("  📭 没有匹配的 Agent");
+                                                }
+                                            }
+                                        }
+                                        if let Some(hint) = result.get("hint") {
+                                            println!("  💡 {}", hint.as_str().unwrap_or(""));
+                                        }
+                                        if let Some(modules) = result.get("available_modules") {
+                                            if let Some(mods) = modules.as_array() {
+                                                println!("  📦 可用模块: {}", mods.iter().filter_map(|m| m.as_str()).collect::<Vec<_>>().join(", "));
+                                            }
+                                        }
+                                    }
+                                    crate::tools::types::ToolEvent::Err(msg) => {
+                                        println!("\x1b[31m❌ {}\x1b[0m", msg);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            continue;
+                        }
+
                         if self.command_registry.is_known(cmd_name) {
                             if let Some(cmd) = self.command_registry.get(cmd_name) {
                                 self.command_registry.print_command_help(cmd);
@@ -804,7 +896,6 @@ impl Agent {
             }
 
             // ⭐ 自动捕获错误快照（在移动 tool_calls 之前）
-            let mut last_snapshot_id: Option<String> = None;
             if has_tool_calls {
                 let snapshot_manager = ErrorSnapshotManager::new(&self.current_dir);
                 for tool_call in &tool_calls {
@@ -828,14 +919,13 @@ impl Agent {
                                         None,
                                         0,
                                     );
-                                    if let Ok(path) = snapshot_manager.save(&snapshot) {
+                                    if let Ok(_path) = snapshot_manager.save(&snapshot) {
                                         let id = snapshot.id.clone();
                                         eprintln!(
                                             "\r\x1b[2K\x1b[33m📸 错误快照已保存: {} -> {}\x1b[0m",
                                             id,
-                                            path.display()
+                                            _path.display()
                                         );
-                                        last_snapshot_id = Some(id);
                                     }
                                     break;
                                 }
@@ -1538,6 +1628,7 @@ fn default_tool_manager() -> ToolManager {
     tool_manager.register_tool(Box::new(InvestigateTool::new(".")));
     tool_manager.register_tool(Box::new(GenerateTool::new(".")));
     tool_manager.register_tool(Box::new(HelloWorld));
+    tool_manager.register_tool(Box::new(SwarmCtl::new(None)));
     tool_manager
 }
 

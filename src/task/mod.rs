@@ -17,15 +17,12 @@
 //   let prompt = tm.get_inject_prompt();    // 生成恢复提示
 //   tm.save();                             // 定期保存
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::model::ChatMessage;
 
 pub mod types;
 use types::TaskState;
-
-/// 状态文件路径列表（全部统一到 docs/ 目录）
-const STATE_FILES: &[&str] = &["docs/PLAN.md", "docs/AGENDA.md", "docs/MEMORY.md"];
 
 /// ⭐ 任务管理器
 pub struct TaskManager {
@@ -291,6 +288,7 @@ fn simple_hash(s: &str) -> u64 {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::Path;
 
     /// 创建临时目录用于测试
     fn setup_temp_dir() -> tempfile::TempDir {

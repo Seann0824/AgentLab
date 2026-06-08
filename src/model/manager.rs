@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::model::{ChatMessage, ModelAdapter, ModelEvent, ToolCall};
+use crate::model::ModelAdapter;
 use crate::model::config::ModelConfig;
 use crate::model::providers::build_adapter;
 
@@ -206,6 +206,7 @@ impl ModelManager {
     }
 
     /// 动态注册一个新的模型配置并构建适配器
+    /// 如果当前没有活跃模型（active_name=="none"），自动切换为新模型
     pub fn add_model(&mut self, config: ModelConfig) -> Result<(), String> {
         let name = config.name.clone();
 
@@ -214,8 +215,12 @@ impl ModelManager {
             format!("构建模型 '{}' 的适配器失败: {}", name, e)
         })?;
 
+        let is_first = self.active_name == "none";
         self.configs.insert(name.clone(), config);
-        self.adapters.insert(name, adapter);
+        self.adapters.insert(name.clone(), adapter);
+        if is_first {
+            self.active_name = name;
+        }
         Ok(())
     }
 

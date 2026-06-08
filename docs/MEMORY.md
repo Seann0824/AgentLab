@@ -488,3 +488,43 @@ src/tools/dag_tools/
 
 **已应用的修复**:
 - `src/tools/dag_tools/execute.rs`: 在 task spawn 前增加 `instance.transition_to(NodeStatus::Working)`，确保节点状态正确经过 `Working` → `Completed` 序列
+
+
+---
+
+## 🐝 多 Agent 蜂群架构 — 首次全面审查 (Phase 3.5)
+
+**审查日期**: 当前
+
+### 完成状态总结
+
+| 组件 | 文件 | 状态 | 行数 |
+|------|------|------|------|
+| UDS Transport (Client/Server) | `src/swarm/transport.rs` | ✅ | ~300行 |
+| JSON-RPC 协议 | `src/swarm/rpc.rs` | ✅ | ~100行 |
+| Swarm Registry (AgentInfo/AgentStatus/AgentType) | `src/swarm/registry.rs` | ✅ | ~200行 |
+| Heartbeat Monitor | `src/swarm/heartbeat.rs` | ✅ | ~100行 |
+| Memory Agent | `src/swarm/agents/memory.rs` | ✅ 完整实现，4种记忆操作 + 心跳 |
+| General Agent | `src/swarm/agents/general.rs` | ✅ 完整实现，带LLM主循环 |
+| Verifier Agent | `src/swarm/agents/verifier.rs` | ✅ 完整实现，带LLM验证循环 |
+| Agent Pool Manager | `src/swarm/pool.rs` | ✅ 350行，池化+按需创建+UDS |
+| Swarm Orchestrator | `src/swarm/orchestrator.rs` | ✅ 189行，UDS Server+心跳+Agent管理 |
+| Workflow Engine | `src/swarm/workflow.rs` | ✅ 538行，拓扑排序+条件+并行+AgentPool集成 |
+| main.rs 集成 (orchestrator/memory/general/verifier) | `src/main.rs` | ✅ 支持4种Agent类型启动 |
+| tools/swarm_ctl 工具 | `src/tools/` | ✅ 已注册 (status/list/query) |
+
+### 关键发现
+1. **Phase 4 (Workflow Engine) 已完整实现** — 比原计划提前完成，支持拓扑排序、条件分支、并行执行
+2. **所有代码编译通过** — cargo check 零错误
+3. **138个测试全部通过** — cargo test 零失败
+4. **spawn_agent工具可用** — 可以用于端到端验证
+
+### 待完成项
+- ⬜ **Phase 3.5 — 端到端验证**: 需要手动或派生子Agent验证蜂群上下文的完整流程
+- ⬜ **Phase 5 — 文档完善**: 更新最终文档和总结
+
+### 端到端验证场景设计
+1. **基础编译验证** ✅ — cargo check + cargo test 已通过
+2. **蜂群启动流程验证**: 启动 Orchestrator → 自动启动 Memory Agent → 注册 → 心跳
+3. **Agent Pool 验证**: AgentPool 初始化 → 分配 → 回收
+4. **Workflow 执行验证**: 定义 Workflow → 执行 → 查看状态

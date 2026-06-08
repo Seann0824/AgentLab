@@ -8,14 +8,10 @@
 // - MemoryForgetTool: 删除不需要的记忆
 // - MemoryStatsTool: 查看记忆系统状态
 
-use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use futures_util::Stream;
-use futures_util::StreamExt;
-
-use crate::memory::{MemoryManager, MemorySource, SearchResult};
+use crate::memory::{MemoryManager, MemorySource};
 use crate::tools::types::{Tool, ToolEvent, ToolStream};
 
 /// 记忆保存工具

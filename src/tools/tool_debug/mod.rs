@@ -8,7 +8,7 @@
 //   - `action: "disable"` — 关闭 debug 模式
 //   - `action: "toggle"` — 切换 debug 模式
 
-use tokio::{sync::mpsc, fs};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::tools::types::{Tool, ToolEvent, ToolStream};

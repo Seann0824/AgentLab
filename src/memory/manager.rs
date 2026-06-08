@@ -242,7 +242,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn create_test_manager() -> (MemoryManager, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("memory_mgr_test_{}", std::process::id()));
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("memory_mgr_test_{}_{}", std::process::id(), ts));
         let _ = std::fs::remove_dir_all(&dir);
         let mgr = MemoryManager::new_mock(dir.clone());
         (mgr, dir)

@@ -10,7 +10,6 @@
 //   - 限制最大匹配行数
 //   - 显示匹配行号及上下文
 
-use std::path::Path;
 
 use regex::Regex;
 use tokio::{sync::mpsc, task};
@@ -156,7 +155,7 @@ async fn execute_search(args: serde_json::Value) -> Result<SearchOutput, String>
 
     // 编译搜索模式
     let search_pattern: Box<dyn Fn(&str) -> bool + Send + Sync> = if is_regex {
-        let mut regex_str = pattern_str.clone();
+        let regex_str = pattern_str.clone();
         let re = if ignore_case {
             Regex::new(&format!("(?i){}", regex_str)).map_err(|e| format!("正则表达式无效: {}", e))?
         } else {

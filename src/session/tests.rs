@@ -1,5 +1,5 @@
 use super::*;
-use crate::context::ContextManager;
+use crate::context::{ContextManager, ContextStrategy};
 
 #[test]
 fn test_sanitize_name() {
