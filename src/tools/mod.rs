@@ -13,6 +13,8 @@ pub struct ToolInfo {
     pub description: String,
 }
 
+pub mod agent_tools;
+pub mod dispatch_task;
 pub mod edit;
 pub mod generate_tool;
 pub mod hello_world;

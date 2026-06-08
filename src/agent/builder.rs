@@ -5,18 +5,20 @@ use tokio::sync::Mutex;
 use super::default_tools::default_tool_manager;
 use super::{Agent, AgentConfig};
 use crate::cli::CommandRegistry;
-use crate::swarm::registry::AgentType;
 use crate::context::ContextManager;
 use crate::goal::GoalRegistry;
 use crate::memory::MemoryManager;
 use crate::model::ModelManager;
 use crate::session::SessionManager;
-use crate::swarm::registry::SwarmRegistry;
+use crate::swarm::orchestrator::SwarmOrchestrator;
+use crate::swarm::registry::{AgentType, SwarmRegistry};
 use crate::task::TaskManager;
-use crate::tools::ToolManager;
+use crate::tools::agent_tools::{make_coder_task, make_general_task, make_memory_task, make_researcher_task, make_verifier_task};
+use crate::tools::dispatch_task::DispatchTask;
 use crate::tools::memory_tools::{
     MemoryForgetTool, MemorySaveTool, MemorySearchTool, MemoryStatsTool,
 };
+use crate::tools::ToolManager;
 
 /// AgentBuilder — 链式构建 Agent
 pub struct AgentBuilder {
@@ -26,6 +28,8 @@ pub struct AgentBuilder {
     current_dir: String,
     memory_manager: Option<MemoryManager>,
     swarm_registry: Option<SwarmRegistry>,
+    /// Swarm Orchestrator 共享引用（用于 dispatch_task 工具）
+    swarm_orchestrator: Option<Arc<Mutex<SwarmOrchestrator>>>,
 }
 
 impl Default for AgentBuilder {
@@ -40,6 +44,7 @@ impl Default for AgentBuilder {
                 .to_string(),
             memory_manager: None,
             swarm_registry: None,
+            swarm_orchestrator: None,
         }
     }
 }
@@ -92,6 +97,12 @@ impl AgentBuilder {
         self
     }
 
+    /// 设置 Swarm Orchestrator（用于派发任务到子 Agent）
+    pub fn swarm_orchestrator(mut self, orch: Arc<Mutex<SwarmOrchestrator>>) -> Self {
+        self.swarm_orchestrator = Some(orch);
+        self
+    }
+
     /// 构建 Agent
     pub fn build(self) -> anyhow::Result<Agent> {
         let model_manager = self.model_manager.ok_or_else(|| {
@@ -125,6 +136,27 @@ impl AgentBuilder {
             tool_manager.register_tool(Box::new(swarm_ctl));
         }
 
+        // ⭐ 如果提供了 SwarmOrchestrator，注册 dispatch_task 工具
+        if let Some(ref orch) = self.swarm_orchestrator {
+            let dispatch = DispatchTask {
+                orchestrator: orch.clone(),
+                registry: self.swarm_registry.as_ref().map(|r| {
+                    // 从注册表获取 Arc 共享引用（通过 Orchestrator 获取）
+                    // dispatch_task 内部会通过 orch 获取 registry
+                    Arc::new(Mutex::new(r.clone()))
+                }),
+            };
+            tool_manager.register_tool(Box::new(dispatch));
+
+            // ⭐ 注册 Agent 专用任务工具（每个子 Agent 类型一个独立工具）
+            let registry = self.swarm_registry.as_ref().map(|r| Arc::new(Mutex::new(r.clone())));
+            tool_manager.register_tool(Box::new(make_coder_task(orch.clone(), registry.clone())));
+            tool_manager.register_tool(Box::new(make_researcher_task(orch.clone(), registry.clone())));
+            tool_manager.register_tool(Box::new(make_verifier_task(orch.clone(), registry.clone())));
+            tool_manager.register_tool(Box::new(make_general_task(orch.clone(), registry.clone())));
+            tool_manager.register_tool(Box::new(make_memory_task(orch.clone(), registry.clone())));
+        }
+
         let strategy = self.config.to_strategy();
 
         // ⭐ 初始化 GoalRegistry
@@ -143,6 +175,7 @@ impl AgentBuilder {
             current_dir: self.current_dir,
             memory_manager,
             swarm_registry: self.swarm_registry,
+            swarm_orchestrator: self.swarm_orchestrator,
         })
     }
 }

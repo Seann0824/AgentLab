@@ -107,6 +107,7 @@ async fn run_orchestrator(socket_path: PathBuf) -> anyhow::Result<()> {
     let mut agent = Agent::builder()
         .model_manager(model_manager)
         .swarm_registry(registry)
+        .swarm_orchestrator(orch_arc.clone())
         .build()?;
 
     agent.run().await

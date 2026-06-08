@@ -15,7 +15,7 @@ use tokio::sync::Mutex as TokioMutex;
 
 use super::heartbeat::HeartbeatMonitor;
 use super::registry::{AgentType, SwarmRegistry};
-use super::rpc::JsonRpcRequest;
+use super::rpc::{JsonRpcRequest, JsonRpcResponse};
 use super::transport::{UdsServer, UdsStream, default_socket_path};
 
 /// 已连接的 Agent 信息（包含活动流）
@@ -133,6 +133,37 @@ impl SwarmOrchestrator {
         stream.send_request(request).await
     }
 
+    /// 向指定 Agent 发送请求并等待响应（同步阻塞等待）
+    ///
+    /// 用于 dispatch_task 工具——派发任务给 Agent 后，
+    /// 在同一连接上等待 Agent 返回执行结果。
+    pub async fn send_request_and_wait(
+        &mut self,
+        agent_id: &str,
+        request: &JsonRpcRequest,
+        timeout_secs: u64,
+    ) -> std::result::Result<JsonRpcResponse, String> {
+        // 1. 获取该 Agent 的流
+        let stream = self
+            .streams
+            .get_mut(agent_id)
+            .ok_or_else(|| format!("Agent '{}' not connected", agent_id))?;
+
+        // 2. 发送请求
+        stream
+            .send_request(request)
+            .await
+            .map_err(|e| format!("发送请求失败: {}", e))?;
+
+        // 3. 带超时等待响应
+        match tokio::time::timeout(Duration::from_secs(timeout_secs), stream.read_response()).await
+        {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(e)) => Err(format!("读取响应失败: {}", e)),
+            Err(_) => Err(format!("等待 Agent '{}' 响应超时 ({}s)", agent_id, timeout_secs)),
+        }
+    }
+
     /// 发送消息到所有 Agent（广播）
     pub async fn broadcast(
         &mut self,
@@ -183,6 +214,34 @@ impl SwarmOrchestrator {
     /// 生成 Agent ID（带前缀和后缀）
     pub fn generate_agent_id(prefix: &str) -> String {
         format!("{}-{}", prefix, std::process::id())
+    }
+
+    /// 根据 Agent 类型查找可用的 Agent ID
+    ///
+    /// 优先从 Registry 查找，回退到本地 streams 检测。
+    pub async fn find_agent_by_type(&self, agent_type: &AgentType) -> Option<String> {
+        // 1. 从 Registry 查找
+        {
+            let reg = self.registry.lock().await;
+            let agents = reg.query_by_type(agent_type);
+            for agent_info in &agents {
+                let id = &agent_info.agent_id;
+                if self.streams.contains_key(id) {
+                    return Some(id.clone());
+                }
+            }
+        }
+
+        // 2. 回退：从本地 agent_types 映射查找（兼容旧注册方式）
+        for (agent_id, atype) in &self.agent_types {
+            if atype == agent_type && self.streams.contains_key(agent_id) {
+                return Some(agent_id.clone());
+            }
+        }
+
+        // 3. 如果完全找不到匹配类型的 Agent，返回第一个可用 stream
+        let ids: Vec<String> = self.streams.keys().cloned().collect();
+        ids.into_iter().next()
     }
 }
 

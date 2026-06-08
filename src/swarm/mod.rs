@@ -11,6 +11,7 @@ pub mod rpc;
 pub mod transport;
 
 pub mod pool;
+pub mod task;
 pub mod workflow;
 
 // 重新导出核心类型
@@ -18,4 +19,5 @@ pub use heartbeat::HeartbeatMonitor;
 pub use orchestrator::SwarmOrchestrator;
 pub use registry::{AgentInfo, AgentStatus, AgentType, SwarmRegistry};
 pub use rpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, SwarmMethod};
+pub use task::{SwarmTask, TaskResult, TaskStatus, TaskPriority};
 pub use transport::{UdsClient, UdsServer};

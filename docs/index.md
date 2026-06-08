@@ -45,6 +45,7 @@
 | 文件 | 用途 |
 |------|------|
 | [上下文管理分析](./analyses/context-management-analysis.md) | 上下文管理方案的深度分析 |
+| [蜂群架构缺口分析](./analyses/swarm-architecture-gaps-analysis.md) | 多 Agent 蜂群架构的现状诊断、6 项关键缺口与 3 阶段优化计划 |
 
 ---
 

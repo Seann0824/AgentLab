@@ -252,6 +252,18 @@ impl UdsStream {
         Ok(())
     }
 
+    /// 读取一个 JSON-RPC 响应
+    pub async fn read_response(&mut self) -> Result<JsonRpcResponse> {
+        let mut reader = BufReader::new(&mut self.reader);
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        if line.is_empty() {
+            anyhow::bail!("Connection closed");
+        }
+        let resp: JsonRpcResponse = serde_json::from_str(&line.trim())?;
+        Ok(resp)
+    }
+
     /// 发送一个 JSON-RPC 请求（供 Orchestrator 向 Agent 派发任务）
     pub async fn send_request(&mut self, req: &JsonRpcRequest) -> Result<()> {
         let line = serde_json::to_string(req)?;
