@@ -5,13 +5,13 @@
   "criteria": [],
   "status": "Active",
   "progress": 0,
-  "turn_count": 10,
+  "turn_count": 70,
   "max_turns": 0,
   "steps": [],
   "completed_steps": [],
   "decisions": [],
   "created_at": "2026-06-05 15:54",
-  "updated_at": "2026-06-05 15:54",
+  "updated_at": "2026-06-05 16:07",
   "completed_at": null,
   "stall_count": 0
 }

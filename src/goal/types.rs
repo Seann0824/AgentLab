@@ -67,10 +67,8 @@ pub struct Goal {
     pub status: GoalStatus,
     /// 执行进度 (0-100)
     pub progress: u8,
-    /// 已执行轮次（防无限循环）
-    pub turn_count: u32,
-    /// 最大轮次限制
-    pub max_turns: u32,
+    /// 停滞检测计数（连续无进展轮次）
+    pub stall_count: u32,
     /// 关联的步骤列表
     pub steps: Vec<String>,
     /// 已完成步骤
@@ -83,8 +81,6 @@ pub struct Goal {
     pub updated_at: String,
     /// 完成时间（当 status == Completed 时）
     pub completed_at: Option<String>,
-    /// 停滞检测计数（连续无进展轮次）
-    pub stall_count: u32,
 }
 
 impl Goal {
@@ -98,8 +94,6 @@ impl Goal {
             criteria,
             status: GoalStatus::Proposed,
             progress: 0,
-            turn_count: 0,
-            max_turns: 0,
             steps: Vec::new(),
             completed_steps: Vec::new(),
             decisions: Vec::new(),
@@ -118,20 +112,9 @@ impl Goal {
         self.completed_steps.len() >= self.steps.len()
     }
 
-    /// 是否超过最大轮次（0 表示无限制）
-    pub fn is_max_turns_reached(&self) -> bool {
-        self.max_turns > 0 && self.turn_count >= self.max_turns
-    }
-
     /// 是否停滞（连续无进展轮次超过阈值）
     pub fn is_stalled(&self) -> bool {
         self.stall_count >= 5
-    }
-
-    /// 增加轮次计数
-    pub fn increment_turn(&mut self) {
-        self.turn_count += 1;
-        self.updated_at = chrono_now();
     }
 
     /// 添加完成的标准（检查进度变化）
@@ -320,19 +303,5 @@ mod tests {
 
         goal.stall_count = 5;
         assert!(goal.is_stalled());
-    }
-
-    #[test]
-    fn test_max_turns() {
-        let mut goal = Goal::new(
-            "测试".to_string(),
-            "".to_string(),
-            vec![],
-        );
-        goal.max_turns = 3;
-        assert!(!goal.is_max_turns_reached());
-
-        goal.turn_count = 3;
-        assert!(goal.is_max_turns_reached());
     }
 }

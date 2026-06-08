@@ -263,3 +263,19 @@ Goal 驱动的自动循环中有 3 个地方会注入目标消息到上下文：
 - [x] 修复2: 添加最大连续自动迭代次数（MAX_CONSECUTIVE_AUTO=30）限制 ✅
 - [x] 修复3: 运行 cargo check 验证编译通过 ✅（仅 warnings，无 errors）
 - [x] 修复4: 用 spawn_agent 做端到端验证 ✅（子 agent 确认所有 4 项变更均正确）
+# 🎯 去掉 Goal 的最大迭代次数限制（无限）
+
+## 目标
+去掉 Goal 的 max_turns 轮次限制，使其无限运行（不再因轮次超限自动标记失败）。
+
+## 执行步骤
+
+- [ ] 1. 移除 Goal 结构体中的 `turn_count` 和 `max_turns` 字段及相关方法
+- [ ] 2. 移除 agent.rs 中 Goal 轮次计数和超限检查的代码块
+- [ ] 3. 移除 get_goal_context_prompt 中的"轮次"显示行
+- [ ] 4. 更新 types.rs 中的测试
+- [ ] 5. 运行 cargo check 验证编译通过
+
+## 验证标准
+- cargo check 编译通过
+- 代码中不再有 goal 的轮次限制逻辑

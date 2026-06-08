@@ -3,9 +3,9 @@
     {
       "id": "g4fcd14981",
       "name": "完成test",
-      "status": "Completed",
-      "progress": 100,
-      "updated_at": "2026-06-05 15:54"
+      "status": "Active",
+      "progress": 0,
+      "updated_at": "2026-06-05 16:07"
     },
     {
       "id": "g4fb3137fd",
@@ -15,5 +15,5 @@
       "updated_at": "2026-06-05 15:53"
     }
   ],
-  "last_updated": "2026-06-05 15:54"
+  "last_updated": "2026-06-05 16:07"
 }

@@ -442,9 +442,6 @@ impl Agent {
         let mut is_auto = false;
         let mut terminal_line_dirty = false;
         let mut single_task_used = false;
-        // ⭐ 连续自动迭代计数（防止 Goal 驱动无限循环）
-        let mut consecutive_auto_count: u32 = 0;
-        const MAX_CONSECUTIVE_AUTO: u32 = 30;
 
         // ⭐ 自动提取记忆计数器（每 N 轮非工具调用的对话保存重要信息到记忆）
         let mut auto_extract_counter: usize = 0;
@@ -750,18 +747,13 @@ impl Agent {
                 .map(|tool_call| tool_call.id.clone())
                 .collect::<Vec<_>>();
 
-            // ⭐ 活跃 Goal 轮次计数 & 超限检查
+            // ⭐ 活跃 Goal 停滞检查（连续无进展轮次超过阈值）
             if self.goal_manager.has_active_goal() {
                 if let Some(goal) = self.goal_manager.active_goal_mut() {
-                    goal.increment_turn();
-                    let reached_max = goal.is_max_turns_reached();
                     let stalled = goal.is_stalled();
                     let goal_id = goal.id.clone();
                     let goal_clone = goal.clone();
-                    if reached_max {
-                        eprintln!("\r\x1b[2K⚠️  目标 '{}' 已达到最大轮次限制 ({})，自动标记为失败", goal_id, goal.max_turns);
-                        let _ = self.goal_manager.mark_failed(&goal_id, "max turns reached");
-                    } else if stalled {
+                    if stalled {
                         eprintln!("\r\x1b[2K⚠️  目标 '{}' 已停滞（连续 {} 轮无进展），自动标记为失败", goal_id, goal.stall_count);
                         let _ = self.goal_manager.mark_failed(&goal_id, "stalled");
                     } else {
@@ -889,17 +881,8 @@ impl Agent {
                 }
             }
 
-            // ⭐ 防止无限自动循环：超过最大连续自动迭代次数时退回用户输入模式
-            if is_auto {
-                consecutive_auto_count += 1;
-                if consecutive_auto_count >= MAX_CONSECUTIVE_AUTO {
-                    eprintln!("\r\x1b[2K⏸️  已达到最大连续自动迭代次数 ({}), 暂停自动循环等待用户输入", MAX_CONSECUTIVE_AUTO);
-                    is_auto = false;
-                    consecutive_auto_count = 0;
-                }
-            } else {
-                consecutive_auto_count = 0;
-            }
+            // ⭐ 自动循环无限进行，直到目标进入终止状态（已完成/失败/取消）
+            // 不再限制连续自动迭代次数
 
             // ⭐ 自动提取重要信息到持久化记忆（每 N 轮非工具调用的对话）
             if should_auto_extract {
@@ -1450,7 +1433,6 @@ fn handle_goal_command(input: &str, goal_manager: &mut GoalRegistry) {
                 println!("  📝 描述:   {}", goal.description);
                 println!("  📂 状态:   \x1b[32m{}\x1b[0m", goal.status.to_string());
                 println!("  🕐 创建:   {}", goal.created_at);
-                println!("  🔄 轮次:   {}", goal.turn_count);
             } else {
                 println!("\x1b[33m⚠️  当前没有活跃目标\x1b[0m");
                 println!("\x1b[90m  💡 使用 /goal set <描述> 创建新目标\x1b[0m");
@@ -1472,11 +1454,10 @@ fn handle_goal_command(input: &str, goal_manager: &mut GoalRegistry) {
                         _ => "\x1b[90m⚪\x1b[0m",
                     };
                     println!(
-                        "  {} \x1b[33m{:<8}\x1b[0m {} ({} 轮)",
+                        "  {} \x1b[33m{:<8}\x1b[0m {}",
                         status_icon,
                         goal.id,
                         goal.description,
-                        goal.turn_count
                     );
                 }
             }

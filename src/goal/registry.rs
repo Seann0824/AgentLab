@@ -337,7 +337,6 @@ impl GoalRegistry {
             lines.push(format!("  描述: {}", goal.description));
         }
         lines.push(format!("  进度: {}", goal.progress_text()));
-        lines.push(format!("  轮次: {}/{}", goal.turn_count, if goal.max_turns == 0 { "∞".to_string() } else { goal.max_turns.to_string() }));
         lines.push(String::new());
 
         if !goal.criteria.is_empty() {
