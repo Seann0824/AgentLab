@@ -93,20 +93,31 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 cargo run
 ```
 
-启动后会进入交互模式，你输入指令，Agent 自动规划和执行。
+启动后会进入交互模式，你输入指令，Agent 自动规划和执行。默认输出模式是产品化的 `concise`：保留助手回答和工具执行摘要，不再把工具 stdout/stderr 全量刷到屏幕。
+交互中可以输入 `/exit` 或 `/quit` 正常退出。
+
+### 输出模式
+
+```bash
+# 默认：适合日常使用，只展示工具摘要
+cargo run -- --output concise
+
+# 调试：展示完整工具调用参数、thinking、stdout/stderr 和子 Agent 日志
+cargo run -- --output full
+
+# 集成：输出 NDJSON 事件，供 Web/Tauri UI 或自动化消费
+cargo run -- --output json
+```
 
 ### 示例
 
 ```
 > 帮我看看项目结构
-━━━ 🔧 调用工具: shell
-  $ find . -type f -name "*.rs" | head -20
-━━━ ✅ 执行成功 (exit: 0)
-...
+→ shell find . -type f -name "*.rs" | head -20
+✓ shell 42ms (exit=0, stdout 20 lines/612 bytes)
 > 搜索一下代码里哪里用到了 "pruning"
-━━━ 🔧 调用工具: search
-  pattern: pruning
-━━━ ✅ 执行成功 (exit: 0)
+→ search
+✓ search 18ms (247 bytes result)
 ...
 ```
 

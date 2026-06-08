@@ -12,11 +12,11 @@ fn global_tokenizer() -> Option<&'static tiktoken_rs::CoreBPE> {
         .get_or_init(|| {
             match tiktoken_rs::cl100k_base() {
                 Ok(bpe) => {
-                    eprintln!("[TokenEstimator] tiktoken cl100k_base initialized successfully");
+                    crate::debug!("[TokenEstimator] tiktoken cl100k_base initialized successfully");
                     Some(bpe)
                 }
                 Err(e) => {
-                    eprintln!(
+                    crate::debug!(
                         "[TokenEstimator] WARNING: tiktoken init failed ({}), falling back to char-count estimation",
                         e
                     );

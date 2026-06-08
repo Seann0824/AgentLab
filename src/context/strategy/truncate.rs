@@ -23,9 +23,11 @@ pub(super) fn emergency_truncate(
     let original_len = messages.len();
     let original_tokens = estimate_total_tokens(messages, estimator);
 
-    eprintln!(
+    crate::debug!(
         "[emergency_truncate] 🚨 ACTIVATED: {} messages, {} tokens (limit={})",
-        original_len, original_tokens, token_limit,
+        original_len,
+        original_tokens,
+        token_limit,
     );
 
     // 1. 找到 System 消息索引
@@ -97,7 +99,7 @@ pub(super) fn emergency_truncate(
     let orphaned = remove_orphaned_tool_messages(messages);
     let final_removed = total_removed + orphaned;
 
-    eprintln!(
+    crate::debug!(
         "[emergency_truncate] 🚨 FORCED: removed {} messages (keep={}), tokens {} → {}",
         final_removed,
         messages.len(),
@@ -180,9 +182,10 @@ pub(super) fn hard_truncate(
     let orphaned_tool_count = remove_orphaned_tool_messages(messages);
     let final_removed = removed_count + orphaned_tool_count;
 
-    eprintln!(
+    crate::debug!(
         "[hard_truncate] removed {} messages (including {} orphaned tool results), tokens reduced",
-        final_removed, orphaned_tool_count,
+        final_removed,
+        orphaned_tool_count,
     );
 
     CompressResult::HardTruncated {

@@ -4,6 +4,7 @@ use super::Agent;
 use super::goal_command::handle_goal_command;
 use super::input::InputOutcome::{Continue, Exit, Ready};
 use super::model_command::handle_model_command;
+use super::output::OutputMode;
 use super::render::finish_terminal_line;
 use super::runtime::RunState;
 use super::session_command::handle_session_command;
@@ -17,6 +18,12 @@ pub(super) enum InputOutcome {
     Exit,
 }
 
+enum InteractiveInput {
+    Line(String),
+    Empty,
+    Eof,
+}
+
 impl Agent {
     pub(super) async fn read_next_input(
         &mut self,
@@ -27,8 +34,17 @@ impl Agent {
             return Ok(self.read_single_task_input(task, state));
         }
 
-        let Some(input_str) = read_interactive_input(&mut state.terminal_line_dirty)? else {
-            return Ok(Continue);
+        let input_str = match read_interactive_input(
+            &mut state.terminal_line_dirty,
+            self.config.output_mode,
+        )? {
+            InteractiveInput::Line(input) => input,
+            InteractiveInput::Empty => return Ok(Continue),
+            InteractiveInput::Eof => return Ok(Exit),
+        };
+
+        if matches!(input_str.as_str(), "/exit" | "/quit") {
+            return Ok(Exit);
         };
 
         if input_str.starts_with('/') {
@@ -48,14 +64,18 @@ impl Agent {
             let snapshot_manager = ErrorSnapshotManager::new(&self.current_dir);
             if let Ok(snapshots) = snapshot_manager.list() {
                 if let Some(last) = snapshots.last() {
-                    eprintln!("[SNAPSHOT] {}", last.id);
+                    if self.config.output_mode.is_full() {
+                        eprintln!("[SNAPSHOT] {}", last.id);
+                    }
                 }
             }
             return Exit;
         }
 
         state.single_task_used = true;
-        eprintln!("[子 agent] 执行任务: {}", task);
+        if self.config.output_mode.is_full() {
+            eprintln!("[子 agent] 执行任务: {}", task);
+        }
         self.context_manager.add_message(ChatMessage::user(task));
         self.task_manager.on_user_input(task);
         state.goal_loop_state.reset();
@@ -91,7 +111,9 @@ impl Agent {
                 if self.goal_manager.has_active_goal() {
                     if let Some(goal_msg) = self.goal_manager.get_inject_message() {
                         self.context_manager.add_message(goal_msg);
-                        eprintln!("\r\x1b[2K🎯 目标已注入上下文，AI 将感知到当前目标");
+                        if self.config.output_mode.is_full() {
+                            eprintln!("\r\x1b[2K🎯 目标已注入上下文，AI 将感知到当前目标");
+                        }
                     }
                 }
             }
@@ -117,19 +139,25 @@ impl Agent {
     }
 }
 
-fn read_interactive_input(terminal_line_dirty: &mut bool) -> anyhow::Result<Option<String>> {
+fn read_interactive_input(
+    terminal_line_dirty: &mut bool,
+    output_mode: OutputMode,
+) -> anyhow::Result<InteractiveInput> {
     let mut user_input = String::new();
-    finish_terminal_line(terminal_line_dirty);
-    print!(">");
-    std::io::stdout().flush()?;
-    if std::io::stdin().read_line(&mut user_input).is_err() {
-        return Ok(None);
+    if output_mode.is_terminal() {
+        finish_terminal_line(terminal_line_dirty);
+        print!(">");
+        std::io::stdout().flush()?;
+    }
+    let bytes_read = std::io::stdin().read_line(&mut user_input)?;
+    if bytes_read == 0 {
+        return Ok(InteractiveInput::Eof);
     }
     let input = user_input.trim().to_string();
     if input.is_empty() {
-        Ok(None)
+        Ok(InteractiveInput::Empty)
     } else {
-        Ok(Some(input))
+        Ok(InteractiveInput::Line(input))
     }
 }
 

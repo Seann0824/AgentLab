@@ -67,6 +67,14 @@ impl CommandRegistry {
             subcommands: &[],
         });
 
+        self.register(&Command {
+            name: "exit",
+            description: "退出交互模式",
+            usage: "/exit",
+            examples: &["/exit", "/quit"],
+            subcommands: &[],
+        });
+
         // 会话管理命令（主命令）
         self.register(&Command {
             name: "session",

@@ -75,7 +75,7 @@ impl UdsServer {
         let listener = UnixListener::bind(&path)
             .context(format!("Failed to bind UDS server at {:?}", path))?;
 
-        eprintln!("🐝 [Swarm] UDS Server listening at {:?}", path);
+        crate::debug!("🐝 [Swarm] UDS Server listening at {:?}", path);
 
         Ok(Self {
             listener,
@@ -108,7 +108,7 @@ impl UdsServer {
         };
         self.connections.insert(registration.agent_id.clone(), conn);
 
-        eprintln!(
+        crate::debug!(
             "🐝 [Swarm] Agent '{}' ({}) connected",
             registration.agent_id,
             registration.agent_type.as_str()
@@ -186,7 +186,7 @@ impl UdsClient {
             JsonRpcRequest::new("register", Some(serde_json::to_value(&registration)?));
         client.send_request(&register_req).await?;
 
-        eprintln!(
+        crate::debug!(
             "🐝 [Swarm] Client '{}' connected to server",
             client.agent_id
         );

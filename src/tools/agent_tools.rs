@@ -102,9 +102,9 @@ pub fn make_coder_task(
     AgentTaskTool {
         agent_type: AgentType::Coder,
         tool_name: "coder_task",
-        tool_description: "向 Coder Agent（编码专用 Agent）派发编码任务。\
+        tool_description: "默认用于代码实现/重构/生成/局部修改的 Coder Agent 调度工具。\
             支持 read_file/edit_file/generate_code/review_code 等编码操作。\
-            适合代码生成、编辑、审查等编码密集型任务。",
+            非平凡编码任务应优先委派给它，再由 Orchestrator 复核和整合结果。",
         param_description: "编码任务描述，告诉 Coder Agent 需要生成或修改什么代码",
         orchestrator,
         registry,
@@ -119,9 +119,9 @@ pub fn make_researcher_task(
     AgentTaskTool {
         agent_type: AgentType::Researcher,
         tool_name: "researcher_task",
-        tool_description: "向 Researcher Agent（技术调研专用 Agent）派发调研任务。\
+        tool_description: "默认用于代码库/架构/技术方案调查的 Researcher Agent 调度工具。\
             支持 read_file/search_code/analyze_codebase/generate_report/compare_approaches \
-            等调研操作。适合代码库分析、架构调研、技术方案对比等任务。",
+            等调研操作。跨文件分析和方案比较应优先委派给它。",
         param_description: "调研任务描述，告诉 Researcher Agent 需要调研什么",
         orchestrator,
         registry,
@@ -136,9 +136,9 @@ pub fn make_verifier_task(
     AgentTaskTool {
         agent_type: AgentType::Verifier,
         tool_name: "verifier_task",
-        tool_description: "向 Verifier Agent（验证专用 Agent）派发验证任务。\
+        tool_description: "默认用于编译、测试、回归和错误分析的 Verifier Agent 调度工具。\
             支持 cargo check / cargo test 等编译测试验证。\
-            适合代码修改后的编译验证、测试执行和错误分析。",
+            代码修改后应优先委派给它做验证。",
         param_description: "验证任务描述，告诉 Verifier Agent 需要验证什么",
         orchestrator,
         registry,
@@ -153,8 +153,8 @@ pub fn make_general_task(
     AgentTaskTool {
         agent_type: AgentType::General,
         tool_name: "general_task",
-        tool_description: "向 General Agent（通用 Agent）派发通用任务。\
-            适合不需要专用 Agent 类型的一般性任务处理。",
+        tool_description: "默认用于低风险通用子任务的 General Agent 调度工具。\
+            适合不需要 Coder/Researcher/Verifier/Memory 专业能力的一般任务处理。",
         param_description: "通用任务描述，告诉 General Agent 需要做什么",
         orchestrator,
         registry,
@@ -169,8 +169,8 @@ pub fn make_memory_task(
     AgentTaskTool {
         agent_type: AgentType::Memory,
         tool_name: "memory_task",
-        tool_description: "向 Memory Agent（记忆管理专用 Agent）派发记忆管理任务。\
-            适合需要主动管理持久化记忆的场景。",
+        tool_description: "默认用于持久化记忆检索、保存、整理和统计的 Memory Agent 调度工具。\
+            适合需要主动管理跨会话知识的场景。",
         param_description: "记忆管理任务描述，告诉 Memory Agent 需要做什么",
         orchestrator,
         registry,

@@ -60,7 +60,7 @@ pub fn auto_compress(
             *tool_pruning_max_output_chars,
         ),
         other => {
-            eprintln!(
+            crate::debug!(
                 "[WARN] auto_compress called with non-Auto strategy: {:?}",
                 other
             );
@@ -126,7 +126,7 @@ pub fn auto_compress(
                 },
             };
             let _ = tx.send(task);
-            eprintln!(
+            crate::debug!(
                 "[auto_compress] 📋 layer1: dispatched async summary (keep_recent={})",
                 max_turns,
             );
@@ -169,7 +169,7 @@ pub fn auto_compress(
         max_turns
     };
 
-    eprintln!(
+    crate::debug!(
         "[auto_compress] tokens={}/{} ({:.0}%%) turns={} effective_max_turns={} threshold={}",
         current_tokens,
         token_limit,
@@ -205,7 +205,7 @@ pub fn auto_compress(
         if result.did_compress() {
             stats.compressed = true;
             stats.last_compressed_at = Some(Instant::now());
-            eprintln!(
+            crate::debug!(
                 "[auto_compress] 🔴 hard_truncate: removed {} messages, tokens {} → {}",
                 match &result {
                     CompressResult::HardTruncated { removed_count, .. } => *removed_count,
@@ -216,13 +216,13 @@ pub fn auto_compress(
             );
             return result;
         } else {
-            eprintln!(
+            crate::debug!(
                 "[auto_compress] ⚠️ hard_truncate called but no messages removed (all protected?)"
             );
             // 🚨 层4: 紧急截断 — 当所有层都无法截断但 Token 仍然超限时的最后安全网
             let tokens_still = estimate_total_tokens(messages, estimator);
             if tokens_still >= token_limit {
-                eprintln!(
+                crate::debug!(
                     "[auto_compress] 🚨 Tokens still over limit after hard_truncate, calling emergency_truncate"
                 );
                 let emergency_result = emergency_truncate(messages, token_limit, estimator);
@@ -254,7 +254,7 @@ pub fn force_compress(
     stats: &mut ContextStats,
     summary_tx: Option<mpsc::UnboundedSender<SummaryTask>>,
 ) -> CompressResult {
-    eprintln!("[force_compress] 🚀 ACTIVATED: {} messages", messages.len(),);
+    crate::debug!("[force_compress] 🚀 ACTIVATED: {} messages", messages.len(),);
 
     // 1. 工具调用结果修剪（层0）
     if strategy.tool_pruning_enabled() {
@@ -313,7 +313,7 @@ pub fn force_compress(
             // 🔴 清理孤立的 Tool 消息（手动构建消息列表可能破坏 tool_calls→Tool 对应关系）
             let orphaned = remove_orphaned_tool_messages(messages);
             if orphaned > 0 {
-                eprintln!(
+                crate::debug!(
                     "[force_compress] 🧹 auto-loop: removed {} orphaned tool messages",
                     orphaned,
                 );
@@ -344,7 +344,7 @@ pub fn force_compress(
     stats.usage_ratio = final_tokens as f64 / token_limit as f64;
     stats.last_compressed_at = Some(std::time::Instant::now());
 
-    eprintln!(
+    crate::debug!(
         "[force_compress] ✅ Done: {} msgs, tokens → {} ({:.0}%)",
         messages.len(),
         final_tokens,

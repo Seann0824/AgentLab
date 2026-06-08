@@ -12,6 +12,7 @@ mod handle;
 mod input;
 mod model_command;
 mod model_turn;
+mod output;
 mod post_turn;
 mod prompt;
 mod recovery;
@@ -23,6 +24,7 @@ mod swarm_command;
 pub use builder::AgentBuilder;
 pub use config::AgentConfig;
 pub use handle::AgentHandle;
+pub use output::OutputMode;
 
 use std::sync::Arc;
 

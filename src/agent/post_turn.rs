@@ -27,9 +27,11 @@ impl Agent {
         self.update_goal_status_from_response(goal_driven_enabled, &final_assistant_message);
 
         if has_tool_calls {
-            print!("\r\x1b[K");
+            if self.config.output_mode.is_terminal() {
+                print!("\r\x1b[K");
+            }
             for tool_result in &tool_results {
-                render_tool_result_from_msg(tool_result);
+                render_tool_result_from_msg(tool_result, self.config.output_mode);
             }
             self.capture_first_tool_error(&tool_calls, &tool_results);
         }
@@ -61,12 +63,13 @@ impl Agent {
             if let Some(goal) = self.goal_manager.active_goal_mut() {
                 let stalled = goal.is_stalled();
                 let goal_id = goal.id.clone();
+                let stall_count = goal.stall_count;
                 let goal_clone = goal.clone();
                 if stalled {
-                    eprintln!(
-                        "\r\x1b[2K⚠️  目标 '{}' 已停滞（连续 {} 轮无进展），自动标记为失败",
-                        goal_id, goal.stall_count
-                    );
+                    self.render_notice(format!(
+                        "目标 '{}' 已停滞（连续 {} 轮无进展），自动标记为失败",
+                        goal_id, stall_count
+                    ));
                     let _ = self.goal_manager.mark_failed(&goal_id, "stalled");
                 } else {
                     let _ = self.goal_manager.update(goal_clone);
@@ -79,21 +82,15 @@ impl Agent {
                 match action.as_str() {
                     "complete" => {
                         let _ = self.goal_manager.mark_complete(&goal_id);
-                        println!(
-                            "\n\x1b[32m━━━ ✅ LLM 自动标记目标 '{}' 为已完成 ━━━\x1b[0m 🎉",
-                            goal_id
-                        );
+                        self.render_notice(format!("LLM 自动标记目标 '{}' 为已完成", goal_id));
                     }
                     "fail" => {
                         let _ = self.goal_manager.mark_failed(&goal_id, &reason);
-                        println!(
-                            "\n\x1b[31m━━━ ❌ LLM 自动标记目标 '{}' 为失败 ━━━\x1b[0m",
-                            goal_id
-                        );
+                        self.render_notice(format!("LLM 自动标记目标 '{}' 为失败", goal_id));
                     }
                     "cancel" => {
                         let _ = self.goal_manager.mark_cancelled(&goal_id);
-                        println!("\n\x1b[33m━━━ 🚫 LLM 自动取消目标 '{}' ━━━\x1b[0m", goal_id);
+                        self.render_notice(format!("LLM 自动取消目标 '{}'", goal_id));
                     }
                     _ => {}
                 }
@@ -108,10 +105,10 @@ impl Agent {
                     auto_detect_goal_completion(goal, assistant_message, &self.current_dir)
                 {
                     let _ = self.goal_manager.mark_complete(goal_id);
-                    println!(
-                        "\n\x1b[32m━━━ ✅ 自动检测到目标完成信号: {} (目标 '{}' 已完成) ━━━\x1b[0m 🎉",
+                    self.render_notice(format!(
+                        "自动检测到目标完成信号: {} (目标 '{}' 已完成)",
                         reason, goal_id
-                    );
+                    ));
                 }
             }
         }
@@ -119,10 +116,10 @@ impl Agent {
         if enabled {
             if let Some(active_goal) = self.goal_manager.active_goal() {
                 if active_goal.status.is_terminal() {
-                    eprintln!(
-                        "\r\x1b[2K🎯 目标 '{}' 已达终止状态 ({}), 停止自动执行",
+                    self.render_notice(format!(
+                        "目标 '{}' 已达终止状态 ({}), 停止自动执行",
                         active_goal.id, active_goal.status
-                    );
+                    ));
                 }
             }
         }
@@ -163,11 +160,11 @@ impl Agent {
                 0,
             );
             if let Ok(path) = snapshot_manager.save(&snapshot) {
-                eprintln!(
-                    "\r\x1b[2K\x1b[33m📸 错误快照已保存: {} -> {}\x1b[0m",
+                self.render_notice(format!(
+                    "错误快照已保存: {} -> {}",
                     snapshot.id,
                     path.display()
-                );
+                ));
             }
             break;
         }
@@ -193,17 +190,17 @@ impl Agent {
             GoalAutoLoopDecision::StopNoActiveGoal => {}
             GoalAutoLoopDecision::StopTerminal => state.is_auto = false,
             GoalAutoLoopDecision::StopIdle => {
-                eprintln!(
-                    "\r\x1b[2K🎯 目标仍为 Active，但连续 {} 轮没有工具调用；暂停自动执行，等待用户输入",
+                self.render_notice(format!(
+                    "目标仍为 Active，但连续 {} 轮没有工具调用；暂停自动执行，等待用户输入",
                     state.goal_loop_state.idle_iterations,
-                );
+                ));
                 state.is_auto = false;
             }
             GoalAutoLoopDecision::StopMaxIterations => {
-                eprintln!(
-                    "\r\x1b[2K🎯 目标自动执行已达到 {} 轮上限；暂停自动执行，等待用户输入",
+                self.render_notice(format!(
+                    "目标自动执行已达到 {} 轮上限；暂停自动执行，等待用户输入",
                     state.goal_loop_state.auto_iterations,
-                );
+                ));
                 state.is_auto = false;
             }
         }
@@ -243,9 +240,25 @@ impl Agent {
                 .save(&memory_content, &tags, MemorySource::Conversation, 0.3)
                 .await
             {
-                Ok(id) => eprintln!("\r\x1b[2K🧠 自动提取并保存了一条对话记忆 (id: {})", id),
-                Err(e) => eprintln!("\r\x1b[2K⚠️ 自动提取记忆失败: {}", e),
+                Ok(id) => {
+                    if self.config.output_mode.is_full() {
+                        eprintln!("\r\x1b[2K🧠 自动提取并保存了一条对话记忆 (id: {})", id);
+                    }
+                }
+                Err(e) => self.render_notice(format!("自动提取记忆失败: {}", e)),
             }
+        }
+    }
+
+    fn render_notice(&self, message: String) {
+        if self.config.output_mode.is_json() {
+            super::output::emit_json_event(
+                super::events::RunEventKind::AgentNotice,
+                "agent",
+                serde_json::json!({ "message": message }),
+            );
+        } else {
+            eprintln!("\r\x1b[2K\x1b[90m{}\x1b[0m", message);
         }
     }
 

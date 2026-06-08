@@ -1,6 +1,8 @@
 use crate::context::ContextStrategy;
 use crate::swarm::registry::AgentType;
 
+use super::OutputMode;
+
 /// Agent 配置：上下文策略和运行参数
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -20,6 +22,8 @@ pub struct AgentConfig {
     pub tool_pruning_max_output_chars: usize,
     /// Agent 类型（用于渲染不同的身份提示词）
     pub agent_type: AgentType,
+    /// CLI/app output rendering mode.
+    pub output_mode: OutputMode,
 }
 
 impl Default for AgentConfig {
@@ -33,6 +37,7 @@ impl Default for AgentConfig {
             tool_pruning_keep_recent: 3,
             tool_pruning_max_output_chars: 200,
             agent_type: AgentType::Orchestrator,
+            output_mode: OutputMode::default(),
         }
     }
 }

@@ -63,7 +63,7 @@ impl SwarmOrchestrator {
         let monitor = HeartbeatMonitor::new(registry.clone());
         let heartbeat_handle = monitor.start();
 
-        eprintln!("🐝 [Orchestrator] 蜂群编排器已启动 @ {:?}", socket);
+        crate::debug!("🐝 [Orchestrator] 蜂群编排器已启动 @ {:?}", socket);
 
         Ok(Self {
             server: Some(server),
@@ -96,7 +96,7 @@ impl SwarmOrchestrator {
                 match orch.server.take() {
                     Some(server) => server,
                     None => {
-                        eprintln!("🐝 [Orchestrator] accept loop 已经启动，跳过重复启动");
+                        crate::debug!("🐝 [Orchestrator] accept loop 已经启动，跳过重复启动");
                         return;
                     }
                 }
@@ -109,7 +109,7 @@ impl SwarmOrchestrator {
                         orch.register_connected_agent(registration, stream).await;
                     }
                     Err(e) => {
-                        eprintln!("🐝 [Orchestrator] 接受连接失败: {}", e);
+                        crate::debug!("🐝 [Orchestrator] 接受连接失败: {}", e);
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                 }
@@ -132,7 +132,7 @@ impl SwarmOrchestrator {
             .insert(agent_id.clone(), agent_type.clone());
         self.streams
             .insert(agent_id.clone(), Arc::new(TokioMutex::new(stream)));
-        eprintln!(
+        crate::debug!(
             "🐝 [Orchestrator] Agent '{}' 已注册为 {}",
             agent_id,
             agent_type.as_str()
@@ -321,9 +321,11 @@ async fn send_request_and_wait_on_stream(
             return Ok(response);
         }
 
-        eprintln!(
+        crate::debug!(
             "🐝 [Orchestrator] 忽略来自 Agent '{}' 的非匹配响应 id={} (等待 id={})",
-            agent_id, response.id, request.id
+            agent_id,
+            response.id,
+            request.id
         );
     }
 }
@@ -342,7 +344,7 @@ async fn handle_inbound_agent_request(
                 .unwrap_or(fallback_agent_id);
             let mut reg = registry.lock().await;
             if !reg.heartbeat(agent_id) {
-                eprintln!("🐝 [Orchestrator] 收到未知 Agent '{}' 的心跳", agent_id);
+                crate::debug!("🐝 [Orchestrator] 收到未知 Agent '{}' 的心跳", agent_id);
             }
         }
         "unregister" => {
@@ -354,9 +356,10 @@ async fn handle_inbound_agent_request(
             reg.unregister(agent_id);
         }
         other => {
-            eprintln!(
+            crate::debug!(
                 "🐝 [Orchestrator] 等待任务响应时收到 Agent '{}' 的请求 '{}'，已忽略",
-                fallback_agent_id, other
+                fallback_agent_id,
+                other
             );
         }
     }

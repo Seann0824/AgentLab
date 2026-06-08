@@ -55,7 +55,9 @@ impl Agent {
         if goal_driven_enabled && self.goal_manager.has_active_goal() {
             if let Some(goal_msg) = self.goal_manager.get_inject_message() {
                 self.context_manager.add_message(goal_msg);
-                eprintln!("🎯 已发现活跃目标，目标状态已注入上下文");
+                if self.config.output_mode.is_full() {
+                    eprintln!("🎯 已发现活跃目标，目标状态已注入上下文");
+                }
             }
         }
         self.task_manager.load();

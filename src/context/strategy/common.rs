@@ -65,7 +65,7 @@ pub fn remove_orphaned_tool_messages(messages: &mut Vec<ContextMessage>) -> usiz
     }
 
     if orphaned_tool_count > 0 {
-        eprintln!(
+        crate::debug!(
             "[remove_orphaned_tool_messages] 🧹 removed {} orphaned tool messages",
             orphaned_tool_count,
         );

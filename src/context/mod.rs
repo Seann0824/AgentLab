@@ -232,7 +232,7 @@ impl ContextManager {
             // 🔴 清理孤立的 Tool 消息（按 count 删除可能破坏 tool_calls→Tool 对应关系）
             let orphaned = strategy::remove_orphaned_tool_messages(&mut self.messages);
             if orphaned > 0 {
-                eprintln!(
+                crate::debug!(
                     "[inject_summary] 🧹 removed {} orphaned tool messages after summary injection",
                     orphaned,
                 );
@@ -431,7 +431,7 @@ impl ContextManager {
     /// 在 is_blocked() 返回 true 时调用。
     /// 先发送异步摘要任务，然后执行同步压缩。
     pub fn force_compress(&mut self) -> CompressResult {
-        eprintln!(
+        crate::debug!(
             "[ContextManager] force_compress called (usage={:.0}%)",
             self.stats.usage_ratio * 100.0
         );
