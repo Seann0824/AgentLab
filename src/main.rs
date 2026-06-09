@@ -1,5 +1,4 @@
 use std::env;
-use std::mem::take;
 use dotenvy;
 use openai_api_rs::v1::chat_completion::chat_completion_stream::ChatCompletionStreamResponse;
 use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Content};
@@ -7,7 +6,7 @@ use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Content};
 use openai_api_rs::v1::chat_completion::MessageRole;
 
 use crate::tools::web_search::WebSearch;
-use crate::tools::{ToolManager, web_search};
+use crate::tools::ToolManager;
 mod model;
 mod tools;
 mod agent;
@@ -34,7 +33,7 @@ async fn main() -> () {
         },
         ChatCompletionMessage {
             role: MessageRole::user,
-            content: Content::Text("100字表白".into()),
+            content: Content::Text("帮我查查伦敦天气, 记得传递 query".into()),
             name: None,
             tool_calls: None,
             tool_call_id: None,
@@ -53,7 +52,7 @@ async fn main() -> () {
 
 
         let (mut reason_delta, mut content_delta) = (vec![], vec![]);
-        let tools_call = None; 
+        let mut tools_call = None; 
 
         while let Some(chunck) = think_stream.next().await {
             match chunck {
@@ -78,26 +77,41 @@ async fn main() -> () {
                     tools_call = Some(tc);
                 },
                 ChatCompletionStreamResponse::Done=> {
+                    // 区分调用工具和没有调用工具的信息
+
                     // message 处理，工具调用处理（工具本身调用也可以作为一个流，但是本次就先做简单版本）
                     messages.push(
-                        ChatCompletionMessage { role: MessageRole::assistant, content: reason_delta, name: None, tool_calls: None, tool_call_id: None },
+                        ChatCompletionMessage { role: MessageRole::assistant, content: Content::Text(reason_delta.join("")), name: None, tool_calls: None, tool_call_id: None },
                     );
-                    messages.push(
-                        ChatCompletionMessage { role: MessageRole::assistant, content: content_delta, name: None, tool_calls: None, tool_call_id: None }
-                    );
-
-                    // 工具调用
-
                     // tool call
-                    if let Some(tools_call) = tools_call {
+                    if let Some(tools_call) = &tools_call {
+                        
                         let tasks = tools_call
                             .iter()
                             .map(|tool_call| tool_manager.run(tool_call.clone()))
                             .collect::<Vec<_>>();
                         
                         let tools_call_result = futures_util::future::join_all(tasks).await;
-                        // make tool_call message
-                        
+                        // 工具调用
+                        messages.push(
+                            ChatCompletionMessage { role: MessageRole::assistant, content: Content::Text(content_delta.join("")), tool_calls: Some(tools_call.clone()), name: None, tool_call_id: None }
+                        );
+                        // 工具调用结果
+                        tools_call_result
+                            .into_iter()
+                            .for_each(|(tool_call_id, tool_call_result)| {
+                                let tool_call_result = match tool_call_result {
+                                    Ok(content) => content,
+                                    Err(error_msg) => error_msg,
+                                };
+                                messages.push(
+                                    ChatCompletionMessage { role: MessageRole::tool, content: Content::Text(tool_call_result), tool_call_id: Some(tool_call_id), name: None, tool_calls: None }
+                                )
+                            });     
+                    } else {
+                        messages.push(
+                            ChatCompletionMessage { role: MessageRole::assistant, content: Content::Text(content_delta.join("")), name: None, tool_calls: None, tool_call_id: None }
+                        );
                     }
                 },
             }

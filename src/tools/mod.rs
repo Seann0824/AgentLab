@@ -22,23 +22,21 @@ impl ToolManager {
     }
 
     pub fn get_tools_scehma(&self) -> Vec<chat_completion::Tool> {
-        self.tools
+        let schema = self.tools
             .values()
             .map(|tool| {
                 chat_completion::Tool {
                     r#type: ToolType::Function,
                     function: openai_api_rs::v1::types::Function {
-                        name: "search".to_string(),
-                        description: Some("使用 Google 搜索网页信息".to_string()),
-                        parameters: openai_api_rs::v1::types::FunctionParameters {
-                            schema_type: openai_api_rs::v1::types::JSONSchemaType::Object,
-                            properties: Some(tool.parameters_schema()),
-                            required: Some(vec!["query".to_string()]),
-                        },
+                        name: tool.name().to_string(),
+                        description: Some(tool.description().to_string()),
+                        parameters: tool.parameters_schema()
                     },
                 }
             })
-            .collect()
+            .collect();
+        println!("schema: {:?}", schema);
+        schema
     }
 
     pub async fn run(&self, tool_call: ToolCall) -> (String, Result<String, String>) {

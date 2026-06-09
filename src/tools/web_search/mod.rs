@@ -23,8 +23,8 @@ impl Tool for WebSearch  {
         "一个网页搜索引擎。当你需要回答关于时事、事实以及在你的知识库中找不到的信息时，应使用此工具。"
     }
     
-    fn parameters_schema(&self) -> HashMap<String, Box<types::JSONSchemaDefine>> {
-        HashMap::from([
+    fn parameters_schema(&self) -> openai_api_rs::v1::types::FunctionParameters {
+        let properties = HashMap::from([
             (
                 "query".to_string(),
                 Box::new(types::JSONSchemaDefine {
@@ -33,11 +33,17 @@ impl Tool for WebSearch  {
                     ..Default::default()
                 }),
             ),
-        ])
+        ]);
+        openai_api_rs::v1::types::FunctionParameters {
+            schema_type: openai_api_rs::v1::types::JSONSchemaType::Object,
+            properties: Some(properties),
+            required: Some(vec!["query".to_string()]),
+        }
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<String, String> {
         let query = args["query"].as_str().unwrap_or("").to_string();
+        println!("query: {}", args);
         let Ok(api_key) = env::var("SERPAPI_API_KEY") else {
             return Err("Api key invalid".into());
         };

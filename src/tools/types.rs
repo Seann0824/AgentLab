@@ -19,6 +19,6 @@ pub enum ToolEvent {
 pub trait Tool {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
-    fn parameters_schema(&self) -> HashMap<String, Box<JSONSchemaDefine>>;
+    fn parameters_schema(&self) -> openai_api_rs::v1::types::FunctionParameters;
     async fn execute(&self, args: serde_json::Value) -> Result<String, String>;
 }
