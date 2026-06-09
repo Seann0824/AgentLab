@@ -75,7 +75,7 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                             
                             data = data.trim();
                             if data == "[DONE]" {
-                                tx.send(ModelEvent::Done(assistant_message)).await;
+                                let _ = tx.send(ModelEvent::Done(assistant_message)).await;
                                 return;
                             }
 
@@ -83,11 +83,11 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                                 Result::Ok(value) => {
                                     if let Some(content) = value["choices"][0]["delta"]["content"].as_str() && !content.is_empty() {
                                         assistant_message.push_str(content);
-                                        tx.send(ModelEvent::Text(content.to_string())).await;
+                                        let _ = tx.send(ModelEvent::Text(content.to_string())).await;
                                     }
 
                                     if let Some(reasoning_content) = value["choices"][0]["delta"]["reasoning_content"].as_str() && !reasoning_content.is_empty() {
-                                        tx.send(ModelEvent::Thinking(reasoning_content.to_string())).await;
+                                        let _ = tx.send(ModelEvent::Thinking(reasoning_content.to_string())).await;
                                     }
                                     // 工具调用结束直接向外发送事件
                                     // 结束条件要么是 finish 要么是 id 出现。index 作为来区分工具
@@ -95,7 +95,7 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                                         for (_, model_event) in tool_map.into_iter() {
                                             match model_event {
                                                 ModelEvent::ToolCallBlock { .. } => {
-                                                    tx.send(model_event).await;
+                                                    let _ = tx.send(model_event).await;
                                                 }
                                                 _ => ()
                                             }
@@ -134,14 +134,14 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                                     }
                                 },
                                 Err(_) => {
-                                    tx.send(ModelEvent::Error("json parse error".to_string())).await;
+                                    let _ = tx.send(ModelEvent::Error("json parse error".to_string())).await;
                                 }
                             }
                         }
                     }
                 },
                 Err(_) => {
-                    tx.send(ModelEvent::Error("request error".to_string())).await;
+                    let _ = tx.send(ModelEvent::Error("request error".to_string())).await;
                 }
             }
         });
