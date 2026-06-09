@@ -1,6 +1,7 @@
-use std::pin::Pin;
+use std::{collections::HashMap, pin::Pin};
 
 use futures_util::Stream;
+use openai_api_rs::v1::{chat_completion, types::JSONSchemaDefine};
 
 
 
@@ -14,9 +15,10 @@ pub enum ToolEvent {
     Err(String),
 }
 
+#[async_trait::async_trait]
 pub trait Tool {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
-    fn parameters_schema(&self) -> serde_json::Value;
-    fn execute(&self, args: serde_json::Value) -> ToolStream;
+    fn parameters_schema(&self) -> HashMap<String, Box<JSONSchemaDefine>>;
+    async fn execute(&self, args: serde_json::Value) -> Result<String, String>;
 }

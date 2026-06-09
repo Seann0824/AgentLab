@@ -1,13 +1,11 @@
 pub mod types;
 pub mod openai_compatible;
-
-use futures_util::StreamExt;
+use futures_util::{Stream};
 use openai_api_rs::v1::chat_completion::chat_completion_stream::{ChatCompletionStreamRequest, ChatCompletionStreamResponse};
 pub use types::{ChatMessage, ModelEvent, ModelAdapter, ToolCall};
-pub use openai_compatible::OpenAiCompatibleAdapter;
 
 use openai_api_rs::v1::api::OpenAIClient;
-use openai_api_rs::v1::chat_completion::{ChatCompletionMessage};
+use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Tool};
 
 pub struct AgentLLM {
     model: String,
@@ -30,32 +28,17 @@ impl AgentLLM  {
             };
     }
 
-    pub async fn think(&self, messages: Vec<ChatCompletionMessage>, temperature: Option<f64>) -> Result<String, String> {
+    pub async fn think(&self, messages: Vec<ChatCompletionMessage>, tools: Option<Vec<Tool>>, temperature: Option<f64>) -> impl Stream<Item = ChatCompletionStreamResponse> {
         // build request
         let req = ChatCompletionStreamRequest::new(
             self.model.clone(),
             messages,
-        ).temperature(temperature.unwrap_or(0f64));
-        let mut collected_content = vec![];
-        match self.client.chat_completion_stream(req).await {
-            Ok(mut stream) => {
-                while let Some(chunck) = stream.next().await {
-                    match chunck {
-                        ChatCompletionStreamResponse::Content(content) => {
-                            collected_content.push(content);
-                        },
-                        ChatCompletionStreamResponse::Reasoning(String) => {
+        )
+            .temperature(temperature.unwrap_or(0f64))
+            .tools(tools.unwrap_or(vec![]))
+            .tool_choice(openai_api_rs::v1::chat_completion::ToolChoiceType::Auto);
 
-                        },
-                        ChatCompletionStreamResponse::ToolCall(tools_call) => {
-
-                        },
-                        ChatCompletionStreamResponse::Done=> (),
-                    }
-                }
-            },
-            Err(_) => return Err("error".into()),
-        }
-        Ok(collected_content.join(""))
+        let think_stream = self.client.chat_completion_stream(req).await;
+        think_stream.unwrap()
     } 
 }

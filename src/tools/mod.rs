@@ -1,12 +1,9 @@
-use std::{collections::HashMap, str::FromStr};
-
-use futures_util::StreamExt;
-
-use crate::{model::{ChatMessage, ToolCall}, tools::types::{Tool, ToolEvent}};
-
 pub mod types;
-pub mod base_shell;
-
+// pub mod base_shell;
+pub mod web_search;
+use std::{collections::HashMap};
+use openai_api_rs::v1::chat_completion::{self, ToolCall, ToolType};
+use crate::{tools::types::Tool};
 
 pub struct ToolManager {
     tools: HashMap<String, Box<dyn Tool>>,
@@ -19,90 +16,39 @@ impl ToolManager {
         }
     }
 
-    pub fn register_tool(&mut self, tool: Box<dyn Tool>) {
+    pub fn register_tool(mut self, tool: Box<dyn Tool>) -> Self {
         self.tools.insert(tool.name().to_string(), tool);
+        self
     }
 
-    pub fn get_tools_scehma(&self) -> serde_json::Value {
-        let tools_schema = self.tools
+    pub fn get_tools_scehma(&self) -> Vec<chat_completion::Tool> {
+        self.tools
             .values()
             .map(|tool| {
-                tool.parameters_schema()
-            })
-            .collect::<Vec<serde_json::Value>>();
-        serde_json::json!(tools_schema)
-    }
-
-    pub async fn run(&self, tool_call: ToolCall) -> ChatMessage {
-        let id = tool_call.id;
-        let name = tool_call.name;
-        let arguments = tool_call.arguments;
-
-        match self.tools.get(&name) {
-            Some(tool) => {
-                let Ok(args) = serde_json::Value::from_str(&arguments) else {
-                    let content = serde_json::json!({
-                        "ok": false,
-                        "error": {
-                            "code": "invalid_arguments",
-                            "message": format!("{} arguments are not valid JSON: {}", name, arguments),
+                chat_completion::Tool {
+                    r#type: ToolType::Function,
+                    function: openai_api_rs::v1::types::Function {
+                        name: "search".to_string(),
+                        description: Some("使用 Google 搜索网页信息".to_string()),
+                        parameters: openai_api_rs::v1::types::FunctionParameters {
+                            schema_type: openai_api_rs::v1::types::JSONSchemaType::Object,
+                            properties: Some(tool.parameters_schema()),
+                            required: Some(vec!["query".to_string()]),
                         },
-                    });
-
-                    return tool_message(&id, content);
-                };
-                let mut result_stream = tool.execute(args);
-                while let Some(tool_event) = result_stream.next().await {
-                    match tool_event {
-                        ToolEvent::Done(result) => {
-                            let content = serde_json::json!({
-                                "ok": true,
-                                "result": result,
-                            });
-
-                            return tool_message(&id, content);
-                        }
-                        ToolEvent::Err(message) => {
-                            let content = serde_json::json!({
-                                "ok": false,
-                                "error": {
-                                    "code": "tool_failed",
-                                    "message": message,
-                                },
-                            });
-
-                            return tool_message(&id, content);
-                        }
-
-                        _ => (),
-                    }
+                    },
                 }
-
-                let content = serde_json::json!({
-                    "ok": false,
-                    "error": {
-                        "code": "tool_no_result",
-                        "message": format!("{} did not return a result", name),
-                    },
-                });
-
-                tool_message(&id, content)
-            },
-            _ => {
-                let content = serde_json::json!({
-                    "ok": false,
-                    "error": {
-                        "code": "unknown_tool",
-                        "message": format!("unknown tool: {}", name),
-                    },
-                });
-
-                tool_message(&id, content)
-            },
-        }
+            })
+            .collect()
     }
-}
 
-fn tool_message(id: &str, content: serde_json::Value) -> ChatMessage {
-    ChatMessage::tool(id.to_string(), content.to_string())
+    pub async fn run(&self, tool_call: ToolCall) -> (String, Result<String, String>) {
+        let tool_name = tool_call.function.name.unwrap_or("none".to_string());
+        let tool_call_id = tool_call.id;
+        let Some(tool) = self.tools.get(&tool_name) else {
+            return (tool_call_id, Err(format!("{} 不存在", tool_name)));
+        };
+
+        let arguments = tool_call.function.arguments.unwrap_or("{}".to_string());
+        (tool_call_id, tool.execute(serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}))).await)
+    }
 }
