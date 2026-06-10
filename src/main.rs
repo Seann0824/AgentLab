@@ -30,21 +30,27 @@ async fn main() -> () {
             tool_calls: None,
             tool_call_id: None,
         },
-        ChatCompletionMessage {
-            role: MessageRole::user,
-            content: Content::Text("帮我查查伦敦天气, 记得传递 query".into()),
-            name: None,
-            tool_calls: None,
-            tool_call_id: None,
-        }
+        
     ];
 
-    let mut count = 2;
     loop {
-        if count <= 0 {
-            break;
+        if let Some(last_message) = messages.last() && last_message.role != MessageRole::tool {
+            println!("\nUser: ");
+            let mut input_message = String::new();
+            std::io::stdin()
+                .read_line(&mut input_message)
+                .unwrap();
+            messages.push(
+                ChatCompletionMessage {
+                    role: MessageRole::user,
+                    content: Content::Text(input_message.to_string().into()),
+                    name: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                }
+            );
         }
-        count -= 1;
+
         let mut think_stream = llm_client.think(messages.clone(), Some(tool_manager.get_tools_scehma()), None).await;
         
         let (mut is_first_print_content, mut is_first_print_reason) = (true, true);
@@ -103,6 +109,7 @@ async fn main() -> () {
                                     Ok(content) => content,
                                     Err(error_msg) => error_msg,
                                 };
+                                println!("tool_call_result: {}", tool_call_result);
                                 messages.push(
                                     ChatCompletionMessage { role: MessageRole::tool, content: Content::Text(tool_call_result), tool_call_id: Some(tool_call_id), name: None, tool_calls: None }
                                 )
@@ -116,6 +123,7 @@ async fn main() -> () {
             }
 
             std::io::Write::flush(&mut std::io::stdout());
+            
         }
     }
 
