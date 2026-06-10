@@ -9,7 +9,6 @@ use crate::tools::web_search::WebSearch;
 use crate::tools::ToolManager;
 mod model;
 mod tools;
-mod agent;
 use tokio_stream::StreamExt;
 
 #[tokio::main]

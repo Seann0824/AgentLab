@@ -35,7 +35,6 @@ impl ToolManager {
                 }
             })
             .collect();
-        println!("schema: {:?}", schema);
         schema
     }
 

@@ -43,7 +43,6 @@ impl Tool for WebSearch  {
 
     async fn execute(&self, args: serde_json::Value) -> Result<String, String> {
         let query = args["query"].as_str().unwrap_or("").to_string();
-        println!("query: {}", args);
         let Ok(api_key) = env::var("SERPAPI_API_KEY") else {
             return Err("Api key invalid".into());
         };
@@ -65,7 +64,6 @@ impl Tool for WebSearch  {
 
         match client.search(query_params).await {
             Ok(results) => {
-                println!("results: {}", results);
                 if let Some(answer_box_list) = results.get("answer_box_list") {
                     return Ok(format!("\n{}", answer_box_list));
                 }
