@@ -28,7 +28,7 @@ impl AgentLLM  {
             };
     }
 
-    pub async fn think(&self, messages: Vec<ChatCompletionMessage>, tools: Option<Vec<Tool>>, temperature: Option<f64>) -> impl Stream<Item = ChatCompletionStreamResponse> {
+    pub async fn think(&self, messages: Vec<ChatCompletionMessage>, tools: Option<Vec<Tool>>, temperature: Option<f64>) -> impl Stream<Item = ChatCompletionStreamResponse> + use<> {
         // build request
         let req = ChatCompletionStreamRequest::new(
             self.model.clone(),
