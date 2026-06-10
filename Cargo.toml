@@ -11,7 +11,7 @@ clap = "4.6.1"
 dotenvy = "0.15.7"
 futures-util = "0.3.32"
 jsonschema = "0.46.5"
-openai-api-rs = "10.0.1"
+openai-api-rs = { path = "vendor/openai-api-rs" }
 reqwest = { version = "0.13.4", features = ["json", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
