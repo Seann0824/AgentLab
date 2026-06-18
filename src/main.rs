@@ -1,465 +1,164 @@
-use core::task;
 use std::env;
-use std::fmt::format;
-use std::pin::Pin;
 use dotenvy;
-use futures_util::Stream;
-use openai_api_rs::v1::chat_completion::chat_completion_stream::ChatCompletionStreamResponse;
-use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Content};
-
-use openai_api_rs::v1::chat_completion::MessageRole;
-
+use crate::agent::{Agent, AssistantAgent, UserProxyAgent};
+use crate::model::openai::OpenaiChatCompletionClient;
 use crate::tools::web_search::WebSearch;
 use crate::tools::ToolManager;
+use model::openai;
 mod model;
 mod tools;
-use tokio_stream::StreamExt;
+mod agent;
+mod autogen_agentchat;
 
 #[tokio::main]
 async fn main() -> () {
     dotenvy::dotenv().ok();
+    let product_manager = create_produt_manager();
+    let engineer = create_engineer();
+    let code_reviewer = create_code_reviewer();
+    let user_proxy = create_user_proxy();
+
+    let mut team_chat = autogen_agentchat::RoundRobinGroupChat::new(
+        vec![
+            product_manager,
+            engineer,
+            code_reviewer,
+            user_proxy,
+        ],
+        autogen_agentchat::TextMentionTermination("TERMINATE".into()),
+        20
+    );
+
+    let task = r#"我们需要开发一个比特币价格显示应用，具体要求如下：
+            核心功能：
+            - 实时显示比特币当前价格（USD）
+            - 显示24小时价格变化趋势（涨跌幅和涨跌额）
+            - 提供价格刷新功能
+
+            技术要求：
+            - 使用 Streamlit 框架创建 Web 应用
+            - 界面简洁美观，用户友好
+            - 添加适当的错误处理和加载状态
+
+            请团队协作完成这个任务，从需求分析到最终实现。"#;
+
+   let result = team_chat.run_stream(task).await;
+}
+
+fn get_openai_client() -> (OpenaiChatCompletionClient, ToolManager) {
     let api_key = env::var("DEEPSEEK_API_KEY").unwrap();
     let base_url = env::var("DEEPSEEK_BASE_URL").unwrap();
     let tool_manager = ToolManager::new()
         .register_tool(Box::new(WebSearch::new()));
-    let llm_client = model::AgentLLM::new("deepseek-v4-pro", &api_key, &base_url, None);
-
-    // let mut agent = PlanAdnSolveAgent::new(llm_client, tool_manager);
-     let mut agent = ReflectionAgent::new(llm_client, tool_manager);
-    agent.run().await;
+    let model_client = openai::OpenaiChatCompletionClient::new("deepseek-v4-pro", &api_key, &base_url, None);
+    (model_client, tool_manager)
 }
 
-struct PlanAdnSolveAgent {
-    llm_client: model::AgentLLM,
-    tool_manager: ToolManager,
-    messages: Vec<ChatCompletionMessage>,
-    plans: Option<Vec<String>>,
+fn create_produt_manager() -> agent::Agent {
+    let (model_client, tool_manager) = get_openai_client();
+    let system_message = r#"
+        你是一位经验丰富的产品经理，专门负责软件产品的需求分析和项目规划。
+
+        你的核心职责包括：
+        1. **需求分析**：深入理解用户需求，识别核心功能和边界条件
+        2. **技术规划**：基于需求制定清晰的技术实现路径
+        3. **风险评估**：识别潜在的技术风险和用户体验问题
+        4. **协调沟通**：与工程师和其他团队成员进行有效沟通
+
+        当接到开发任务时，请按以下结构进行分析：
+        1. 需求理解与分析
+        2. 功能模块划分
+        3. 技术选型建议
+        4. 实现优先级排序
+        5. 验收标准定义
+
+        请简洁明了地回应，并在分析完成后说"请工程师开始实现"。
+    "#;
+
+    return agent::Agent::AssistantAgent(
+        AssistantAgent::new(
+            "ProductManager".into(),
+            model_client,
+            system_message.into(),
+            tool_manager
+        )
+    )
 }
 
-impl PlanAdnSolveAgent {
-    fn new(llm_client: model::AgentLLM, tool_manager: ToolManager) -> Self {
-        Self {
-            llm_client,
-            messages: vec![],
-            tool_manager,
-            plans: None
-        }
-    }
+fn create_engineer() -> agent::Agent {
+    let (model_client, tool_manager) = get_openai_client();
+    let system_message = r#"
+        你是一位资深的软件工程师，擅长 Python 开发和 Web 应用构建。
 
-    async fn plan(&mut self, question: &str) {
-        let prompt = format!(r#"
-            你是一个顶级的AI规划专家。你的任务是将用户提出的复杂问题分解成一个由多个简单步骤组成的行动计划。
-            请确保计划中的每个步骤都是一个独立的、可执行的子任务，并且严格按照逻辑顺序排列。
-            你的输出必须是一个Python列表，其中每个元素都是一个描述子任务的字符串。
+        你的技术专长包括：
+        1. **Python 编程**：熟练掌握 Python 语法和最佳实践
+        2. **Web 开发**：精通 Streamlit、Flask、Django 等框架
+        3. **API 集成**：有丰富的第三方 API 集成经验
+        4. **错误处理**：注重代码的健壮性和异常处理
 
-            问题: {question}
+        当收到开发任务时，请：
+        1. 仔细分析技术需求
+        2. 选择合适的技术方案
+        3. 编写完整的代码实现
+        4. 添加必要的注释和说明
+        5. 考虑边界情况和异常处理
 
-            请严格按照以下格式输出你的计划,```python与```作为前后缀是必要的:
-            ```rust
-            ["步骤1", "步骤2", "步骤3", ...]
-            ```
-        "#);
-        
-        // build messages
-        self.messages.push(
-            ChatCompletionMessage {
-                role: MessageRole::user,
-                content: Content::Text(prompt),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-            }
-        );
+        请提供完整的可运行代码，并在完成后说"请代码审查员检查"。
+    "#;
 
-        let think_stream = self.llm_client.think(self.messages.clone(), Some(self.tool_manager.get_tools_scehma()), None).await;
-        let (plan_msg, is_plan) = self.process_think_stream(Box::pin(think_stream)).await;
-        if is_plan {
-            self.plans = self.parser_plan(&plan_msg);
-        }
-    }
-
-    async fn process_think_stream(&mut self, mut think_stream: Pin<Box<impl Stream<Item = ChatCompletionStreamResponse>>>) -> (String, bool) {
-        let (mut is_first_print_content, mut is_first_print_reason) = (true, true);
-
-        let (mut reason_delta, mut content_delta) = (vec![], vec![]);
-        let mut tools_call = None; 
-
-        while let Some(chunck) = think_stream.next().await {
-            match chunck {
-                ChatCompletionStreamResponse::Content(delta) => {
-                    if is_first_print_content {
-                        println!("\n\nAI: ");
-                        is_first_print_content = false;
-                    }
-                    print!("{}", delta);
-                    content_delta.push(delta);
-
-                },
-                ChatCompletionStreamResponse::Reasoning(delta) => {
-                    if is_first_print_reason {
-                        // println!("\n\nTHINK: ");
-                        is_first_print_reason = false;
-                    }
-                    // print!("{}", delta);
-                    reason_delta.push(delta);
-                },
-                ChatCompletionStreamResponse::ToolCall(tc) => {
-                    tools_call = Some(tc);
-                },
-                ChatCompletionStreamResponse::Done=> {
-                    // 区分调用工具和没有调用工具的信息
-
-                    // message 处理，工具调用处理（工具本身调用也可以作为一个流，但是本次就先做简单版本）
-                    self.messages.push(
-                        ChatCompletionMessage { role: MessageRole::assistant, content: Content::Text(reason_delta.join("")), name: None, tool_calls: None, tool_call_id: None },
-                    );
-                    // tool call
-                    if let Some(tools_call) = &tools_call {
-                        
-                        let tasks = tools_call
-                            .iter()
-                            .map(|tool_call| self.tool_manager.run(tool_call.clone()))
-                            .collect::<Vec<_>>();
-                        
-                        let tools_call_result = futures_util::future::join_all(tasks).await;
-                        // 工具调用
-                        self.messages.push(
-                            ChatCompletionMessage { role: MessageRole::assistant, content: Content::Text(content_delta.join("")), tool_calls: Some(tools_call.clone()), name: None, tool_call_id: None }
-                        );
-                        // 工具调用结果
-                        tools_call_result
-                            .into_iter()
-                            .for_each(|(tool_call_id, tool_call_result)| {
-                                let tool_call_result = match tool_call_result {
-                                    Ok(content) => content,
-                                    Err(error_msg) => error_msg,
-                                };
-                                println!("tool_call_result: {}", tool_call_result);
-                                self.messages.push(
-                                    ChatCompletionMessage { role: MessageRole::tool, content: Content::Text(tool_call_result), tool_call_id: Some(tool_call_id), name: None, tool_calls: None }
-                                )
-                            });     
-                    } else {
-                        self.messages.push(
-                            ChatCompletionMessage { role: MessageRole::assistant, content: Content::Text(content_delta.join("")), name: None, tool_calls: None, tool_call_id: None }
-                        );
-                    }
-                },
-            }
-
-            std::io::Write::flush(&mut std::io::stdout());
-            
-        }
-
-        (content_delta.join(""), tools_call.is_none())
-    }
-
-    fn parser_plan(&self, plan_msg: &str) -> Option<Vec<String>> {
-        let plan_reg = regex::Regex::new(r#"(?s)\[[^\]]*\]"#).unwrap();
-        if let Some(plan) = plan_reg.find(plan_msg) && let Ok(plans) = serde_json::from_str::<Vec<String>>(plan.as_str()) {
-            Some(plans)
-        } else {
-            None
-        }
-    }
-
-    async fn execute(&mut self, question: &str) {
-        let Some(plans) = self.plans.clone() else {
-            return;
-        };
-
-        let mut history = "无".to_string();
-        let whole_plan = serde_json::json!(plans);
-        for (i, step) in plans.iter().enumerate() {
-            let prompt = format!(r#"
-                你是一位顶级的AI执行专家。你的任务是严格按照给定的计划，一步步地解决问题。
-                你将收到原始问题、完整的计划、以及到目前为止已经完成的步骤和结果。
-                请你专注于解决“当前步骤”，并仅输出该步骤的最终答案，不要输出任何额外的解释或对话。
-
-                # 原始问题:
-                {question}
-
-                # 完整计划:
-                {whole_plan}
-
-                # 历史步骤与结果:
-                {history}
-
-                # 当前步骤:
-                {step}
-
-                请仅输出针对“当前步骤”的回答:
-            "#);
-
-            self.messages.push(ChatCompletionMessage {
-                role: MessageRole::user,
-                content: Content::Text(prompt),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-            });
-
-
-            let think_stream = self.llm_client.think(self.messages.clone(), Some(self.tool_manager.get_tools_scehma()), None).await;
-            let (step_result, _) = self.process_think_stream(Box::pin(think_stream)).await;
-            
-            history.push_str(&format!(
-                "\n\n步骤{}: {}\n结果: {}",
-                i + 1,
-                step,
-                step_result
-            ));
-        }
-        self.plans = None;    
-    }
-
-    async fn run(&mut self) {
-        loop {
-            let mut question = String::new();
-            if self.messages.is_empty() || self.messages.last().is_some_and(|last_message| last_message.role != MessageRole::tool) {
-                println!("\nUser: ");
-                std::io::stdin()
-                    .read_line(&mut question)
-                    .unwrap();
-            }
-
-            self.plan(&question).await;
-            self.execute(&question).await;
-        }
-    }
+    return  agent::Agent::AssistantAgent(
+        AssistantAgent::new(
+            "Engineer".into(),
+            model_client,
+            system_message.into(),
+            tool_manager
+        )
+    )
 }
 
+fn create_code_reviewer() -> agent::Agent {
+    let (model_client, tool_manager) = get_openai_client();
+    let system_message = r#"
+        你是一位经验丰富的代码审查专家，专注于代码质量和最佳实践。
+        你的审查重点包括：
+        1. **代码质量**：检查代码的可读性、可维护性和性能
+        2. **安全性**：识别潜在的安全漏洞和风险点
+        3. **最佳实践**：确保代码遵循行业标准和最佳实践
+        4. **错误处理**：验证异常处理的完整性和合理性
 
+        审查流程：
+        1. 仔细阅读和理解代码逻辑
+        2. 检查代码规范和最佳实践
+        3. 识别潜在问题和改进点
+        4. 提供具体的修改建议
+        5. 评估代码的整体质量
 
-struct ReflectionAgent {
-    llm_client: model::AgentLLM,
-    tool_manager: ToolManager,
-    messages: Vec<ChatCompletionMessage>,
-    max_iterations: usize,
+        请提供具体的审查意见，完成后说"代码审查完成，请用户代理测试
+    "#;
+
+    return agent::Agent::AssistantAgent(
+        AssistantAgent::new(
+            "CodeReviewer".into(),
+            model_client,
+            system_message.into(),
+            tool_manager
+        )
+    )
 }
 
-impl ReflectionAgent {
-    fn new(llm_client: model::AgentLLM, tool_manager: ToolManager) -> Self {
-        Self {
-            llm_client,
-            messages: vec![],
-            tool_manager,
-            max_iterations: 3
-        }
-    }
+fn create_user_proxy() -> agent::Agent {
+    agent::Agent::UserProxyAgent(
+        UserProxyAgent::new(
+            "UserProxy".into(),
+            r#"
+                用户代理，负责以下职责：
+                1. 代表用户提出开发需求
+                2. 执行最终的代码实现
+                3. 验证功能是否符合预期
+                4. 提供用户反馈和建议
 
-    async fn run(&mut self) {
-        loop {
-            let mut question = String::new();
-            if self.messages.is_empty() || self.messages.last().is_some_and(|last_message| last_message.role != MessageRole::tool) {
-                println!("\nUser: ");
-                std::io::stdin()
-                    .read_line(&mut question)
-                    .unwrap();
-            }
-            let Some(mut code) = self.execution(&question).await else {
-                break;
-            };
-            for i in 0..self.max_iterations {
-                let Some(feedback) = self.reflection(&question, &code).await else {
-                    break;
-                };
-                let Some(refinement_code) = self.refinement(&question, &code, &feedback).await else {
-                    break;
-                };
-                code = refinement_code;
-            }
-        }
-    }
-
-    async fn execution(&mut self, task: &str) -> Option<String> {
-        let prompt = format!(r#"
-            你是一位资深的Python程序员。请根据以下要求，编写一个Python函数。
-            你的代码必须包含完整的函数签名、文档字符串，并遵循PEP 8编码规范。
-
-            要求: {task}
-
-            请直接输出代码，不要包含任何额外的解释。
-        "#);
-
-        self.messages.push(
-            ChatCompletionMessage {
-                role: MessageRole::user,
-                content: Content::Text(prompt),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None
-            }
-        );
-        let think_stream = self.llm_client.think(self.messages.clone(), None, None).await;
-        let (code, is_no_call_tool) = self.process_think_stream(Box::pin(think_stream), None).await;
-        if is_no_call_tool {
-            Some(code)
-        } else {
-            None
-        }
-    }
-
-    async fn reflection(&mut self, task: &str, code: &str) -> Option<String> {
-        let prompt = format!(r#"
-            你是一位极其严格的代码评审专家和资深算法工程师，对代码的性能有极致的要求。
-            你的任务是审查以下Python代码，并专注于找出其在<strong>算法效率</strong>上的主要瓶颈。
-
-            # 原始任务:
-            {task}
-
-            # 待审查的代码:
-            ```python
-            {code}
-            ```
-
-            请分析该代码的时间复杂度，并思考是否存在一种<strong>算法上更优</strong>的解决方案来显著提升性能。
-            如果存在，请清晰地指出当前算法的不足，并提出具体的、可行的改进算法建议（例如，使用筛法替代试除法）。
-            如果代码在算法层面已经达到最优，才能回答“无需改进”。
-
-            请直接输出你的反馈，不要包含任何额外的解释。
-        "#);
-        let messages = vec![
-            ChatCompletionMessage {
-                role: MessageRole::user,
-                content: Content::Text(prompt),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None
-            }
-        ];
-        let think_stream = self.llm_client.think(messages, None, None).await;
-        let (feedback, is_no_call_tool) = self.process_think_stream(Box::pin(think_stream), Some(false)).await;
-        if is_no_call_tool && !feedback.eq("无需改进") {
-            Some(feedback)
-        } else {
-            None
-        }
-    }
-
-    async fn refinement(&mut self, task: &str, last_code_attempt: &str, feedback: &str) -> Option<String> {
-        let prompt = format!(r#"
-            你是一位资深的Python程序员。你正在根据一位代码评审专家的反馈来优化你的代码。
-
-            # 原始任务:
-            {task}
-
-            # 你上一轮尝试的代码:
-            {last_code_attempt}
-            评审员的反馈：
-            {feedback}
-
-            请根据评审员的反馈，生成一个优化后的新版本代码。
-            你的代码必须包含完整的函数签名、文档字符串，并遵循PEP 8编码规范。
-            请直接输出优化后的代码，不要包含任何额外的解释。
-
-            请分析该代码的时间复杂度，并思考是否存在一种<strong>算法上更优</strong>的解决方案来显著提升性能。
-            如果存在，请清晰地指出当前算法的不足，并提出具体的、可行的改进算法建议（例如，使用筛法替代试除法）。
-            如果代码在算法层面已经达到最优，才能回答“无需改进”。
-
-            请直接输出你的反馈，不要包含任何额外的解释。
-        "#);
-
-        self.messages.push(
-            ChatCompletionMessage {
-                role: MessageRole::user,
-                content: Content::Text(prompt),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None
-            }
-        );
-        let think_stream = self.llm_client.think(self.messages.clone(), None, None).await;
-        let (refine, is_no_call_tool) = self.process_think_stream(Box::pin(think_stream), None).await;
-        if is_no_call_tool {
-            Some(refine)
-        } else {
-            None
-        }
-    }
-
-    async fn process_think_stream(&mut self, mut think_stream: Pin<Box<impl Stream<Item = ChatCompletionStreamResponse>>>, is_remmenber: Option<bool>) -> (String, bool) {
-        let is_remmenber = is_remmenber.unwrap_or(true);
-        let (mut is_first_print_content, mut is_first_print_reason) = (true, true);
-
-        let (mut reason_delta, mut content_delta) = (vec![], vec![]);
-        let mut tools_call = None; 
-
-        while let Some(chunck) = think_stream.next().await {
-            match chunck {
-                ChatCompletionStreamResponse::Content(delta) => {
-                    if is_first_print_content {
-                        println!("\n\nAI: ");
-                        is_first_print_content = false;
-                    }
-                    print!("{}", delta);
-                    content_delta.push(delta);
-
-                },
-                ChatCompletionStreamResponse::Reasoning(delta) => {
-                    if is_first_print_reason {
-                        // println!("\n\nTHINK: ");
-                        is_first_print_reason = false;
-                    }
-                    // print!("{}", delta);
-                    reason_delta.push(delta);
-                },
-                ChatCompletionStreamResponse::ToolCall(tc) => {
-                    tools_call = Some(tc);
-                },
-                ChatCompletionStreamResponse::Done=> {
-                    // 区分调用工具和没有调用工具的信息
-
-                    // message 处理，工具调用处理（工具本身调用也可以作为一个流，但是本次就先做简单版本）
-                    if is_remmenber {
-                        self.messages.push(
-                            ChatCompletionMessage { role: MessageRole::assistant, content: Content::Text(reason_delta.join("")), name: None, tool_calls: None, tool_call_id: None },
-                        );
-                    }
-                    // tool call
-                    if let Some(tools_call) = &tools_call {
-                        
-                        let tasks = tools_call
-                            .iter()
-                            .map(|tool_call| self.tool_manager.run(tool_call.clone()))
-                            .collect::<Vec<_>>();
-                        
-                        let tools_call_result = futures_util::future::join_all(tasks).await;
-                        // 工具调用
-                        if is_remmenber {
-                            self.messages.push(
-                                ChatCompletionMessage { role: MessageRole::assistant, content: Content::Text(content_delta.join("")), tool_calls: Some(tools_call.clone()), name: None, tool_call_id: None }
-                            );
-                        }
-                        // 工具调用结果
-                        tools_call_result
-                            .into_iter()
-                            .for_each(|(tool_call_id, tool_call_result)| {
-                                let tool_call_result = match tool_call_result {
-                                    Ok(content) => content,
-                                    Err(error_msg) => error_msg,
-                                };
-                                println!("tool_call_result: {}", tool_call_result);
-                                if is_remmenber {
-                                    self.messages.push(
-                                        ChatCompletionMessage { role: MessageRole::tool, content: Content::Text(tool_call_result), tool_call_id: Some(tool_call_id), name: None, tool_calls: None }
-                                    )
-                                }
-                            });     
-                    } else {
-                        if is_remmenber {
-                            self.messages.push(
-                                ChatCompletionMessage { role: MessageRole::assistant, content: Content::Text(content_delta.join("")), name: None, tool_calls: None, tool_call_id: None }
-                            );
-                        }
-                    }
-                },
-            }
-
-            std::io::Write::flush(&mut std::io::stdout());
-            
-        }
-
-        (content_delta.join(""), tools_call.is_none())
-    }
+                完成测试后请回复 TERMINATE
+            "#.into()
+        )
+    )
 }

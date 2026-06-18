@@ -199,6 +199,7 @@ pub enum FinishReason {
     length,
     content_filter,
     tool_calls,
+    function_call,
     null,
 }
 

@@ -1,5 +1,5 @@
 use crate::v1::chat_completion::{
-    Reasoning, ReasoningEffort, Tool, ToolCall, ToolCallFunction, ToolChoiceType,
+    FinishReason, Reasoning, ReasoningEffort, Tool, ToolCall, ToolCallFunction, ToolChoiceType,
 };
 use crate::{
     impl_builder_methods,
@@ -111,7 +111,7 @@ pub enum ChatCompletionStreamResponse {
     Content(String),
     Reasoning(String),
     ToolCall(Vec<ToolCall>),
-    Done,
+    Done(Option<FinishReason>),
 }
 
 pub struct ChatCompletionStream<S: Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin> {
@@ -120,6 +120,7 @@ pub struct ChatCompletionStream<S: Stream<Item = Result<bytes::Bytes, reqwest::E
     pub first_chunk: bool,
     tool_calls: BTreeMap<usize, PartialToolCall>,
     emit_done_after_tool_calls: bool,
+    finish_reason: Option<FinishReason>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -183,6 +184,7 @@ where
             first_chunk: true,
             tool_calls: BTreeMap::new(),
             emit_done_after_tool_calls: false,
+            finish_reason: None,
         }
     }
 
@@ -237,10 +239,27 @@ where
             .collect()
     }
 
+    fn finish_reason_from_choice(choice: &Value) -> Option<FinishReason> {
+        let finish_reason = choice.get("finish_reason")?;
+        if finish_reason.is_null() {
+            return None;
+        }
+
+        match serde_json::from_value(finish_reason.clone()) {
+            Ok(finish_reason) => Some(finish_reason),
+            Err(error) => {
+                eprintln!("Failed to parse finish_reason: {}", error);
+                None
+            }
+        }
+    }
+
     fn next_response_from_buffer(&mut self) -> Option<ChatCompletionStreamResponse> {
         if self.emit_done_after_tool_calls {
             self.emit_done_after_tool_calls = false;
-            return Some(ChatCompletionStreamResponse::Done);
+            return Some(ChatCompletionStreamResponse::Done(
+                self.finish_reason.take(),
+            ));
         }
 
         while let Some((idx, delimiter_len)) = Self::find_event_delimiter(&self.buffer) {
@@ -269,6 +288,9 @@ where
 
             if data_payload == "[DONE]" {
                 if !self.tool_calls.is_empty() {
+                    if self.finish_reason.is_none() {
+                        self.finish_reason = Some(FinishReason::tool_calls);
+                    }
                     let tool_calls = self.take_tool_calls();
                     if !tool_calls.is_empty() {
                         self.emit_done_after_tool_calls = true;
@@ -276,12 +298,21 @@ where
                     }
                 }
 
-                return Some(ChatCompletionStreamResponse::Done);
+                return Some(ChatCompletionStreamResponse::Done(
+                    self.finish_reason.take(),
+                ));
             }
 
             match serde_json::from_str::<Value>(&data_payload) {
                 Ok(json) => {
                     if let Some(choice) = json.get("choices").and_then(|choices| choices.get(0)) {
+                        let finish_reason = Self::finish_reason_from_choice(choice);
+                        let is_tool_call_finish =
+                            matches!(finish_reason.as_ref(), Some(FinishReason::tool_calls));
+                        if let Some(finish_reason) = finish_reason {
+                            self.finish_reason = Some(finish_reason);
+                        }
+
                         if let Some(delta) = choice.get("delta") {
                             if let Some(tool_calls) = delta
                                 .get("tool_calls")
@@ -292,11 +323,7 @@ where
                                 }
                             }
 
-                            if choice
-                                .get("finish_reason")
-                                .and_then(|finish_reason| finish_reason.as_str())
-                                == Some("tool_calls")
-                            {
+                            if is_tool_call_finish {
                                 let tool_calls = self.take_tool_calls();
                                 if !tool_calls.is_empty() {
                                     return Some(ChatCompletionStreamResponse::ToolCall(
@@ -324,11 +351,7 @@ where
                             }
                         }
 
-                        if choice
-                            .get("finish_reason")
-                            .and_then(|finish_reason| finish_reason.as_str())
-                            == Some("tool_calls")
-                        {
+                        if is_tool_call_finish {
                             let tool_calls = self.take_tool_calls();
                             if !tool_calls.is_empty() {
                                 return Some(ChatCompletionStreamResponse::ToolCall(tool_calls));
@@ -523,6 +546,52 @@ mod tests {
     }
 
     #[test]
+    fn test_finish_reason_function_call_deserializes() {
+        let finish_reason: FinishReason = serde_json::from_str(r#""function_call""#).unwrap();
+        assert_eq!(finish_reason, FinishReason::function_call);
+    }
+
+    #[test]
+    fn test_stream_done_includes_finish_reason() {
+        let mut stream = ChatCompletionStream::new(futures_util::stream::empty());
+        stream.buffer = [
+            format!(
+                "data: {}\n\n",
+                json!({
+                    "choices": [{
+                        "delta": {
+                            "content": "hello"
+                        },
+                        "finish_reason": null
+                    }]
+                })
+            ),
+            format!(
+                "data: {}\n\n",
+                json!({
+                    "choices": [{
+                        "delta": {},
+                        "finish_reason": "stop"
+                    }]
+                })
+            ),
+            "data: [DONE]\n\n".to_string(),
+        ]
+        .concat();
+        stream.first_chunk = false;
+
+        assert!(matches!(
+            stream.next_response_from_buffer(),
+            Some(ChatCompletionStreamResponse::Content(content)) if content == "hello"
+        ));
+
+        assert!(matches!(
+            stream.next_response_from_buffer(),
+            Some(ChatCompletionStreamResponse::Done(Some(FinishReason::stop)))
+        ));
+    }
+
+    #[test]
     fn test_stream_tool_call_arguments_are_accumulated() {
         let mut stream = ChatCompletionStream::new(futures_util::stream::empty());
         stream.buffer = [
@@ -608,7 +677,9 @@ mod tests {
 
         assert!(matches!(
             stream.next_response_from_buffer(),
-            Some(ChatCompletionStreamResponse::Done)
+            Some(ChatCompletionStreamResponse::Done(Some(
+                FinishReason::tool_calls
+            )))
         ));
     }
 }

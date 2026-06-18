@@ -35,8 +35,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ChatCompletionStreamResponse::Content(content) => {
                 println!("Content: {:?}", content);
             }
-            ChatCompletionStreamResponse::Done => {
-                println!("Done");
+            ChatCompletionStreamResponse::Done(finish_reason) => {
+                println!("Done: {:?}", finish_reason);
             }
         }
     }

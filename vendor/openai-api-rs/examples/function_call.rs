@@ -98,6 +98,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(FinishReason::content_filter) => {
             println!("ContentFilter");
         }
+        Some(FinishReason::function_call) => {
+            println!("FunctionCall");
+        }
         Some(FinishReason::null) => {
             println!("Null");
         }

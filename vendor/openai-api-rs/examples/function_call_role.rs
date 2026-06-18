@@ -116,6 +116,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(chat_completion::FinishReason::content_filter) => {
             println!("ContentFilter");
         }
+        Some(chat_completion::FinishReason::function_call) => {
+            println!("FunctionCall");
+        }
         Some(chat_completion::FinishReason::null) => {
             println!("Null");
         }
