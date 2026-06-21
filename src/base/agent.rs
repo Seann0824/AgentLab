@@ -1,8 +1,8 @@
-use crate::core::config::Config;
-use crate::core::message::Message;
-use crate::core::llm::OpenaiChatCompletionClient;
+use crate::base::config::Config;
+use crate::base::message::Message;
+use crate::base::llm::OpenaiChatCompletionClient;
 
-struct AgentBase {
+pub struct AgentBase {
     pub name: String,
     pub llm: OpenaiChatCompletionClient,
     pub system_prompt: Option<String>,

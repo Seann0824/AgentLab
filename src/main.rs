@@ -9,7 +9,7 @@ mod model;
 mod tools;
 mod agent;
 mod autogen_agentchat;
-mod core;
+mod base;
 
 #[tokio::main]
 async fn main() -> () {

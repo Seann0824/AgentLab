@@ -1,5 +1,6 @@
 use std::pin::Pin;
 use std::io::Read;
+mod simple_agent;
 
 use futures_util::{Stream, StreamExt};
 use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Content, MessageRole::{self, user}, chat_completion_stream::ChatCompletionStreamResponse};
