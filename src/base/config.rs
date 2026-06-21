@@ -49,7 +49,7 @@ impl Config {
             config.temperature = temperature.parse().unwrap();
         }
         if let Ok(max_tokens) = env::var("MAX_TOKENS") {
-            config.max_tokens = Some(max_tokens.parse().unwrap());
+            config.max_tokens = Some(max_tokens.parse().unwrap_or_default());
         }
 
         config

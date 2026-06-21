@@ -1,11 +1,9 @@
-use std::env;
-use chrono::Weekday::Tue;
+use std::io::{self, Write};
 use futures_util::stream::StreamExt;
-use openai_api_rs::v1::chat_completion::{FinishReason, MessageRole::user, chat_completion_stream::ChatCompletionStreamResponse};
-
+use openai_api_rs::v1::chat_completion::{FinishReason, chat_completion_stream::ChatCompletionStreamResponse};
 use crate::{base::{agent::{Agent, AgentBase}, config::Config, llm::AgentsLLM, message::Message}, tools::{ToolManager, web_search::WebSearch}};
 
-struct SimpleAgent {
+pub struct SimpleAgent {
     tool_manager: ToolManager,
     base: AgentBase,
 }
@@ -51,7 +49,8 @@ impl Agent for SimpleAgent {
     }
 
     async fn run(&mut self, input_text: &str) -> String {
-        print!("🤖 {} 正在处理: {input_text}", self.base.name);
+        println!("🤖 {} 正在处理: {input_text}", self.base.name);
+        io::stdout().flush().ok();
         let user_message = Message::user(input_text, None);
         self.add_message(user_message);
         let mut is_continue = true;
