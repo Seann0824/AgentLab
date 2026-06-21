@@ -3,24 +3,25 @@ use futures_util::stream::StreamExt;
 use openai_api_rs::v1::chat_completion::{FinishReason, chat_completion_stream::ChatCompletionStreamResponse};
 use crate::{base::{agent::{Agent, AgentBase}, config::Config, llm::AgentsLLM, message::Message}, tools::{ToolManager, types::Tool, web_search::WebSearch}};
 
-pub struct SimpleAgent {
-    enable_tool_calling: bool,
-    tool_manager: ToolManager,
+pub struct ReActAgent {
     base: AgentBase,
+    tool_manager: ToolManager,
+    max_steps: u64,
 }
 
-impl SimpleAgent {
+impl ReActAgent {
     pub fn new(
         name: impl Into<String>, 
         llm: AgentsLLM,
         system_prompt: impl Into<Option<String>>,
         config: impl Into<Option<Config>>,
         tool_manager: impl Into<Option<ToolManager>>,
-        enable_tool_calling: bool
+        max_steps: impl Into<Option<u64>>,
     ) -> Self {
         let config = config.into().unwrap_or(Config::from_env());
         let system_prompt = system_prompt.into().unwrap_or("".into());
         let tool_manager = tool_manager.into().unwrap_or(ToolManager::new());
+        let max_steps = max_steps.into().unwrap_or(5);
         let agent_base = AgentBase::new(
             name.into(),
             llm, 
@@ -29,9 +30,9 @@ impl SimpleAgent {
         );
 
         Self {
-            enable_tool_calling,
             tool_manager,
             base: agent_base,
+            max_steps,
         }
     }
 
@@ -46,7 +47,7 @@ impl SimpleAgent {
 
 }
 
-impl Agent for SimpleAgent {
+impl Agent for ReActAgent {
     fn base(&self) -> &AgentBase {
         &self.base
     }
@@ -61,7 +62,7 @@ impl Agent for SimpleAgent {
         let user_message = Message::user(input_text, None);
         self.add_message(user_message);
         let mut is_continue = true;
-
+        let mut current_step = 0u64;
         loop {
             if !is_continue {
                 break;
@@ -73,7 +74,7 @@ impl Agent for SimpleAgent {
                 .collect();
             let mut agent_stream = self.base.llm.invoke(
                 history_message, 
-                self.enable_tool_calling.then(|| self.tool_manager.get_tools_scehma()),
+                Some(self.tool_manager.get_tools_scehma()),
                 None
             ).await;
             let (mut reason_delta, mut content_delta) = (vec![], vec![]);
@@ -129,6 +130,13 @@ impl Agent for SimpleAgent {
                                 is_continue = false;
                                 break;
                             },
+                        }
+
+                        current_step += 1;
+                        if current_step == self.max_steps {
+                            is_continue = false;
+                            println!("抱歉，我无法在限定步数内完成这个任务。");
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
                         }
                     },
                 }

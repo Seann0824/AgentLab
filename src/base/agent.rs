@@ -17,12 +17,13 @@ impl AgentBase {
         system_prompt: Option<String>,
         config: Option<Config>,
     ) -> Self {
+        let history = vec![Message::system(system_prompt.clone().unwrap_or("".into()), None)];
         Self {
             name: name.into(),
             llm,
             system_prompt,
             config: config.unwrap_or_default(),
-            history: vec![],
+            history,
         }
     }
 
