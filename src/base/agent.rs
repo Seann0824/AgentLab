@@ -1,10 +1,10 @@
 use crate::base::config::Config;
 use crate::base::message::Message;
-use crate::base::llm::OpenaiChatCompletionClient;
+use crate::base::llm::AgentsLLM;
 
 pub struct AgentBase {
     pub name: String,
-    pub llm: OpenaiChatCompletionClient,
+    pub llm: AgentsLLM,
     pub system_prompt: Option<String>,
     pub config: Config,
     history: Vec<Message>,
@@ -13,7 +13,7 @@ pub struct AgentBase {
 impl AgentBase {
     pub fn new(
         name: impl Into<String>,
-        llm: OpenaiChatCompletionClient,
+        llm: AgentsLLM,
         system_prompt: Option<String>,
         config: Option<Config>,
     ) -> Self {
