@@ -40,6 +40,7 @@ async fn main() {
 fn get_openai_client() -> (OpenaiChatCompletionClient, ToolManager) {
     let api_key = env::var("DEEPSEEK_API_KEY").unwrap();
     let base_url = env::var("DEEPSEEK_BASE_URL").unwrap();
+    let model = env::var("DEEPSEEK_MODEL").unwrap();
     let tool_manager = ToolManager::new().register_tool(Box::new(WebSearch::new()));
     let model_client =
         openai::OpenaiChatCompletionClient::new("deepseek-v4-pro", &api_key, &base_url, None);
