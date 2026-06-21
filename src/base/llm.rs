@@ -42,7 +42,7 @@ impl AgentsLLM  {
         }
     }
 
-    pub fn get_agents_llm_instance() -> Self {
+    pub fn from_env() -> Self {
         // 从环境变量获取模型和提供商
         dotenvy::dotenv().ok();
         let api_key = env::var("API_KEY").expect("API_KEY is not valid");

@@ -4,39 +4,38 @@ use openai_api_rs::v1::chat_completion::{FinishReason, chat_completion_stream::C
 use crate::{base::{agent::{Agent, AgentBase}, config::Config, llm::AgentsLLM, message::Message}, tools::{ToolManager, types::Tool, web_search::WebSearch}};
 
 pub struct SimpleAgent {
+    enable_tool_calling: bool,
     tool_manager: ToolManager,
     base: AgentBase,
 }
 
 impl SimpleAgent {
-    pub fn new() -> Self {
-        let config = Config::from_env();
-        let llm = AgentsLLM::get_agents_llm_instance();
-  
-        let agent_base = AgentBase::new(
-            "SimpleAgent", 
+    pub fn new(
+        name: impl Into<String>, 
+        llm: AgentsLLM,
+        system_prompt: impl Into<Option<String>>,
+        config: impl Into<Option<Config>>,
+        tool_manager: impl Into<Option<ToolManager>>,
+        enable_tool_calling: bool
+    ) -> Self {
+        let config = config.into().unwrap_or(Config::from_env());
+        let system_prompt = system_prompt.into().unwrap_or("".into());
+        let tool_manager = tool_manager.into().unwrap_or(ToolManager::new());
+        let mut agent_base = AgentBase::new(
+            name.into(),
             llm, 
-            Some(Self::get_system_prompt().into()), 
+            Some(system_prompt.clone()), 
             Some(config),
         );
 
-        let tool_manager = Self::get_tool_manager();
-        
+        // 注册history_message
+        agent_base.add_message(Message::system(system_prompt, None));
+
         Self {
+            enable_tool_calling,
             tool_manager,
             base: agent_base,
         }
-    }
-
-    fn get_system_prompt() -> &'static str {
-        r#""#
-    }
-
-    // 可以注册一些 Agent 默认工具
-    fn get_tool_manager() -> ToolManager {
-        // 这里注册当前Agent有的工具
-        ToolManager::new()
-            .with_tool(Box::new(WebSearch::new()))
     }
 
     // 开放给外部注册工具
@@ -75,8 +74,11 @@ impl Agent for SimpleAgent {
                 .into_iter()
                 .map(|message| message.naive_message)
                 .collect();
-            
-            let mut agent_stream = self.base.llm.invoke(history_message, Some(self.tool_manager.get_tools_scehma()), None).await;
+            let mut agent_stream = self.base.llm.invoke(
+                history_message, 
+                self.enable_tool_calling.then(|| self.tool_manager.get_tools_scehma()),
+                None
+            ).await;
             let (mut reason_delta, mut content_delta) = (vec![], vec![]);
             let mut tools_call = None;
 
