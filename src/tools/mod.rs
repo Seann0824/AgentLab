@@ -16,9 +16,17 @@ impl ToolManager {
         }
     }
 
-    pub fn register_tool(mut self, tool: Box<dyn Tool>) -> Self {
+    pub fn register_tool(&mut self, tool: Box<dyn Tool>) {
+        self.tools.insert(tool.name().to_string(), tool);
+    }
+
+    pub fn with_tool(mut self, tool: Box<dyn Tool>) -> Self {
         self.tools.insert(tool.name().to_string(), tool);
         self
+    }
+
+    pub fn remove_tool(&mut self, tool_name: &String) {
+        self.tools.remove(tool_name);
     }
 
     pub fn get_tools_scehma(&self) -> Vec<chat_completion::Tool> {

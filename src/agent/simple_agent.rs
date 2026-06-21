@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 use futures_util::stream::StreamExt;
 use openai_api_rs::v1::chat_completion::{FinishReason, chat_completion_stream::ChatCompletionStreamResponse};
-use crate::{base::{agent::{Agent, AgentBase}, config::Config, llm::AgentsLLM, message::Message}, tools::{ToolManager, web_search::WebSearch}};
+use crate::{base::{agent::{Agent, AgentBase}, config::Config, llm::AgentsLLM, message::Message}, tools::{ToolManager, types::Tool, web_search::WebSearch}};
 
 pub struct SimpleAgent {
     tool_manager: ToolManager,
@@ -32,11 +32,22 @@ impl SimpleAgent {
         r#""#
     }
 
+    // 可以注册一些 Agent 默认工具
     fn get_tool_manager() -> ToolManager {
         // 这里注册当前Agent有的工具
         ToolManager::new()
-            .register_tool(Box::new(WebSearch::new()))
+            .with_tool(Box::new(WebSearch::new()))
     }
+
+    // 开放给外部注册工具
+    pub fn add_tool(&mut self, tool: Box<dyn Tool>) {
+        self.tool_manager.register_tool(tool);
+    }
+
+    pub fn remove_tool(&mut self, tool_name: &String) {
+        self.tool_manager.remove_tool(tool_name);
+    }
+
 }
 
 impl Agent for SimpleAgent {
