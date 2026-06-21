@@ -44,7 +44,7 @@ pub trait Agent {
     fn base(&self) -> &AgentBase;
     fn base_mut(&mut self) -> &mut AgentBase;
 
-    fn run(&mut self, input_text: &str) -> String;
+    async fn run(&mut self, input_text: &str) -> String;
 
     fn add_message(&mut self, message: Message) {
         self.base_mut().add_message(message);

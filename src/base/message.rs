@@ -4,9 +4,9 @@ use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Content, Message
 
 #[derive(Clone)]
 pub struct Message {
-    naive_message: ChatCompletionMessage,
-    timestamp: DateTime<Local>,
-    metadata: Option<Value>,
+    pub naive_message: ChatCompletionMessage,
+    pub timestamp: DateTime<Local>,
+    pub metadata: Option<Value>,
 }
 
 impl Message {
