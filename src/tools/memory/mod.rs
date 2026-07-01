@@ -119,6 +119,15 @@ impl Memory {
             Err(msg) => format!("搜索记忆失败：{}", msg)
         }
     }
+
+    fn fortget(&mut self, strategy: String, threshold: Option<f32>, max_age_days: Option<usize>) -> String {
+        let threshold = threshold.unwrap_or(0.1);
+        let max_age_days = max_age_days.unwrap_or(30);
+        match self.memory_manager.forget(&strategy, threshold, max_age_days) {
+            Ok(count) => format!("已遗忘 {count} 条记忆（策略: {strategy}）"),
+            Err(msg) => format!("遗忘记忆失败: {}", msg),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -191,5 +200,9 @@ impl MemoryManager {
         min_importance: f32,
     ) -> Result<Vec<MemoryItem>, String> {
         Ok(vec![])
+    }
+
+    pub fn forget(&self, strategy: &String, threshold: f32, max_age_days: usize) -> Result<usize, String> {
+        Ok(2)
     }
 }
