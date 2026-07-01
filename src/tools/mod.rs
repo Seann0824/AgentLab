@@ -1,6 +1,8 @@
 pub mod types;
 // pub mod base_shell;
 pub mod web_search;
+pub mod memory;
+
 use std::{collections::HashMap};
 use openai_api_rs::v1::chat_completion::{self, ToolCall, ToolType};
 use crate::{tools::types::Tool};
