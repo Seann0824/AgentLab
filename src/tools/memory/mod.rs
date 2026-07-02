@@ -3,15 +3,24 @@ use chrono::{Date, DateTime, Local, TimeZone};
 use openai_api_rs::v1::{file, types};
 use serde_json::{Value, json};
 
-use crate::tools::types::{Tool};
+use crate::{base::config::Config, tools::types::Tool};
+mod base;
+mod working_memory;
+mod episodic_memory;
+mod semantic_memory;
+mod perceptual_memory;
+use base::{Memory, MemoryItem, MemoryConfig, MemoryRetriever, MmeoryStore};
+use working_memory::WorkingMemory;
+use episodic_memory::EpisodicMemory;
+use semantic_memory::SemanticMemory;
+use perceptual_memory::PerceptualMemory;
 
-
-struct Memory {
+struct MemoryTool {
     current_session_id: Option<String>,
     memory_manager: MemoryManager,
 }
 
-impl Memory {
+impl MemoryTool {
     
     fn add_memory(
         &mut self, 
@@ -128,10 +137,21 @@ impl Memory {
             Err(msg) => format!("遗忘记忆失败: {}", msg),
         }
     }
+
+    // 短期记忆提升为长期记忆
+    fn consolidate(&mut self, from_type: Option<String>, to_type: Option<String>, importance_threshold: Option<f32>) -> String {
+        let from_type = from_type.unwrap_or("working".to_string());
+        let to_type = to_type.unwrap_or("episodic".to_string());
+        let importance_threshold = importance_threshold.unwrap_or(0.7);
+        match self.memory_manager.consolidate_memories(&from_type, &to_type, importance_threshold) {
+            Ok(count) => format!("已整合 {count} 条记忆为长期记忆（{from_type} → {to_type}，阈值={importance_threshold}）"),
+            Err(msg) => format!("整合记忆失败: {}", msg)
+        }
+    }
 }
 
 #[async_trait::async_trait]
-impl Tool for Memory {
+impl Tool for MemoryTool {
     fn name(&self) ->  &str {
         todo!()
     }
@@ -162,24 +182,68 @@ impl Tool for Memory {
             required: Some(vec!["action".to_string()]),
         }
     }
-      async fn execute(&self, args: serde_json::Value) -> Result<String, String> {
-        // 1. 获取当前 action
+    async fn execute(&self, args: serde_json::Value) -> Result<String, String> {
+    // 1. 获取当前 action
 
-        // 2. 不同 action 有不同的处理逻辑
-        todo!()
-      }
+    // 2. 不同 action 有不同的处理逻辑
+    todo!()
+    }
 }
 
-struct MemoryItem {
-    memory_type: String,
-    content: String,
-}
+
+
 
 pub struct MemoryManager {
-
+    config: MemoryConfig,
+    user_id: String,
+    store: MmeoryStore,
+    retriever: MemoryRetriever,
+    memory_types: HashMap<String, Box<dyn Memory>>
 }
 
 impl MemoryManager {
+    pub fn new(
+        config: Option<MemoryConfig>,
+        user_id: Option<String>,
+        enable_working: Option<bool>,
+        enable_episodic: Option<bool>,
+        enable_semantic: Option<bool>,
+        enable_perceptual: Option<bool>,
+    ) -> Self {
+        let user_id = user_id.unwrap_or("default_user".into());
+        let config = config.unwrap_or(MemoryConfig::new());
+        let enable_working = enable_working.unwrap_or(true);
+        let enable_episodic = enable_episodic.unwrap_or(true);
+        let enable_semantic = enable_semantic.unwrap_or(true);
+        let enable_perceptual = enable_perceptual.unwrap_or(true);
+
+        let store = MmeoryStore::new(config.clone());
+        let retriever = MemoryRetriever::new(store.clone(), config.clone());
+
+        let mut memory_types: HashMap<String, Box<dyn Memory>> = HashMap::new();
+
+        if enable_working {
+            memory_types.insert("working".into(), Box::new(WorkingMemory::new(config.clone(), store.clone())));
+        }
+        if enable_episodic {
+            memory_types.insert("working".into(), Box::new(EpisodicMemory::new(config.clone(), store.clone())));
+        }
+        if enable_semantic {
+            memory_types.insert("working".into(), Box::new(SemanticMemory::new(config.clone(), store.clone())));
+        }
+        if enable_perceptual {
+            memory_types.insert("working".into(), Box::new(PerceptualMemory::new(config.clone(), store.clone())));
+        }
+
+        Self {
+            config,
+            user_id,
+            store,
+            retriever,
+            memory_types,
+        }
+    }
+
     pub fn add_memory(
         &mut self,
         content: String,
@@ -205,4 +269,9 @@ impl MemoryManager {
     pub fn forget(&self, strategy: &String, threshold: f32, max_age_days: usize) -> Result<usize, String> {
         Ok(2)
     }
+
+    pub fn consolidate_memories(&mut self, from_type: &String, to_type: &String, importance_threshold: f32) -> Result<usize, String> {
+        Ok(2)
+    }
 }
+
