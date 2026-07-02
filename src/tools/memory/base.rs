@@ -1,5 +1,9 @@
-use serde_json::Value;
+use std::env;
 
+use qdrant_client::qdrant::qdrant_client::QdrantClient;
+use serde_json::{json, Value};
+use qdrant_client::{Qdrant, Payload};
+use qdrant_client::qdrant::{CreateCollectionBuilder, Distance, VectorParamsBuilder, PointStruct, DocumentBuilder, UpsertPointsBuilder, QueryPointsBuilder, Query};
 
 #[derive(Clone)]
 pub struct MemoryItem {
@@ -52,4 +56,15 @@ impl MemoryRetriever {
             config
         }
     }
+}
+
+
+pub fn get_qdrant_client() -> Qdrant {
+    dotenvy::dotenv().ok();
+    let url = env::var("QDRANT_KEY").expect("API_KEY is not valid");
+    let key = env::var("QDRANT_ENDPOINT").expect("BASE_URL is not valid");
+    let client = Qdrant::from_url(&url)
+        .api_key(key)
+        .build().unwrap();
+    client
 }

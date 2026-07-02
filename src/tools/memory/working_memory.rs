@@ -63,7 +63,7 @@ impl Memory for WorkingMemory {
         self.expire_old_memories();
         
         // TF-IDF 向量检索
-        let mut vector_scores = self.try_tfidf_search(query);
+        let vector_scores = self.try_tfidf_search(query);
 
         // 计算综合分数
         let mut scored_memories = vec![];
