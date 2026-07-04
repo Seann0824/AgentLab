@@ -9,7 +9,7 @@ mod working_memory;
 mod episodic_memory;
 mod semantic_memory;
 mod perceptual_memory;
-use base::{Memory, MemoryItem, MemoryConfig, MemoryRetriever, MmeoryStore};
+use base::{Memory, MemoryItem, MemoryConfig, MemoryRetriever, MemoryStore};
 use working_memory::WorkingMemory;
 use episodic_memory::EpisodicMemory;
 use semantic_memory::SemanticMemory;
@@ -263,7 +263,7 @@ impl Tool for MemoryTool {
 pub struct MemoryManager {
     config: MemoryConfig,
     user_id: String,
-    store: MmeoryStore,
+    store: MemoryStore,
     retriever: MemoryRetriever,
     memory_types: HashMap<String, Box<dyn Memory>>
 }
@@ -284,7 +284,7 @@ impl MemoryManager {
         let enable_semantic = enable_semantic.unwrap_or(true);
         let enable_perceptual = enable_perceptual.unwrap_or(true);
 
-        let store = MmeoryStore::new(config.clone());
+        let store = MemoryStore::new(config.clone());
         let retriever = MemoryRetriever::new(store.clone(), config.clone());
 
         let mut memory_types: HashMap<String, Box<dyn Memory>> = HashMap::new();

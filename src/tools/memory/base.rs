@@ -38,21 +38,13 @@ impl MemoryConfig {
     }
 }
 
-#[derive(Clone)]
-pub struct MmeoryStore {}
-impl MmeoryStore {
-    pub fn new(config: MemoryConfig) -> Self {
-        Self {  }
-    }
-}
-
 pub struct MemoryRetriever {
-    store: MmeoryStore,
+    store: MemoryStore,
     config: MemoryConfig,
 }
 
 impl MemoryRetriever {
-    pub fn new(store: MmeoryStore, config: MemoryConfig) -> Self {
+    pub fn new(store: MemoryStore, config: MemoryConfig) -> Self {
         Self {
             store,
             config
@@ -69,4 +61,16 @@ pub fn get_qdrant_client() -> Qdrant {
         .api_key(key)
         .build().unwrap();
     client
+}
+
+
+
+
+
+#[derive(Clone)]
+pub struct MemoryStore {}
+impl MemoryStore {
+    pub fn new(config: MemoryConfig) -> Self {
+        Self {  }
+    }
 }

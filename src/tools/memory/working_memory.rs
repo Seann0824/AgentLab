@@ -3,12 +3,12 @@ use chrono::Local;
 use scirs2_text::vectorize::{TfidfVectorizer, Vectorizer};
 use crate::tools::memory;
 
-use super::base::{MemoryConfig, MmeoryStore, MemoryItem, Memory};
+use super::base::{MemoryConfig, MemoryStore, MemoryItem, Memory};
 use serde_json::Value;
 
 pub struct WorkingMemory {
     config: MemoryConfig,
-    store: MmeoryStore,
+    store: MemoryStore,
     max_capacity: usize,
     max_age_minutes: i64,
     memories: Vec<MemoryItem>,
@@ -16,7 +16,7 @@ pub struct WorkingMemory {
 }
 
 impl WorkingMemory {
-    pub fn new(config: MemoryConfig, store: MmeoryStore) -> Self {
+    pub fn new(config: MemoryConfig, store: MemoryStore) -> Self {
         let max_age_minutes = config.max_age_minutes.unwrap_or(60);
         let max_capacity = config.working_memory_capacoty.unwrap_or(50);
         Self {
@@ -224,25 +224,25 @@ impl Memory for WorkingMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::base::{MemoryConfig, MmeoryStore, MemoryItem};
+    use super::super::base::{MemoryConfig, MemoryStore, MemoryItem};
 
     #[test]
     fn test_keyword_score_exact_match() {
-        let wm = WorkingMemory::new(MemoryConfig::new(), MmeoryStore::new(MemoryConfig::new()));
+        let wm = WorkingMemory::new(MemoryConfig::new(), MemoryStore::new(MemoryConfig::new()));
         let score = wm.calculate_keyword_score(&"蓝色".to_string(), &"我最喜欢的颜色是蓝色".to_string());
         assert!(score > 0.0);
     }
 
     #[test]
     fn test_keyword_score_word_overlap() {
-        let wm = WorkingMemory::new(MemoryConfig::new(), MmeoryStore::new(MemoryConfig::new()));
+        let wm = WorkingMemory::new(MemoryConfig::new(), MemoryStore::new(MemoryConfig::new()));
         let score = wm.calculate_keyword_score(&"favorite color".to_string(), &"my favorite color is blue".to_string());
         assert!(score > 0.0);
     }
 
     #[test]
     fn test_working_memory_retrieve() {
-        let mut wm = WorkingMemory::new(MemoryConfig::new(), MmeoryStore::new(MemoryConfig::new()));
+        let mut wm = WorkingMemory::new(MemoryConfig::new(), MemoryStore::new(MemoryConfig::new()));
         wm.add(MemoryItem {
             id: "1".to_string(),
             memory_type: "working".to_string(),

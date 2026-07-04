@@ -1,14 +1,14 @@
-use super::base::{MemoryConfig, MmeoryStore, MemoryItem, Memory};
+use super::base::{MemoryConfig, MemoryStore, MemoryItem, Memory};
 use serde_json::Value;
 
 pub struct SemanticMemory {
-    store: MmeoryStore,
+    store: MemoryStore,
     config: MemoryConfig,
     memories: Vec<MemoryItem>,
 }
 
 impl SemanticMemory {
-    pub fn new(config: MemoryConfig, store: MmeoryStore) -> Self {
+    pub fn new(config: MemoryConfig, store: MemoryStore) -> Self {
         Self {
             config,
             store,
