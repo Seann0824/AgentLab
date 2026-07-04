@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-
+use std::{collections::HashMap, hash::Hash, vec};
+use scirs2_text::vectorize::{TfidfVectorizer, Vectorizer};
 use super::base::{MemoryConfig, MmeoryStore, MemoryItem, Memory};
 use serde_json::Value;
 
@@ -28,16 +28,54 @@ impl WorkingMemory {
 
     }
 
-    fn try_tfidf_search(&self, query: &String) -> HashMap<String, f32> {
+    fn try_tfidf_search(&self, query: &String) -> HashMap<String, f64> {
 
-        HashMap::new()
+        if self.memories.is_empty() {
+            return HashMap::new();
+        }
+    
+        // 文本相识度计算
+        let filter_memory = self.memories
+            .iter()
+            .map(|memory| memory)
+            .collect::<Vec<_>>();
+        
+        // TF-IDF vectorization
+        let mut documents = filter_memory
+            .iter()
+            .map(|memory| memory.content.as_str())
+            .collect::<Vec<&str>>();
+        documents.insert(0, query.as_str());
+
+        let mut tfidf = TfidfVectorizer::new(false, true, Some("l2".to_string()));
+        let matrix    = match tfidf.fit_transform(&documents) {
+            Ok(vectors) => vectors,
+            Err(_) => return HashMap::new(),
+        };
+
+        // 计算cosine相识度
+        let query_vec = matrix.row(0);  // 查询向量
+        let mut similarities = Vec::with_capacity(filter_memory.len());
+        // 计算所有的相识度然后zip压缩，成 memory_id : scorce
+
+        for i in 1..matrix.nrows() {
+            let memory_vec = matrix.row(i); // 记忆向量
+            let similarity = query_vec.dot(&memory_vec);  // L2 归一化后的点积=于consine相似度
+            similarities.push(similarity);
+        }
+
+        filter_memory
+            .into_iter()
+            .zip(similarities.into_iter())
+            .map(|(memory, score)| (memory.id.to_string(), score))
+            .collect::<HashMap<_, _>>()
     }
 
-    fn calculate_keyword_score(&self, query: &String, content: &String) -> f32 {
+    fn calculate_keyword_score(&self, query: &String, content: &String) -> f64 {
         0.0
     }
 
-    fn calculate_time_decay(&self, timestamp: u64) -> f32 {
+    fn calculate_time_decay(&self, timestamp: u64) -> f64 {
         0.0
     }
 }
@@ -74,7 +112,7 @@ impl Memory for WorkingMemory {
             // 混合评分
             let base_relevance = {
                 let blance_score = vector_score * 0.7 + keyword_score * 0.3;
-                if blance_score > 0f32 {
+                if blance_score > 0f64 {
                     blance_score
                 } else {
                     keyword_score
@@ -86,7 +124,7 @@ impl Memory for WorkingMemory {
 
             let final_score = base_relevance * time_decay * importance_weight;
 
-            if final_score > 0f32 {
+            if final_score > 0f64 {
                 scored_memories.push((final_score, memory.clone()))
             }
 

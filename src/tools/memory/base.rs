@@ -11,7 +11,7 @@ pub struct MemoryItem {
     pub memory_type: String,
     pub content: String,
     pub timestamp: u64,
-    pub importance: f32,
+    pub importance: f64,
 }
 
 
