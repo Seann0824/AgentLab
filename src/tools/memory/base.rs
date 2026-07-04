@@ -1,7 +1,7 @@
 use std::env;
 use std::sync::Arc;
 use qdrant_client::qdrant::qdrant_client::QdrantClient;
-use sea_orm::{Database, DatabaseConnection};
+use sqlx::PgPool;
 use serde_json::{json, Value};
 use qdrant_client::{Qdrant, Payload};
 use qdrant_client::qdrant::{CreateCollectionBuilder, Distance, VectorParamsBuilder, PointStruct, DocumentBuilder, UpsertPointsBuilder, QueryPointsBuilder, Query};
@@ -65,20 +65,20 @@ pub fn get_qdrant_client() -> Qdrant {
     client
 }
 
-pub async fn get_db_client() -> DatabaseConnection {
+pub async fn get_db_client() -> PgPool {
     dotenvy::dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("database_url is not empty");
-    Database::connect(database_url).await.expect("database connection build failed")
+    PgPool::connect(&database_url).await.expect("database connection build failed")
 }
 
 #[derive(Clone)]
 pub struct MemoryStore {
     config: MemoryConfig,
-    db: DatabaseConnection,
+    db: PgPool,
     embedder: Arc<dyn Embedder + Send + Sync>,
 }
 impl MemoryStore {
-    pub fn new(config: MemoryConfig, db: DatabaseConnection, embedder: Arc<dyn Embedder + Send + Sync>) -> Self {
+    pub fn new(config: MemoryConfig, db: PgPool, embedder: Arc<dyn Embedder + Send + Sync>) -> Self {
         Self {
             config,
             db,
