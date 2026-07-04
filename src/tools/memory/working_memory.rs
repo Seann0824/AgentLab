@@ -1,31 +1,79 @@
-use std::{collections::HashMap, hash::Hash, vec};
+use std::{collections::{BinaryHeap, HashMap, HashSet}, hash::Hash, sync::atomic::AtomicU64, vec};
+use chrono::Local;
 use scirs2_text::vectorize::{TfidfVectorizer, Vectorizer};
+use crate::tools::memory;
+
 use super::base::{MemoryConfig, MmeoryStore, MemoryItem, Memory};
 use serde_json::Value;
 
 pub struct WorkingMemory {
+    config: MemoryConfig,
+    store: MmeoryStore,
     max_capacity: usize,
-    max_age_minutes: usize,
+    max_age_minutes: i64,
     memories: Vec<MemoryItem>,
+    session_start: i64,
 }
 
 impl WorkingMemory {
-    pub fn new(config: MemoryConfig, _store: MmeoryStore) -> Self {
+    pub fn new(config: MemoryConfig, store: MmeoryStore) -> Self {
         let max_age_minutes = config.max_age_minutes.unwrap_or(60);
         let max_capacity = config.working_memory_capacoty.unwrap_or(50);
         Self {
             max_age_minutes,
             max_capacity,
             memories: vec![],
+            session_start: Local::now().timestamp(),
+            config,
+            store,
         }
     }
 
     fn expire_old_memories(&mut self) {
+        if self.memories.is_empty() {
+            return;
+        }
 
+        let cutoff_time = Local::now().timestamp() - self.max_age_minutes * 60;
+        let kept_memories: Vec<MemoryItem> = self.memories
+            .clone()
+            .into_iter()
+            .filter(|memory| memory.timestamp >= cutoff_time)
+            .collect();
+        let removed_total = self.memories.len() - kept_memories.len();
+        if removed_total == 0 {
+            return;
+        }
+        self.memories = kept_memories;
     }
 
-    fn remove_lowest_priority_memory(&mut self) {
+    fn remove(&mut self, memory_id: &String) {
+        if let Some(index) = self.memories
+            .iter()
+            .position(|memory| memory_id == &memory.id) {
+                // 先交换在删除
+                self.memories.swap_remove(index);
+            }
+    }
 
+    // 删除优先级最低的记忆
+    fn remove_lowest_priority_memory(&mut self) {
+        if self.memories.is_empty() {
+            return;
+        }
+        // 找到优先级最低的记忆
+        let mut lowest_priority = f64::INFINITY;
+        let mut lowest_memory_id: Option<_> = None;
+        for memory in &self.memories {
+            let priority = self.calculate_priority(memory);
+            if priority < lowest_priority {
+                lowest_priority = priority;
+                lowest_memory_id = Some(memory.id.clone());
+            }
+        }
+        if let Some(memory_id) = lowest_memory_id {
+            self.remove(&memory_id);
+        }
     }
 
     fn try_tfidf_search(&self, query: &String) -> HashMap<String, f64> {
@@ -47,6 +95,7 @@ impl WorkingMemory {
             .collect::<Vec<&str>>();
         documents.insert(0, query.as_str());
 
+        // todo: 这里没有做 lowercase 可能影响最后的结果
         let mut tfidf = TfidfVectorizer::new(false, true, Some("l2".to_string()));
         let matrix    = match tfidf.fit_transform(&documents) {
             Ok(vectors) => vectors,
@@ -72,11 +121,43 @@ impl WorkingMemory {
     }
 
     fn calculate_keyword_score(&self, query: &String, content: &String) -> f64 {
-        0.0
+        let query_lower = query.to_lowercase();
+        let content_lower = content.to_lowercase();
+
+        if content_lower.contains(&query_lower) {
+            query_lower.len() as f64 / content_lower.len() as f64
+        } else {
+            let query_words: HashSet<&str> = query_lower.split_whitespace().collect();
+            let content_words: HashSet<&str> = content_lower.split_whitespace().collect();
+
+            let intersection = query_words.intersection(&content_words).count();
+            if intersection > 0 {
+                let union = query_words.union(&content_words).count();
+                intersection as f64 / union as f64 * 0.8
+            } else {
+                0.0
+            }
+        }
     }
 
-    fn calculate_time_decay(&self, timestamp: u64) -> f64 {
-        0.0
+    // 计算记忆优先级
+    fn calculate_priority(&self, memory: &MemoryItem) -> f64 {
+        // 基础优先级 = 重要性
+        let mut priority = memory.importance;
+        // 时间衰减
+        let time_decay = self.calculate_time_decay(memory.timestamp);
+        priority *= time_decay;
+        
+        priority
+    }
+
+    fn calculate_time_decay(&self, timestamp: i64) -> f64 {
+        let time_diff = Local::now().timestamp() - timestamp;
+        let hours_passed = time_diff / 3600;
+
+        let decay_factor = self.config.time_factor.powi(hours_passed as i32);
+
+        decay_factor.max(0.1)
     }
 }
 

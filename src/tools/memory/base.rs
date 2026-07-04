@@ -10,7 +10,7 @@ pub struct MemoryItem {
     pub id: String,
     pub memory_type: String,
     pub content: String,
-    pub timestamp: u64,
+    pub timestamp: i64,
     pub importance: f64,
 }
 
@@ -24,7 +24,8 @@ pub trait Memory: Send + Sync {
 #[derive(Clone)]
 pub struct MemoryConfig {
     pub working_memory_capacoty: Option<usize>,
-    pub max_age_minutes: Option<usize>,
+    pub max_age_minutes: Option<i64>,
+    pub time_factor: f64,
 }
 
 impl MemoryConfig {
@@ -32,6 +33,7 @@ impl MemoryConfig {
         Self {
             working_memory_capacoty: None,
             max_age_minutes: None,
+            time_factor: 0.1,
         }
     }
 }
