@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::tools::types::Tool;
 mod base;
+mod embedder;
 mod working_memory;
 mod episodic_memory;
 mod semantic_memory;

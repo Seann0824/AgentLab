@@ -1,9 +1,13 @@
 use std::env;
+use std::sync::Arc;
 
 use qdrant_client::qdrant::qdrant_client::QdrantClient;
+use sea_orm::DatabaseConnection;
 use serde_json::{json, Value};
 use qdrant_client::{Qdrant, Payload};
 use qdrant_client::qdrant::{CreateCollectionBuilder, Distance, VectorParamsBuilder, PointStruct, DocumentBuilder, UpsertPointsBuilder, QueryPointsBuilder, Query};
+
+use crate::tools::memory::embedder::Embedder;
 
 #[derive(Clone)]
 pub struct MemoryItem {
@@ -52,7 +56,6 @@ impl MemoryRetriever {
     }
 }
 
-
 pub fn get_qdrant_client() -> Qdrant {
     dotenvy::dotenv().ok();
     let url = env::var("QDRANT_KEY").expect("API_KEY is not valid");
@@ -63,12 +66,11 @@ pub fn get_qdrant_client() -> Qdrant {
     client
 }
 
-
-
-
-
 #[derive(Clone)]
-pub struct MemoryStore {}
+pub struct MemoryStore {
+    db: DatabaseConnection,
+    embedder: Arc<dyn Embedder + Send + Sync>,
+}
 impl MemoryStore {
     pub fn new(config: MemoryConfig) -> Self {
         Self {  }
