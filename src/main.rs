@@ -1,39 +1,25 @@
-use agent_lab::{agent::{react_agent::ReActAgent, reflection_agent::{ReflectionAgent, ReflectionPromptTemplates}, simple_agent::SimpleAgent}, base::{agent::Agent, config::Config, llm::AgentsLLM}, tools::{ToolManager, web_search::WebSearch}};
+use agent_lab::{agent::simple_agent::SimpleAgent, base::{agent::Agent, config::Config, llm::AgentsLLM}, tools::{ToolManager, memory::MemoryTool}};
 
 #[tokio::main]
 async fn main() -> () {
-    // let mut simple_agent = SimpleAgent::new(
-    //     "基础助手",
-    //     AgentsLLM::from_env(),
-    //     "你是一个友好的MasterGo AI助手，请用简洁明了的方式回答问题。".to_string(),
-    //     Config::from_env(),
-    //     ToolManager::new()
-    //         .with_tool(Box::new(WebSearch::new())),
-    //     true,
-    // );
-
-    // let mut react_agent = ReActAgent::new(
-    //     "基础助手",
-    //     AgentsLLM::from_env(),
-    //     "你是一个友好的MasterGo AI助手，请用简洁明了的方式回答问题。".to_string(),
-    //     Config::from_env(),
-    //     ToolManager::new()
-    //         .with_tool(Box::new(WebSearch::new())),
-    //     5,
-    // );
-
-    let mut reflection_agent = ReflectionAgent::new(
-        "基础助手",
+    let mut agent = SimpleAgent::new(
+        "记忆助手",
         AgentsLLM::from_env(),
-        ReflectionPromptTemplates {
-            initial: "你是Python专家，请编写函数:{task}".into(),
-            reflect: "请审查代码的算法效率:\n任务:{task}\n代码:{content}".into(),
-            refine: "请根据反馈优化代码:\n任务:{task}\n反馈:{content}".into(),
-        },
+        "你是一个有长期记忆的助手。当用户提到自己的关键信息（如姓名、偏好、重要事实）时，必须立即调用 memory 工具的 add 动作保存；当用户询问之前提到过的信息时，必须调用 memory 工具的 search 动作查找，并根据搜索结果回答。".to_string(),
         Config::from_env(),
         ToolManager::new()
-            .with_tool(Box::new(WebSearch::new())),
-        5,
+            .with_tool(Box::new(MemoryTool::new())),
+        true,
     );
-    let _ = reflection_agent.run_reflection("帮我找到1000以内的素数").await;
+
+    // 第一轮：让 agent 记住一个事实
+    println!("\n=== 第一轮：记住事实 ===");
+    let _ = agent.run("请记住我最喜欢的颜色是蓝色").await;
+
+    // 清空对话历史，排除模型仅靠上下文记住答案的情况
+    agent.clear_history();
+
+    // 第二轮：测试记忆是否能被独立召回
+    println!("\n=== 第二轮：回忆事实 ===");
+    let _ = agent.run("我最喜欢的颜色是什么？").await;
 }

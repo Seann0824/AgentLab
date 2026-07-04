@@ -220,3 +220,39 @@ impl Memory for WorkingMemory {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::base::{MemoryConfig, MmeoryStore, MemoryItem};
+
+    #[test]
+    fn test_keyword_score_exact_match() {
+        let wm = WorkingMemory::new(MemoryConfig::new(), MmeoryStore::new(MemoryConfig::new()));
+        let score = wm.calculate_keyword_score(&"蓝色".to_string(), &"我最喜欢的颜色是蓝色".to_string());
+        assert!(score > 0.0);
+    }
+
+    #[test]
+    fn test_keyword_score_word_overlap() {
+        let wm = WorkingMemory::new(MemoryConfig::new(), MmeoryStore::new(MemoryConfig::new()));
+        let score = wm.calculate_keyword_score(&"favorite color".to_string(), &"my favorite color is blue".to_string());
+        assert!(score > 0.0);
+    }
+
+    #[test]
+    fn test_working_memory_retrieve() {
+        let mut wm = WorkingMemory::new(MemoryConfig::new(), MmeoryStore::new(MemoryConfig::new()));
+        wm.add(MemoryItem {
+            id: "1".to_string(),
+            memory_type: "working".to_string(),
+            content: "我最喜欢的颜色是蓝色".to_string(),
+            timestamp: Local::now().timestamp(),
+            importance: 0.8,
+        });
+
+        let results = wm.retrieve(&"喜欢的颜色".to_string(), Some(5), None);
+        assert!(!results.is_empty(), "应该能检索到相关记忆");
+        assert!(results.iter().any(|m| m.content.contains("蓝色")));
+    }
+}
