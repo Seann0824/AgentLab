@@ -8,7 +8,7 @@ async fn main() -> () {
         "你是一个有长期记忆的助手。当用户提到自己的关键信息（如姓名、偏好、重要事实）时，必须立即调用 memory 工具的 add 动作保存(目前只支持working_memory, 其他的不要调用)；当用户询问之前提到过的信息时，必须调用 memory 工具的 search 动作查找，并根据搜索结果回答。".to_string(),
         Config::from_env(),
         ToolManager::new()
-            .with_tool(Box::new(MemoryTool::new())),
+            .with_tool(Box::new(MemoryTool::new().await)),
         true,
     );
 

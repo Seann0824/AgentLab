@@ -1,13 +1,12 @@
 use std::env;
 use std::sync::Arc;
-
 use qdrant_client::qdrant::qdrant_client::QdrantClient;
-use sea_orm::DatabaseConnection;
+use sea_orm::{Database, DatabaseConnection};
 use serde_json::{json, Value};
 use qdrant_client::{Qdrant, Payload};
 use qdrant_client::qdrant::{CreateCollectionBuilder, Distance, VectorParamsBuilder, PointStruct, DocumentBuilder, UpsertPointsBuilder, QueryPointsBuilder, Query};
 
-use crate::tools::memory::embedder::Embedder;
+use crate::tools::memory::embedder::{self, Embedder, OllamaEmbedder};
 
 #[derive(Clone)]
 pub struct MemoryItem {
@@ -66,13 +65,24 @@ pub fn get_qdrant_client() -> Qdrant {
     client
 }
 
+pub async fn get_db_client() -> DatabaseConnection {
+    dotenvy::dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("database_url is not empty");
+    Database::connect(database_url).await.expect("database connection build failed")
+}
+
 #[derive(Clone)]
 pub struct MemoryStore {
+    config: MemoryConfig,
     db: DatabaseConnection,
     embedder: Arc<dyn Embedder + Send + Sync>,
 }
 impl MemoryStore {
-    pub fn new(config: MemoryConfig) -> Self {
-        Self {  }
+    pub fn new(config: MemoryConfig, db: DatabaseConnection, embedder: Arc<dyn Embedder + Send + Sync>) -> Self {
+        Self {
+            config,
+            db,
+            embedder,
+        }
     }
 }

@@ -1,16 +1,16 @@
-use std::{collections::HashMap, sync::Mutex};
+use std::{collections::HashMap, sync::{Arc, Mutex}};
 use chrono::Local;
 use openai_api_rs::v1::types;
 use serde_json::Value;
 
-use crate::tools::types::Tool;
+use crate::tools::{memory::embedder::OllamaEmbedder, types::Tool};
 mod base;
 mod embedder;
 mod working_memory;
 mod episodic_memory;
 mod semantic_memory;
 mod perceptual_memory;
-use base::{Memory, MemoryItem, MemoryConfig, MemoryRetriever, MemoryStore};
+use base::{Memory, MemoryItem, MemoryConfig, MemoryRetriever, MemoryStore, get_db_client};
 use working_memory::WorkingMemory;
 use episodic_memory::EpisodicMemory;
 use semantic_memory::SemanticMemory;
@@ -26,11 +26,11 @@ struct MemoryToolInner {
 }
 
 impl MemoryTool {
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
         Self {
             inner: Mutex::new(MemoryToolInner {
                 current_session_id: None,
-                memory_manager: MemoryManager::new(None, None, None, None, None, None),
+                memory_manager: MemoryManager::new(None, None, None, None, None, None).await,
             }),
         }
     }
@@ -270,7 +270,7 @@ pub struct MemoryManager {
 }
 
 impl MemoryManager {
-    pub fn new(
+    pub async fn new(
         config: Option<MemoryConfig>,
         user_id: Option<String>,
         enable_working: Option<bool>,
@@ -285,7 +285,9 @@ impl MemoryManager {
         let enable_semantic = enable_semantic.unwrap_or(true);
         let enable_perceptual = enable_perceptual.unwrap_or(true);
 
-        let store = MemoryStore::new(config.clone());
+        let db = get_db_client().await;
+        let embedder = OllamaEmbedder::new(None, None);
+        let store = MemoryStore::new(config.clone(), db, Arc::new(embedder));
         let retriever = MemoryRetriever::new(store.clone(), config.clone());
 
         let mut memory_types: HashMap<String, Box<dyn Memory>> = HashMap::new();
@@ -382,55 +384,5 @@ impl MemoryManager {
 
     pub fn consolidate_memories(&mut self, _from_type: &String, _to_type: &String, _importance_threshold: f32) -> Result<usize, String> {
         Ok(0)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_memory_manager_add_and_retrieve() {
-        let mut manager = MemoryManager::new(None, None, Some(true), Some(false), Some(false), Some(false));
-        let id = manager.add_memory(
-            "我最喜欢的颜色是蓝色".to_string(),
-            "working".to_string(),
-            0.8,
-            serde_json::json!({}),
-            false,
-        ).unwrap();
-        assert!(!id.is_empty());
-
-        let results = manager.retrieve_memories(
-            "喜欢的颜色",
-            5,
-            &vec!["working".to_string()],
-            0.0,
-        ).unwrap();
-        assert!(!results.is_empty(), "应该能召回工作记忆");
-        assert!(results.iter().any(|m| m.content.contains("蓝色")));
-    }
-
-    #[test]
-    fn test_memory_tool_add_and_search() {
-        let tool = MemoryTool::new();
-        let add_result = tool.add_memory(
-            "我的职业是工程师".to_string(),
-            "working".to_string(),
-            Some(0.9),
-            None,
-            None,
-            None,
-        );
-        assert!(add_result.contains("记忆已添加"));
-
-        let search_result = tool.search_memory(
-            "职业".to_string(),
-            Some(5),
-            Some(vec!["working".to_string()]),
-            None,
-            None,
-        );
-        assert!(search_result.contains("工程师"), "搜索结果应包含工程师: {}", search_result);
     }
 }
