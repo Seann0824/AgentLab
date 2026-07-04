@@ -16,10 +16,14 @@ async fn main() -> () {
     println!("\n=== 第一轮：记住事实 ===");
     let _ = agent.run("请记住我最喜欢的颜色是蓝色").await;
 
+    let _ = agent.run("我今年18岁哦").await;
+
+    let _ = agent.run("我叫 sean，我的职业是一个前端工程师").await;
+
     // 清空对话历史，排除模型仅靠上下文记住答案的情况
     agent.clear_history();
 
     // 第二轮：测试记忆是否能被独立召回
     println!("\n=== 第二轮：回忆事实 ===");
-    let _ = agent.run("我最喜欢的颜色是什么？").await;
+    let _ = agent.run("sean 的信息是啥").await;
 }
