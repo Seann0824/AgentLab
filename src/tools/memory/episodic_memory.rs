@@ -1,7 +1,8 @@
 use chrono::Local;
 use serde_json::Value;
 
-use super::base::{Memory, MemoryConfig, MemoryItem, MemoryStore, RetrieveRequest};
+use super::base::{Memory, MemoryConfig, MemoryItem, RetrieveRequest};
+use super::storage::MemoryStore;
 
 pub struct EpisodicMemory {
     store: MemoryStore,
@@ -244,8 +245,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::tools::memory::base::{get_db_client, MemoryConfig, MemoryStore};
-    use crate::tools::memory::embedder::Embedder;
+    use crate::tools::memory::base::{get_db_client, MemoryConfig};
+    use crate::tools::memory::storage::{MemoryStore, embedder::Embedder};
 
     struct MockEmbedder;
 

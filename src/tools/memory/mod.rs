@@ -4,16 +4,15 @@ use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
-use crate::tools::{memory::embedder::OllamaEmbedder, types::Tool};
+use crate::tools::{memory::storage::OllamaEmbedder, types::Tool};
 mod base;
-mod embedder;
+mod storage;
 mod episodic_memory;
 mod perceptual_memory;
 mod semantic_memory;
 mod working_memory;
-use base::{
-    Memory, MemoryConfig, MemoryItem, MemoryRetriever, MemoryStore, RetrieveRequest, get_db_client,
-};
+use base::{Memory, MemoryConfig, MemoryItem, RetrieveRequest, get_db_client};
+use storage::MemoryStore;
 use episodic_memory::EpisodicMemory;
 use perceptual_memory::PerceptualMemory;
 use semantic_memory::SemanticMemory;
@@ -138,24 +137,6 @@ impl MemoryTool {
         }
     }
 
-    async fn fortget(
-        &self,
-        strategy: String,
-        threshold: Option<f32>,
-        max_age_days: Option<usize>,
-    ) -> String {
-        let threshold = threshold.unwrap_or(0.1);
-        let max_age_days = max_age_days.unwrap_or(30);
-        let inner = self.inner.lock().await;
-        match inner
-            .memory_manager
-            .forget(&strategy, threshold, max_age_days)
-        {
-            Ok(count) => format!("已遗忘 {} 条记忆（策略: {}）", count, strategy),
-            Err(msg) => format!("遗忘记忆失败: {}", msg),
-        }
-    }
-
     // 短期记忆提升为长期记忆
     async fn consolidate(
         &self,
@@ -170,12 +151,98 @@ impl MemoryTool {
         match inner
             .memory_manager
             .consolidate_memories(&from_type, &to_type, importance_threshold)
+            .await
         {
             Ok(count) => format!(
                 "已整合 {} 条记忆为长期记忆（{} → {}，阈值={}）",
                 count, from_type, to_type, importance_threshold
             ),
             Err(msg) => format!("整合记忆失败: {}", msg),
+        }
+    }
+
+    async fn summary_memory(&self, memory_type: Option<String>, limit: Option<usize>) -> String {
+        let memory_type = memory_type.unwrap_or_else(|| "working".to_string());
+        let limit = limit.unwrap_or(5);
+        let inner = self.inner.lock().await;
+        match inner.memory_manager.get_summary(&memory_type, limit).await {
+            Ok(summary) => summary,
+            Err(msg) => format!("获取记忆摘要失败: {}", msg),
+        }
+    }
+
+    async fn stats_memory(&self, memory_type: Option<String>) -> String {
+        let memory_type = memory_type.unwrap_or_else(|| "working".to_string());
+        let inner = self.inner.lock().await;
+        match inner.memory_manager.get_stats(&memory_type).await {
+            Ok(stats) => stats,
+            Err(msg) => format!("获取记忆统计失败: {}", msg),
+        }
+    }
+
+    async fn update_memory(
+        &self,
+        memory_id: String,
+        content: Option<String>,
+        importance: Option<f32>,
+        metadata: Option<Value>,
+    ) -> String {
+        if memory_id.is_empty() {
+            return "memory_id 不能为空".to_string();
+        }
+        let mut inner = self.inner.lock().await;
+        match inner
+            .memory_manager
+            .update_memory(&memory_id, content.as_deref(), importance, metadata)
+            .await
+        {
+            Ok(true) => format!("记忆 {} 更新成功", memory_id),
+            Ok(false) => format!("未找到记忆 {}", memory_id),
+            Err(msg) => format!("更新记忆失败: {}", msg),
+        }
+    }
+
+    async fn remove_memory(&self, memory_id: String) -> String {
+        if memory_id.is_empty() {
+            return "memory_id 不能为空".to_string();
+        }
+        let mut inner = self.inner.lock().await;
+        match inner.memory_manager.remove_memory(&memory_id).await {
+            Ok(true) => format!("记忆 {} 已删除", memory_id),
+            Ok(false) => format!("未找到记忆 {}", memory_id),
+            Err(msg) => format!("删除记忆失败: {}", msg),
+        }
+    }
+
+    async fn forget_memory(
+        &self,
+        memory_type: Option<String>,
+        strategy: String,
+        threshold: Option<f32>,
+        max_age_days: Option<usize>,
+    ) -> String {
+        let memory_type = memory_type.unwrap_or_else(|| "working".to_string());
+        let threshold = threshold.unwrap_or(0.1);
+        let max_age_days = max_age_days.unwrap_or(30);
+        let mut inner = self.inner.lock().await;
+        match inner
+            .memory_manager
+            .forget_by_type(&memory_type, &strategy, threshold, max_age_days as i64)
+            .await
+        {
+            Ok(count) => format!(
+                "已遗忘 {} 条 {} 记忆（策略: {}）",
+                count, memory_type, strategy
+            ),
+            Err(msg) => format!("遗忘记忆失败: {}", msg),
+        }
+    }
+
+    async fn clear_all_memory(&self, memory_type: Option<String>) -> String {
+        let mut inner = self.inner.lock().await;
+        match inner.memory_manager.clear_all(memory_type.as_deref()).await {
+            Ok(count) => format!("已清空 {} 条记忆", count),
+            Err(msg) => format!("清空记忆失败: {}", msg),
         }
     }
 }
@@ -187,7 +254,7 @@ impl Tool for MemoryTool {
     }
 
     fn description(&self) -> &str {
-        "记忆管理工具。当需要保存用户的关键信息（如偏好、身份、重要事实）以便后续回忆时，使用 action='add'；当需要根据当前问题查找历史记忆时，使用 action='search'。"
+        "记忆管理工具。支持 add(添加记忆), search(搜索记忆), summary(获取摘要), stats(获取统计), update(更新记忆), remove(删除记忆), forget(遗忘记忆), consolidate(整合记忆), clear_all(清空所有记忆)。"
     }
 
     fn parameters_schema(&self) -> openai_api_rs::v1::types::FunctionParameters {
@@ -197,9 +264,19 @@ impl Tool for MemoryTool {
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::String),
                     description: Some(
-                        "要执行的操作: add（添加记忆）或 search（搜索记忆）".to_string(),
+                        "要执行的操作: add(添加记忆), search(搜索记忆), summary(获取摘要), stats(获取统计), update(更新记忆), remove(删除记忆), forget(遗忘记忆), consolidate(整合记忆), clear_all(清空所有记忆)".to_string(),
                     ),
-                    enum_values: Some(vec!["add".to_string(), "search".to_string()]),
+                    enum_values: Some(vec![
+                        "add".to_string(),
+                        "search".to_string(),
+                        "summary".to_string(),
+                        "stats".to_string(),
+                        "update".to_string(),
+                        "remove".to_string(),
+                        "forget".to_string(),
+                        "consolidate".to_string(),
+                        "clear_all".to_string(),
+                    ]),
                     ..Default::default()
                 }),
             ),
@@ -207,7 +284,15 @@ impl Tool for MemoryTool {
                 "content".to_string(),
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::String),
-                    description: Some("add 操作时必填，要保存的记忆内容".to_string()),
+                    description: Some("add/update 时使用，要保存或更新的记忆内容".to_string()),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "query".to_string(),
+                Box::new(types::JSONSchemaDefine {
+                    schema_type: Some(types::JSONSchemaType::String),
+                    description: Some("search 时必填，搜索关键词。为提高语义相似度，请把用户的疑问句转换成陈述句后再传入，例如：'我上周去了哪里？' -> '我上周去了'，'我和同事讨论了什么？' -> '我和同事讨论了'。".to_string()),
                     ..Default::default()
                 }),
             ),
@@ -215,7 +300,7 @@ impl Tool for MemoryTool {
                 "memory_type".to_string(),
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::String),
-                    description: Some("记忆类型，默认 working".to_string()),
+                    description: Some("记忆类型：working, episodic, semantic, perceptual（默认：working）".to_string()),
                     enum_values: Some(vec![
                         "working".to_string(),
                         "episodic".to_string(),
@@ -226,10 +311,10 @@ impl Tool for MemoryTool {
                 }),
             ),
             (
-                "query".to_string(),
+                "memory_id".to_string(),
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::String),
-                    description: Some("search 操作时必填，搜索关键词。为提高语义相似度，请把用户的疑问句转换成陈述句后再传入，例如：'我上周去了哪里？' -> '我上周去了'，'我和同事讨论了什么？' -> '我和同事讨论了'。".to_string()),
+                    description: Some("update/remove 时必需，目标记忆ID".to_string()),
                     ..Default::default()
                 }),
             ),
@@ -237,7 +322,7 @@ impl Tool for MemoryTool {
                 "importance".to_string(),
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::Number),
-                    description: Some("add 时使用，重要性 0.0-1.0，默认 0.5".to_string()),
+                    description: Some("add/update 时使用，重要性 0.0-1.0，默认 0.5".to_string()),
                     ..Default::default()
                 }),
             ),
@@ -245,7 +330,88 @@ impl Tool for MemoryTool {
                 "limit".to_string(),
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::Number),
-                    description: Some("search 时使用，返回条数上限，默认 5".to_string()),
+                    description: Some("search/stats 时使用，返回条数上限，默认 5".to_string()),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "file_path".to_string(),
+                Box::new(types::JSONSchemaDefine {
+                    schema_type: Some(types::JSONSchemaType::String),
+                    description: Some("感知记忆：本地文件路径（image/audio）".to_string()),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "modality".to_string(),
+                Box::new(types::JSONSchemaDefine {
+                    schema_type: Some(types::JSONSchemaType::String),
+                    description: Some("感知记忆模态：text/image/audio（不传则按扩展名推断）".to_string()),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "strategy".to_string(),
+                Box::new(types::JSONSchemaDefine {
+                    schema_type: Some(types::JSONSchemaType::String),
+                    description: Some("forget 时使用，遗忘策略：importance_based/time_based/capacity_based（默认 importance_based）".to_string()),
+                    enum_values: Some(vec![
+                        "importance_based".to_string(),
+                        "time_based".to_string(),
+                        "capacity_based".to_string(),
+                    ]),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "threshold".to_string(),
+                Box::new(types::JSONSchemaDefine {
+                    schema_type: Some(types::JSONSchemaType::Number),
+                    description: Some("forget 时使用，遗忘阈值（默认 0.1）".to_string()),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "max_age_days".to_string(),
+                Box::new(types::JSONSchemaDefine {
+                    schema_type: Some(types::JSONSchemaType::Number),
+                    description: Some("forget 策略为 time_based 时使用，最大保留天数（默认 30）".to_string()),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "from_type".to_string(),
+                Box::new(types::JSONSchemaDefine {
+                    schema_type: Some(types::JSONSchemaType::String),
+                    description: Some("consolidate 时使用，整合来源类型（默认 working）".to_string()),
+                    enum_values: Some(vec![
+                        "working".to_string(),
+                        "episodic".to_string(),
+                        "semantic".to_string(),
+                        "perceptual".to_string(),
+                    ]),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "to_type".to_string(),
+                Box::new(types::JSONSchemaDefine {
+                    schema_type: Some(types::JSONSchemaType::String),
+                    description: Some("consolidate 时使用，整合目标类型（默认 episodic）".to_string()),
+                    enum_values: Some(vec![
+                        "working".to_string(),
+                        "episodic".to_string(),
+                        "semantic".to_string(),
+                        "perceptual".to_string(),
+                    ]),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "importance_threshold".to_string(),
+                Box::new(types::JSONSchemaDefine {
+                    schema_type: Some(types::JSONSchemaType::Number),
+                    description: Some("consolidate 时使用，整合重要性阈值（默认 0.7）".to_string()),
                     ..Default::default()
                 }),
             ),
@@ -286,6 +452,47 @@ impl Tool for MemoryTool {
                     .search_memory(query, limit, memory_types, None, None)
                     .await)
             }
+            "summary" => {
+                let memory_type = args["memory_type"].as_str().map(|v| v.to_string());
+                let limit = args["limit"].as_u64().map(|v| v as usize);
+                Ok(self.summary_memory(memory_type, limit).await)
+            }
+            "stats" => {
+                let memory_type = args["memory_type"].as_str().map(|v| v.to_string());
+                Ok(self.stats_memory(memory_type).await)
+            }
+            "update" => {
+                let memory_id = args["memory_id"].as_str().unwrap_or("").to_string();
+                let content = args["content"].as_str().map(|v| v.to_string());
+                let importance = args["importance"].as_f64().map(|v| v as f32);
+                let metadata = args.get("metadata").cloned();
+                Ok(self
+                    .update_memory(memory_id, content, importance, metadata)
+                    .await)
+            }
+            "remove" => {
+                let memory_id = args["memory_id"].as_str().unwrap_or("").to_string();
+                Ok(self.remove_memory(memory_id).await)
+            }
+            "forget" => {
+                let memory_type = args["memory_type"].as_str().map(|v| v.to_string());
+                let strategy = args["strategy"].as_str().unwrap_or("importance_based").to_string();
+                let threshold = args["threshold"].as_f64().map(|v| v as f32);
+                let max_age_days = args["max_age_days"].as_u64().map(|v| v as usize);
+                Ok(self
+                    .forget_memory(memory_type, strategy, threshold, max_age_days)
+                    .await)
+            }
+            "consolidate" => {
+                let from_type = args["from_type"].as_str().map(|v| v.to_string());
+                let to_type = args["to_type"].as_str().map(|v| v.to_string());
+                let importance_threshold = args["importance_threshold"].as_f64().map(|v| v as f32);
+                Ok(self.consolidate(from_type, to_type, importance_threshold).await)
+            }
+            "clear_all" => {
+                let memory_type = args["memory_type"].as_str().map(|v| v.to_string());
+                Ok(self.clear_all_memory(memory_type).await)
+            }
             _ => Err(format!("不支持的 action: {}", action)),
         }
     }
@@ -295,7 +502,6 @@ pub struct MemoryManager {
     config: MemoryConfig,
     user_id: String,
     store: MemoryStore,
-    retriever: MemoryRetriever,
     memory_types: HashMap<String, Box<dyn Memory>>,
 }
 
@@ -318,7 +524,6 @@ impl MemoryManager {
         let db = get_db_client().await;
         let embedder = OllamaEmbedder::new(None, None);
         let store = MemoryStore::new(config.clone(), db, Arc::new(embedder));
-        let retriever = MemoryRetriever::new(store.clone(), config.clone());
 
         let mut memory_types: HashMap<String, Box<dyn Memory>> = HashMap::new();
 
@@ -351,7 +556,6 @@ impl MemoryManager {
             config,
             user_id,
             store,
-            retriever,
             memory_types,
         }
     }
@@ -426,7 +630,7 @@ impl MemoryManager {
         Ok(all_results)
     }
 
-    pub fn forget(
+    pub async fn forget(
         &self,
         _strategy: &String,
         _threshold: f32,
@@ -435,12 +639,82 @@ impl MemoryManager {
         Ok(0)
     }
 
-    pub fn consolidate_memories(
+    pub async fn forget_by_type(
+        &mut self,
+        memory_type: &str,
+        strategy: &str,
+        threshold: f32,
+        max_age_days: i64,
+    ) -> Result<usize, String> {
+        let Some(_memory_store) = self.memory_types.get_mut(memory_type) else {
+            return Err(format!("记忆类型 {} 不存在", memory_type));
+        };
+
+        // TODO: 根据 strategy 调用对应 Memory 实现的 forget 方法
+        // 目前仅 episodic 实现了 forget，其他类型可先返回 0
+        match memory_type {
+            "episodic" => {
+                // 这里需要把 Box<dyn Memory> 向下转型为 EpisodicMemory，暂时用 store 直接操作
+                let _ = (strategy, threshold, max_age_days);
+                Ok(0)
+            }
+            _ => Ok(0),
+        }
+    }
+
+    pub async fn consolidate_memories(
         &mut self,
         _from_type: &String,
         _to_type: &String,
         _importance_threshold: f32,
     ) -> Result<usize, String> {
         Ok(0)
+    }
+
+    pub async fn update_memory(
+        &mut self,
+        memory_id: &str,
+        content: Option<&str>,
+        importance: Option<f32>,
+        metadata: Option<Value>,
+    ) -> Result<bool, String> {
+        // TODO: 需要知道 memory_id 对应的 memory_type 才能调用对应实现
+        // 临时方案：遍历所有记忆类型尝试更新
+        for memory_store in self.memory_types.values_mut() {
+            // Memory trait 没有 update 方法，需要具体实现支持
+            // 这里先用 store 层的通用 update
+            let _ = (memory_id, content, importance, metadata.clone());
+            let _ = memory_store;
+        }
+        self.store.update(memory_id, content, importance.map(|v| v as f64), metadata.as_ref()).await
+    }
+
+    pub async fn remove_memory(&mut self, memory_id: &str) -> Result<bool, String> {
+        self.store.delete(memory_id).await
+    }
+
+    pub async fn get_summary(&self, memory_type: &str, limit: usize) -> Result<String, String> {
+        let _ = (memory_type, limit);
+        // TODO: 实现摘要生成
+        Ok("记忆摘要功能待实现".to_string())
+    }
+
+    pub async fn get_stats(&self, memory_type: &str) -> Result<String, String> {
+        let _ = memory_type;
+        // TODO: 实现统计信息
+        Ok("记忆统计功能待实现".to_string())
+    }
+
+    pub async fn clear_all(&mut self, memory_type: Option<&str>) -> Result<u64, String> {
+        match memory_type {
+            Some(t) => self.store.clear_by_type(t).await,
+            None => {
+                let mut total = 0u64;
+                for t in self.memory_types.keys() {
+                    total += self.store.clear_by_type(t).await?;
+                }
+                Ok(total)
+            }
+        }
     }
 }

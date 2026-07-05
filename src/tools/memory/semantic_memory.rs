@@ -1,4 +1,5 @@
-use super::base::{MemoryConfig, MemoryStore, MemoryItem, Memory, RetrieveRequest};
+use super::base::{Memory, MemoryConfig, MemoryItem, RetrieveRequest};
+use super::storage::MemoryStore;
 
 pub struct SemanticMemory {
     store: MemoryStore,
