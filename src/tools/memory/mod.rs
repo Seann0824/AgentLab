@@ -319,16 +319,18 @@ impl MemoryManager {
         content: String,
         memory_type: String,
         importance: f32,
-        _metadata: Value,
+        metadata: Value,
         auto_classify: bool,
     ) -> Result<String, String> {
         let memory_id = format!("mem_{}", Local::now().timestamp_millis());
         let memory_item = MemoryItem {
             id: memory_id.clone(),
+            user_id: self.user_id.clone(),
             memory_type: memory_type.clone(),
             content,
             timestamp: Local::now().timestamp(),
             importance: importance as f64,
+            metadata,
         };
 
         let target_type = if auto_classify {

@@ -11,10 +11,12 @@ use crate::tools::memory::embedder::{self, Embedder, OllamaEmbedder};
 #[derive(Clone)]
 pub struct MemoryItem {
     pub id: String,
+    pub user_id: String,
     pub memory_type: String,
     pub content: String,
     pub timestamp: i64,
     pub importance: f64,
+    pub metadata: serde_json::Value,
 }
 
 
@@ -55,16 +57,6 @@ impl MemoryRetriever {
     }
 }
 
-pub fn get_qdrant_client() -> Qdrant {
-    dotenvy::dotenv().ok();
-    let url = env::var("QDRANT_KEY").expect("API_KEY is not valid");
-    let key = env::var("QDRANT_ENDPOINT").expect("BASE_URL is not valid");
-    let client = Qdrant::from_url(&url)
-        .api_key(key)
-        .build().unwrap();
-    client
-}
-
 pub async fn get_db_client() -> PgPool {
     dotenvy::dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("database_url is not empty");
@@ -84,5 +76,11 @@ impl MemoryStore {
             db,
             embedder,
         }
+    }
+
+    pub fn add(&mut self, memory_item: MemoryItem, embedding: Vec<f32>) -> Result<(), String> {
+
+
+        Ok(())
     }
 }
