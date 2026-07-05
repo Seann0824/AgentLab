@@ -17,14 +17,15 @@ impl PerceptualMemory {
     }
 }
 
+#[async_trait::async_trait]
 impl Memory for PerceptualMemory {
-    fn add(&mut self, memory_item: MemoryItem) -> String {
+    async fn add(&mut self, memory_item: MemoryItem) -> String {
         let id = memory_item.id.clone();
         self.memories.push(memory_item);
         id
     }
 
-    fn retrieve(&mut self, query: &String, limit: Option<usize>, _kwargs: Option<Value>) -> Vec<MemoryItem> {
+    async fn retrieve(&mut self, query: &String, limit: Option<usize>, _kwargs: Option<Value>) -> Vec<MemoryItem> {
         let limit = limit.unwrap_or(5);
         let query_lower = query.to_lowercase();
         let query_words: std::collections::HashSet<&str> = query_lower.split_whitespace().collect();

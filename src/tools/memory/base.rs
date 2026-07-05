@@ -1,11 +1,10 @@
 use std::env;
 use std::sync::Arc;
+use chrono::Local;
 use qdrant_client::qdrant::qdrant_client::QdrantClient;
 use sqlx::PgPool;
 use serde_json::{json, Value};
-use qdrant_client::{Qdrant, Payload};
-use qdrant_client::qdrant::{CreateCollectionBuilder, Distance, VectorParamsBuilder, PointStruct, DocumentBuilder, UpsertPointsBuilder, QueryPointsBuilder, Query};
-
+use pgvector::Vector;
 use crate::tools::memory::embedder::{self, Embedder, OllamaEmbedder};
 
 #[derive(Clone)]
@@ -16,13 +15,37 @@ pub struct MemoryItem {
     pub content: String,
     pub timestamp: i64,
     pub importance: f64,
+    pub session_id: String,
     pub metadata: serde_json::Value,
 }
 
+impl MemoryItem {
+    pub fn new(
+        user_id: String,
+        memory_type: String,
+        content: String,
+        importance: f64,
+        metadata: serde_json::Value,
+    ) -> Self {
+        let id = uuid::Uuid::new_v4().to_string();
+        Self {
+            id,
+            user_id,
+            memory_type,
+            content,
+            session_id: "default_session".into(), // todo: 目前先设置成默认session，等后续多session场景在拓展。
+            timestamp: Local::now().timestamp(),
+            importance,
+            metadata,
+        }
+    }
+}
 
+
+#[async_trait::async_trait]
 pub trait Memory: Send + Sync {
-    fn add(&mut self, memory_item: MemoryItem) -> String;
-    fn retrieve(&mut self, query: &String, limit: Option<usize>, kwargs: Option<Value>) -> Vec<MemoryItem>;
+    async fn add(&mut self, memory_item: MemoryItem) -> String;
+    async fn retrieve(&mut self, query: &String, limit: Option<usize>, kwargs: Option<Value>) -> Vec<MemoryItem>;
 }
 
 
@@ -78,9 +101,34 @@ impl MemoryStore {
         }
     }
 
-    pub fn add(&mut self, memory_item: MemoryItem, embedding: Vec<f32>) -> Result<(), String> {
+    pub async fn add(&mut self, memory_item: MemoryItem) -> Result<(), String> {
+        // 1. 计算 embedding                                                                                                                                                                                                      
+        let embedding = self.embedder                                                                                                                                                                                             
+            .encode(&memory_item.content)                                                                                                                                                                                         
+            .await                                                                                                                                                                                                                
+            .expect("[MemoryStore] embedding calc failed");        
+        
+        let pg_vector = Vector::from(embedding);  
 
-
+        sqlx::query(r#"
+            INSERT INTO memories (                                                                                                                                                                                               
+                memory_id, user_id, memory_type, content, embedding,                                                                                                                                                              
+                importance, timestamp, session_id, properties                                                                                                                                                                     
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        "#)
+            .bind(&memory_item.id)                                                                                                                                                                                                    
+            .bind(&memory_item.user_id)                                                                                                                                                                                               
+            .bind(&memory_item.memory_type)                                                                                                                                                                                           
+            .bind(&memory_item.content)                                                                                                                                                                                               
+            .bind(pg_vector)                                                                                                                                                                                                          
+            .bind(memory_item.importance as f32)                                                                                                                                                                                      
+            .bind(memory_item.timestamp)                                                                                                                                                                                              
+            .bind(memory_item.session_id)                                                                                                                                                                                  
+            .bind(&memory_item.metadata)                                                                                                                                                                                              
+            .execute(&self.db)                                                                                                                                                                                                        
+            .await       
+            .expect("[MemoryStore] insert failed");                                                                                                                                                                                                     
+                                                                                                                                                                                                                                   
         Ok(())
     }
 }

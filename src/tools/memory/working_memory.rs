@@ -162,8 +162,9 @@ impl WorkingMemory {
 }
 
 
+#[async_trait::async_trait]
 impl Memory for WorkingMemory {
-    fn add(&mut self, memory_item: MemoryItem) -> String {
+    async fn add(&mut self, memory_item: MemoryItem) -> String {
         self.expire_old_memories();
 
         if self.memories.len() >= self.max_capacity {
@@ -176,7 +177,7 @@ impl Memory for WorkingMemory {
         return memory_id;
     }
 
-    fn retrieve(&mut self, query: &String, limit: Option<usize>, kwargs: Option<Value>) -> Vec<MemoryItem> {
+    async fn retrieve(&mut self, query: &String, limit: Option<usize>, kwargs: Option<Value>) -> Vec<MemoryItem> {
         let limit = limit.unwrap_or(5);
 
         self.expire_old_memories();

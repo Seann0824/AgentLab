@@ -1,4 +1,5 @@
-use std::{collections::HashMap, sync::{Arc, Mutex}};
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::Mutex;
 use chrono::Local;
 use openai_api_rs::v1::types;
 use serde_json::Value;
@@ -35,7 +36,7 @@ impl MemoryTool {
         }
     }
 
-    fn add_memory(
+    async fn add_memory(
         &self,
         content: String,
         memory_type: String,
@@ -45,7 +46,7 @@ impl MemoryTool {
         metadata: impl Into<Option<Value>>,
     ) -> String {
         let importance = importance.unwrap_or(0.5f32);
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().await;
 
         // 没有则分配会话id
         if inner.current_session_id.is_none() {
@@ -67,7 +68,7 @@ impl MemoryTool {
             importance,
             metadata,
             false,
-        );
+        ).await;
 
         match memory_id {
             Ok(id) => format!("记忆已添加 （ID: {}）", id),
@@ -75,7 +76,7 @@ impl MemoryTool {
         }
     }
 
-    fn search_memory(
+    async fn search_memory(
         &self,
         query: String,
         limit: Option<usize>,
@@ -91,13 +92,13 @@ impl MemoryTool {
             memory_types.push(memory_type.unwrap().clone());
         }
 
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().await;
         let results = inner.memory_manager.retrieve_memories(
             &query,
             limit,
             &memory_types,
             min_importance,
-        );
+        ).await;
 
         match results {
             Ok(results) => {
@@ -133,10 +134,10 @@ impl MemoryTool {
         }
     }
 
-    fn fortget(&self, strategy: String, threshold: Option<f32>, max_age_days: Option<usize>) -> String {
+    async fn fortget(&self, strategy: String, threshold: Option<f32>, max_age_days: Option<usize>) -> String {
         let threshold = threshold.unwrap_or(0.1);
         let max_age_days = max_age_days.unwrap_or(30);
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().await;
         match inner.memory_manager.forget(&strategy, threshold, max_age_days) {
             Ok(count) => format!("已遗忘 {} 条记忆（策略: {}）", count, strategy),
             Err(msg) => format!("遗忘记忆失败: {}", msg),
@@ -144,11 +145,11 @@ impl MemoryTool {
     }
 
     // 短期记忆提升为长期记忆
-    fn consolidate(&self, from_type: Option<String>, to_type: Option<String>, importance_threshold: Option<f32>) -> String {
+    async fn consolidate(&self, from_type: Option<String>, to_type: Option<String>, importance_threshold: Option<f32>) -> String {
         let from_type = from_type.unwrap_or("working".to_string());
         let to_type = to_type.unwrap_or("episodic".to_string());
         let importance_threshold = importance_threshold.unwrap_or(0.7);
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().await;
         match inner.memory_manager.consolidate_memories(&from_type, &to_type, importance_threshold) {
             Ok(count) => format!("已整合 {} 条记忆为长期记忆（{} → {}，阈值={}）", count, from_type, to_type, importance_threshold),
             Err(msg) => format!("整合记忆失败: {}", msg)
@@ -244,7 +245,7 @@ impl Tool for MemoryTool {
                 }
                 let memory_type = args["memory_type"].as_str().unwrap_or("working").to_string();
                 let importance = args["importance"].as_f64().map(|v| v as f32);
-                Ok(self.add_memory(content, memory_type, importance, None, None, None))
+                Ok(self.add_memory(content, memory_type, importance, None, None, None).await)
             }
             "search" => {
                 let query = args["query"].as_str().unwrap_or("").to_string();
@@ -254,7 +255,7 @@ impl Tool for MemoryTool {
                 let limit = args["limit"].as_u64().map(|v| v as usize);
                 let memory_type = args["memory_type"].as_str().map(|v| v.to_string());
                 let memory_types = memory_type.map(|t| vec![t]);
-                Ok(self.search_memory(query, limit, memory_types, None, None))
+                Ok(self.search_memory(query, limit, memory_types, None, None).await)
             }
             _ => Err(format!("不支持的 action: {}", action)),
         }
@@ -314,7 +315,7 @@ impl MemoryManager {
         }
     }
 
-    pub fn add_memory(
+    pub async fn add_memory(
         &mut self,
         content: String,
         memory_type: String,
@@ -323,15 +324,13 @@ impl MemoryManager {
         auto_classify: bool,
     ) -> Result<String, String> {
         let memory_id = format!("mem_{}", Local::now().timestamp_millis());
-        let memory_item = MemoryItem {
-            id: memory_id.clone(),
-            user_id: self.user_id.clone(),
-            memory_type: memory_type.clone(),
+        let memory_item = MemoryItem::new(
+            self.user_id.clone(),
+            memory_type.clone(),
             content,
-            timestamp: Local::now().timestamp(),
-            importance: importance as f64,
-            metadata,
-        };
+            importance as f64,
+            metadata
+        );
 
         let target_type = if auto_classify {
             // 简单自动分类：后续可扩展为根据内容选择最合适的记忆类型
@@ -344,11 +343,11 @@ impl MemoryManager {
             return Err(format!("记忆类型 {} 不存在", target_type));
         };
 
-        memory_store.add(memory_item);
+        memory_store.add(memory_item).await;
         Ok(memory_id)
     }
 
-    pub fn retrieve_memories(
+    pub async fn retrieve_memories(
         &mut self,
         query: &str,
         limit: usize,
@@ -368,7 +367,7 @@ impl MemoryManager {
             let Some(memory_store) = self.memory_types.get_mut(memory_type) else {
                 continue;
             };
-            let results = memory_store.retrieve(&query_owned, Some(limit), None);
+            let results = memory_store.retrieve(&query_owned, Some(limit), None).await;
             all_results.extend(results);
         }
 
