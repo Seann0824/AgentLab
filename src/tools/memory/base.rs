@@ -1,11 +1,10 @@
 use std::env;
 use std::sync::Arc;
 use chrono::Local;
-use qdrant_client::qdrant::qdrant_client::QdrantClient;
 use sqlx::PgPool;
-use serde_json::{json, Value};
+use serde_json::Value;
 use pgvector::Vector;
-use crate::tools::memory::embedder::{self, Embedder, OllamaEmbedder};
+use crate::tools::memory::embedder::Embedder;
 
 #[derive(Clone)]
 pub struct MemoryItem {
@@ -121,7 +120,7 @@ impl MemoryStore {
             .bind(&memory_item.memory_type)                                                                                                                                                                                           
             .bind(&memory_item.content)                                                                                                                                                                                               
             .bind(pg_vector)                                                                                                                                                                                                          
-            .bind(memory_item.importance as f32)                                                                                                                                                                                      
+            .bind(memory_item.importance)                                                                                                                                                                                      
             .bind(memory_item.timestamp)                                                                                                                                                                                              
             .bind(memory_item.session_id)                                                                                                                                                                                  
             .bind(&memory_item.metadata)                                                                                                                                                                                              
@@ -130,5 +129,68 @@ impl MemoryStore {
             .expect("[MemoryStore] insert failed");                                                                                                                                                                                                     
                                                                                                                                                                                                                                    
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use super::*;
+    use crate::tools::memory::embedder::Embedder;
+
+    struct MockEmbedder;
+
+    #[async_trait::async_trait]
+    impl Embedder for MockEmbedder {
+        async fn encode(&self, _text: &str) -> Result<Vec<f32>, String> {
+            // 表 memories.embedding 要求 768 维
+            Ok(vec![0.1f32; 768])
+        }
+    }
+
+    #[tokio::test]
+    async fn test_memory_store_add() {
+        dotenvy::dotenv().ok();
+        let db = get_db_client().await;
+        let config = MemoryConfig::new();
+        let embedder: Arc<dyn Embedder + Send + Sync> = Arc::new(MockEmbedder);
+        let mut store = MemoryStore::new(config, db.clone(), embedder);
+
+        let memory_item = MemoryItem::new(
+            "test_user".to_string(),
+            "episodic".to_string(),
+            "test content for MemoryStore::add".to_string(),
+            0.8,
+            serde_json::json!({"key": "value"}),
+        );
+
+        // 清理可能遗留的测试数据
+        sqlx::query("DELETE FROM memories WHERE memory_id = $1")
+            .bind(&memory_item.id)
+            .execute(&db)
+            .await
+            .unwrap();
+
+        let result = store.add(memory_item.clone()).await;
+        assert!(result.is_ok(), "MemoryStore::add should return Ok");
+
+        let row: (String, String, f64) = sqlx::query_as(
+            "SELECT user_id, content, importance FROM memories WHERE memory_id = $1"
+        )
+        .bind(&memory_item.id)
+        .fetch_one(&db)
+        .await
+        .expect("inserted memory should be found in database");
+
+        assert_eq!(row.0, memory_item.user_id);
+        assert_eq!(row.1, memory_item.content);
+        assert!((row.2 - memory_item.importance).abs() < f64::EPSILON);
+
+        // 清理测试数据
+        sqlx::query("DELETE FROM memories WHERE memory_id = $1")
+            .bind(&memory_item.id)
+            .execute(&db)
+            .await
+            .unwrap();
     }
 }
