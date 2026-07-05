@@ -3,8 +3,7 @@ use chrono::Local;
 use scirs2_text::vectorize::{TfidfVectorizer, Vectorizer};
 use crate::tools::memory;
 
-use super::base::{MemoryConfig, MemoryStore, MemoryItem, Memory};
-use serde_json::Value;
+use super::base::{MemoryConfig, MemoryStore, MemoryItem, Memory, RetrieveRequest};
 
 pub struct WorkingMemory {
     config: MemoryConfig,
@@ -177,19 +176,19 @@ impl Memory for WorkingMemory {
         return memory_id;
     }
 
-    async fn retrieve(&mut self, query: &String, limit: Option<usize>, kwargs: Option<Value>) -> Vec<MemoryItem> {
-        let limit = limit.unwrap_or(5);
+    async fn retrieve(&mut self, request: RetrieveRequest) -> Vec<MemoryItem> {
+        let limit = request.limit.unwrap_or(5);
 
         self.expire_old_memories();
         
         // TF-IDF 向量检索
-        let vector_scores = self.try_tfidf_search(query);
+        let vector_scores = self.try_tfidf_search(&request.query);
 
         // 计算综合分数
         let mut scored_memories = vec![];
         for memory in self.memories.iter() {
             let vector_score = vector_scores.get(&memory.id).copied().unwrap_or(0.0);
-            let keyword_score = self.calculate_keyword_score(query, &memory.content);
+            let keyword_score = self.calculate_keyword_score(&request.query, &memory.content);
             
             // 混合评分
             let base_relevance = {

@@ -1,5 +1,4 @@
-use super::base::{MemoryConfig, MemoryStore, MemoryItem, Memory};
-use serde_json::Value;
+use super::base::{MemoryConfig, MemoryStore, MemoryItem, Memory, RetrieveRequest};
 
 pub struct SemanticMemory {
     store: MemoryStore,
@@ -25,9 +24,9 @@ impl Memory for SemanticMemory {
         id
     }
 
-    async fn retrieve(&mut self, query: &String, limit: Option<usize>, _kwargs: Option<Value>) -> Vec<MemoryItem> {
-        let limit = limit.unwrap_or(5);
-        let query_lower = query.to_lowercase();
+    async fn retrieve(&mut self, request: RetrieveRequest) -> Vec<MemoryItem> {
+        let limit = request.limit.unwrap_or(5);
+        let query_lower = request.query.to_lowercase();
         let query_words: std::collections::HashSet<&str> = query_lower.split_whitespace().collect();
 
         let mut scored: Vec<(f64, &MemoryItem)> = self.memories.iter()

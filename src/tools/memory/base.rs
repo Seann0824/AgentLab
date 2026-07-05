@@ -1,12 +1,12 @@
 use std::env;
 use std::sync::Arc;
 use chrono::Local;
-use sqlx::PgPool;
+use sqlx::{PgPool, FromRow, Row, postgres::PgRow};
 use serde_json::Value;
 use pgvector::Vector;
 use crate::tools::memory::embedder::Embedder;
 
-#[derive(Clone)]
+#[derive(Clone, FromRow)]
 pub struct MemoryItem {
     pub id: String,
     pub user_id: String,
@@ -14,7 +14,7 @@ pub struct MemoryItem {
     pub content: String,
     pub timestamp: i64,
     pub importance: f64,
-    pub session_id: String,
+    pub session_id: Option<String>,
     pub metadata: serde_json::Value,
 }
 
@@ -32,7 +32,7 @@ impl MemoryItem {
             user_id,
             memory_type,
             content,
-            session_id: "default_session".into(), // todo: 目前先设置成默认session，等后续多session场景在拓展。
+            session_id: Some("default_session".into()), // todo: 目前先设置成默认session，等后续多session场景在拓展。
             timestamp: Local::now().timestamp(),
             importance,
             metadata,
@@ -41,10 +41,20 @@ impl MemoryItem {
 }
 
 
+#[derive(Clone, Default, Debug)]
+pub struct RetrieveRequest {
+    pub query: String,
+    pub limit: Option<usize>,
+    pub user_id: Option<String>,
+    pub session_id: Option<String>,
+    pub time_range: Option<(i64, i64)>,
+    pub importance_threshold: Option<f64>,
+}
+
 #[async_trait::async_trait]
 pub trait Memory: Send + Sync {
     async fn add(&mut self, memory_item: MemoryItem) -> String;
-    async fn retrieve(&mut self, query: &String, limit: Option<usize>, kwargs: Option<Value>) -> Vec<MemoryItem>;
+    async fn retrieve(&mut self, request: RetrieveRequest) -> Vec<MemoryItem>;
 }
 
 
@@ -129,6 +139,308 @@ impl MemoryStore {
             .expect("[MemoryStore] insert failed");                                                                                                                                                                                                     
                                                                                                                                                                                                                                    
         Ok(())
+    }
+
+    pub async fn search_similar(
+        &self,
+        query: &str,
+        memory_type: &str,
+        user_id: Option<&str>,
+        session_id: Option<&str>,
+        importance_threshold: Option<f64>,
+        time_range: Option<(i64, i64)>,
+        limit: usize,
+    ) -> Result<Vec<(f64, MemoryItem)>, String> {
+        let embedding = self.embedder
+            .encode(query)
+            .await
+            .map_err(|e| format!("[MemoryStore] embedding calc failed: {}", e))?;
+
+        let pg_vector = Vector::from(embedding);
+
+        let (start_time, end_time) = match time_range {
+            Some((start, end)) => (Some(start), Some(end)),
+            None => (None, None),
+        };
+
+        let rows = sqlx::query(r#"
+            SELECT
+                memory_id, user_id, memory_type, content, importance,
+                timestamp, session_id, properties,
+                embedding <=> $1 AS score
+            FROM memories
+            WHERE memory_type = $2
+              AND (user_id = $3 OR $3 IS NULL)
+              AND (session_id = $4 OR $4 IS NULL)
+              AND (importance >= $5 OR $5 IS NULL)
+              AND (timestamp >= $6 OR $6 IS NULL)
+              AND (timestamp <= $7 OR $7 IS NULL)
+            ORDER BY embedding <=> $1
+            LIMIT $8
+        "#)
+            .bind(pg_vector)
+            .bind(memory_type)
+            .bind(user_id)
+            .bind(session_id)
+            .bind(importance_threshold)
+            .bind(start_time)
+            .bind(end_time)
+            .bind(limit as i64)
+            .fetch_all(&self.db)
+            .await
+            .map_err(|e| format!("[MemoryStore] search failed: {}", e))?;
+
+        let results: Vec<(f64, MemoryItem)> = rows
+            .into_iter()
+            .map(|row| {
+                let memory_item = MemoryItem {
+                    id: row.get("memory_id"),
+                    user_id: row.get("user_id"),
+                    memory_type: row.get("memory_type"),
+                    content: row.get("content"),
+                    timestamp: row.get("timestamp"),
+                    importance: row.get::<f64, _>("importance"),
+                    session_id: row.get("session_id"),
+                    metadata: row.get::<Option<Value>, _>("properties")
+                        .unwrap_or_else(|| Value::Object(Default::default())),
+                };
+                let score: f64 = row.get("score");
+                (score, memory_item)
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    pub async fn keyword_search(
+        &self,
+        query: &str,
+        memory_type: &str,
+        user_id: Option<&str>,
+        session_id: Option<&str>,
+        importance_threshold: Option<f64>,
+        time_range: Option<(i64, i64)>,
+    ) -> Result<Vec<MemoryItem>, String> {
+        let pattern = format!("%{}%", query);
+
+        let (start_time, end_time) = match time_range {
+            Some((start, end)) => (Some(start), Some(end)),
+            None => (None, None),
+        };
+
+        let rows = sqlx::query(r#"
+            SELECT
+                memory_id, user_id, memory_type, content, importance,
+                timestamp, session_id, properties
+            FROM memories
+            WHERE memory_type = $1
+              AND content ILIKE $2
+              AND (user_id = $3 OR $3 IS NULL)
+              AND (session_id = $4 OR $4 IS NULL)
+              AND (importance >= $5 OR $5 IS NULL)
+              AND (timestamp >= $6 OR $6 IS NULL)
+              AND (timestamp <= $7 OR $7 IS NULL)
+        "#)
+            .bind(memory_type)
+            .bind(pattern)
+            .bind(user_id)
+            .bind(session_id)
+            .bind(importance_threshold)
+            .bind(start_time)
+            .bind(end_time)
+            .fetch_all(&self.db)
+            .await
+            .map_err(|e| format!("[MemoryStore] keyword search failed: {}", e))?;
+
+        let results: Vec<MemoryItem> = rows
+            .into_iter()
+            .map(|row| MemoryItem {
+                id: row.get("memory_id"),
+                user_id: row.get("user_id"),
+                memory_type: row.get("memory_type"),
+                content: row.get("content"),
+                timestamp: row.get("timestamp"),
+                importance: row.get::<f64, _>("importance"),
+                session_id: row.get("session_id"),
+                metadata: row.get::<Option<Value>, _>("properties")
+                    .unwrap_or_else(|| Value::Object(Default::default())),
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    pub async fn get(&self, memory_id: &str) -> Result<Option<MemoryItem>, String> {
+        let row = sqlx::query(r#"
+            SELECT
+                memory_id, user_id, memory_type, content, importance,
+                timestamp, session_id, properties
+            FROM memories
+            WHERE memory_id = $1
+        "#)
+            .bind(memory_id)
+            .fetch_optional(&self.db)
+            .await
+            .map_err(|e| format!("[MemoryStore] get failed: {}", e))?;
+
+        Ok(row.map(|r| Self::row_to_memory_item(&r)))
+    }
+
+    pub async fn update(
+        &self,
+        memory_id: &str,
+        content: Option<&str>,
+        importance: Option<f64>,
+        metadata: Option<&Value>,
+    ) -> Result<bool, String> {
+        // 如果内容变更，需要重新计算 embedding
+        let new_embedding = match content {
+            Some(text) => {
+                let embedding = self.embedder
+                    .encode(text)
+                    .await
+                    .map_err(|e| format!("[MemoryStore] update embedding failed: {}", e))?;
+                Some(Vector::from(embedding))
+            }
+            None => None,
+        };
+
+        let updated = sqlx::query(r#"
+            UPDATE memories
+            SET content = COALESCE($2, content),
+                importance = COALESCE($3, importance),
+                properties = COALESCE($4, properties),
+                embedding = COALESCE($5, embedding)
+            WHERE memory_id = $1
+        "#)
+            .bind(memory_id)
+            .bind(content)
+            .bind(importance)
+            .bind(metadata)
+            .bind(new_embedding)
+            .execute(&self.db)
+            .await
+            .map_err(|e| format!("[MemoryStore] update failed: {}", e))?
+            .rows_affected();
+
+        Ok(updated > 0)
+    }
+
+    pub async fn delete(&self, memory_id: &str) -> Result<bool, String> {
+        let deleted = sqlx::query("DELETE FROM memories WHERE memory_id = $1")
+            .bind(memory_id)
+            .execute(&self.db)
+            .await
+            .map_err(|e| format!("[MemoryStore] delete failed: {}", e))?
+            .rows_affected();
+
+        Ok(deleted > 0)
+    }
+
+    pub async fn list_by_type(
+        &self,
+        memory_type: &str,
+        user_id: Option<&str>,
+        limit: Option<i64>,
+    ) -> Result<Vec<MemoryItem>, String> {
+        let limit = limit.unwrap_or(10_000);
+
+        let rows = sqlx::query(r#"
+            SELECT
+                memory_id, user_id, memory_type, content, importance,
+                timestamp, session_id, properties
+            FROM memories
+            WHERE memory_type = $1
+              AND (user_id = $2 OR $2 IS NULL)
+            ORDER BY timestamp DESC
+            LIMIT $3
+        "#)
+            .bind(memory_type)
+            .bind(user_id)
+            .bind(limit)
+            .fetch_all(&self.db)
+            .await
+            .map_err(|e| format!("[MemoryStore] list failed: {}", e))?;
+
+        Ok(rows.iter().map(Self::row_to_memory_item).collect())
+    }
+
+    pub async fn clear_by_type(&self, memory_type: &str) -> Result<u64, String> {
+        let deleted = sqlx::query("DELETE FROM memories WHERE memory_type = $1")
+            .bind(memory_type)
+            .execute(&self.db)
+            .await
+            .map_err(|e| format!("[MemoryStore] clear failed: {}", e))?
+            .rows_affected();
+
+        Ok(deleted)
+    }
+
+    pub async fn count_by_type(
+        &self,
+        memory_type: &str,
+        user_id: Option<&str>,
+    ) -> Result<i64, String> {
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM memories WHERE memory_type = $1 AND (user_id = $2 OR $2 IS NULL)"
+        )
+            .bind(memory_type)
+            .bind(user_id)
+            .fetch_one(&self.db)
+            .await
+            .map_err(|e| format!("[MemoryStore] count failed: {}", e))?;
+
+        Ok(count.0)
+    }
+
+    pub async fn avg_importance_by_type(
+        &self,
+        memory_type: &str,
+        user_id: Option<&str>,
+    ) -> Result<Option<f64>, String> {
+        let avg: (Option<f64>,) = sqlx::query_as(
+            "SELECT AVG(importance) FROM memories WHERE memory_type = $1 AND (user_id = $2 OR $2 IS NULL)"
+        )
+            .bind(memory_type)
+            .bind(user_id)
+            .fetch_one(&self.db)
+            .await
+            .map_err(|e| format!("[MemoryStore] avg importance failed: {}", e))?;
+
+        Ok(avg.0)
+    }
+
+    pub async fn time_span_days_by_type(
+        &self,
+        memory_type: &str,
+        user_id: Option<&str>,
+    ) -> Result<Option<f64>, String> {
+        let span: (Option<f64>,) = sqlx::query_as(
+            "SELECT EXTRACT(EPOCH FROM (MAX(to_timestamp(timestamp)) - MIN(to_timestamp(timestamp)))) / 86400.0
+             FROM memories
+             WHERE memory_type = $1 AND (user_id = $2 OR $2 IS NULL)"
+        )
+            .bind(memory_type)
+            .bind(user_id)
+            .fetch_one(&self.db)
+            .await
+            .map_err(|e| format!("[MemoryStore] time span failed: {}", e))?;
+
+        Ok(span.0)
+    }
+
+    fn row_to_memory_item(row: &PgRow) -> MemoryItem {
+        MemoryItem {
+            id: row.get("memory_id"),
+            user_id: row.get("user_id"),
+            memory_type: row.get("memory_type"),
+            content: row.get("content"),
+            timestamp: row.get("timestamp"),
+            importance: row.get::<f64, _>("importance"),
+            session_id: row.get("session_id"),
+            metadata: row.get::<Option<Value>, _>("properties")
+                .unwrap_or_else(|| Value::Object(Default::default())),
+        }
     }
 }
 

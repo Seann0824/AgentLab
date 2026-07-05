@@ -11,7 +11,7 @@ mod working_memory;
 mod episodic_memory;
 mod semantic_memory;
 mod perceptual_memory;
-use base::{Memory, MemoryItem, MemoryConfig, MemoryRetriever, MemoryStore, get_db_client};
+use base::{Memory, MemoryItem, MemoryConfig, MemoryRetriever, MemoryStore, RetrieveRequest, get_db_client};
 use working_memory::WorkingMemory;
 use episodic_memory::EpisodicMemory;
 use semantic_memory::SemanticMemory;
@@ -367,7 +367,13 @@ impl MemoryManager {
             let Some(memory_store) = self.memory_types.get_mut(memory_type) else {
                 continue;
             };
-            let results = memory_store.retrieve(&query_owned, Some(limit), None).await;
+            let request = RetrieveRequest {
+                query: query_owned.clone(),
+                limit: Some(limit),
+                importance_threshold: Some(min_importance as f64),
+                ..Default::default()
+            };
+            let results = memory_store.retrieve(request).await;
             all_results.extend(results);
         }
 
