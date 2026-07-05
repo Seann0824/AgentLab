@@ -1,17 +1,15 @@
 use super::base::{Memory, MemoryConfig, MemoryItem, RetrieveRequest};
-use super::storage::MemoryStore;
 
 pub struct SemanticMemory {
-    store: MemoryStore,
+    #[allow(dead_code)]
     config: MemoryConfig,
     memories: Vec<MemoryItem>,
 }
 
 impl SemanticMemory {
-    pub fn new(config: MemoryConfig, store: MemoryStore) -> Self {
+    pub fn new(config: MemoryConfig) -> Self {
         Self {
             config,
-            store,
             memories: vec![],
         }
     }
@@ -28,15 +26,19 @@ impl Memory for SemanticMemory {
     async fn retrieve(&mut self, request: RetrieveRequest) -> Vec<MemoryItem> {
         let limit = request.limit.unwrap_or(5);
         let query_lower = request.query.to_lowercase();
-        let query_words: std::collections::HashSet<&str> = query_lower.split_whitespace().collect();
+        let query_words: std::collections::HashSet<&str> =
+            query_lower.split_whitespace().collect();
 
-        let mut scored: Vec<(f64, &MemoryItem)> = self.memories.iter()
+        let mut scored: Vec<(f64, &MemoryItem)> = self
+            .memories
+            .iter()
             .map(|m| {
                 let content_lower = m.content.to_lowercase();
                 let score = if content_lower.contains(&query_lower) {
                     1.0
                 } else {
-                    let content_words: std::collections::HashSet<&str> = content_lower.split_whitespace().collect();
+                    let content_words: std::collections::HashSet<&str> =
+                        content_lower.split_whitespace().collect();
                     let intersection = query_words.intersection(&content_words).count();
                     if intersection > 0 {
                         intersection as f64 / query_words.union(&content_words).count() as f64
@@ -50,6 +52,12 @@ impl Memory for SemanticMemory {
             .collect();
 
         scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-        scored.into_iter().take(limit).map(|(_, m)| m.clone()).collect()
+        scored
+            .into_iter()
+            .take(limit)
+            .map(|(_, m)| m.clone())
+            .collect()
     }
 }
+
+

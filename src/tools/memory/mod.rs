@@ -5,14 +5,15 @@ use std::{collections::HashMap, env, sync::Arc};
 use tokio::sync::Mutex;
 
 use crate::tools::{memory::storage::OllamaEmbedder, types::Tool};
-mod base;
-mod episodic_memory;
+pub mod base;
+pub mod episodic_memory;
 pub mod extractor;
 mod perceptual_memory;
-mod semantic_memory;
+pub mod semantic_memory;
 pub mod storage;
 mod working_memory;
-use base::{Memory, MemoryConfig, MemoryItem, RetrieveRequest, get_db_client};
+pub use base::{Memory, MemoryConfig, MemoryItem, RetrieveRequest};
+use base::{Memory as MemoryTrait, get_db_client};
 use episodic_memory::EpisodicMemory;
 use extractor::EntityExtractorAgent;
 use perceptual_memory::PerceptualMemory;
@@ -509,7 +510,7 @@ pub struct MemoryManager {
     config: MemoryConfig,
     user_id: String,
     store: MemoryStore,
-    memory_types: HashMap<String, Box<dyn Memory>>,
+    memory_types: HashMap<String, Box<dyn MemoryTrait>>,
     extractor: EntityExtractorAgent,
 }
 
@@ -544,7 +545,7 @@ impl MemoryManager {
         let store = MemoryStore::new(config.clone(), pg_store, neo4j_store, Arc::new(embedder));
         let extractor = EntityExtractorAgent::from_env();
 
-        let mut memory_types: HashMap<String, Box<dyn Memory>> = HashMap::new();
+        let mut memory_types: HashMap<String, Box<dyn MemoryTrait>> = HashMap::new();
 
         if enable_working {
             memory_types.insert(
@@ -561,7 +562,7 @@ impl MemoryManager {
         if enable_semantic {
             memory_types.insert(
                 "semantic".into(),
-                Box::new(SemanticMemory::new(config.clone(), store.clone())),
+                Box::new(SemanticMemory::new(config.clone())),
             );
         }
         if enable_perceptual {
