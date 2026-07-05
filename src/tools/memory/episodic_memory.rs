@@ -238,3 +238,95 @@ impl Memory for EpisodicMemory {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::tools::memory::base::{get_db_client, MemoryConfig, MemoryStore};
+    use crate::tools::memory::embedder::Embedder;
+
+    struct MockEmbedder;
+
+    #[async_trait::async_trait]
+    impl Embedder for MockEmbedder {
+        async fn encode(&self, _text: &str) -> Result<Vec<f32>, String> {
+            Ok(vec![0.1f32; 768])
+        }
+    }
+
+    async fn create_test_store() -> MemoryStore {
+        dotenvy::dotenv().ok();
+        let db = get_db_client().await;
+        let config = MemoryConfig::new();
+        let embedder: Arc<dyn Embedder + Send + Sync> = Arc::new(MockEmbedder);
+        MemoryStore::new(config, db, embedder)
+    }
+
+    async fn cleanup_episodes(store: &MemoryStore) {
+        let _ = store.clear_by_type("episodic").await;
+    }
+
+    #[tokio::test]
+    async fn test_episodic_memory_add_and_retrieve() {
+        let store = create_test_store().await;
+        cleanup_episodes(&store).await;
+
+        let mut episodic = EpisodicMemory::new(MemoryConfig::new(), store.clone());
+
+        let item1 = MemoryItem::new(
+            "test_user".to_string(),
+            "episodic".to_string(),
+            "上周去了杭州西湖，天气很好".to_string(),
+            0.8,
+            serde_json::json!({"session_id": "session_1"}),
+        );
+        let item2 = MemoryItem::new(
+            "test_user".to_string(),
+            "episodic".to_string(),
+            "昨天和同事讨论了 Q4 产品规划".to_string(),
+            0.7,
+            serde_json::json!({"session_id": "session_1"}),
+        );
+        let item3 = MemoryItem::new(
+            "test_user".to_string(),
+            "episodic".to_string(),
+            " unrelated semantic fact".to_string(),
+            0.5,
+            serde_json::json!({"session_id": "session_2"}),
+        );
+
+        let id1 = episodic.add(item1).await;
+        let id2 = episodic.add(item2).await;
+        let _id3 = episodic.add(item3).await;
+
+        let request = RetrieveRequest {
+            query: "西湖".to_string(),
+            limit: Some(5),
+            user_id: Some("test_user".to_string()),
+            ..Default::default()
+        };
+        let results = episodic.retrieve(request).await;
+
+        assert!(!results.is_empty(), "应该能检索到西湖相关记忆");
+        assert!(
+            results.iter().any(|item| item.id == id1),
+            "检索结果应包含杭州西湖那条记忆"
+        );
+
+        let request2 = RetrieveRequest {
+            query: "Q4 产品规划".to_string(),
+            limit: Some(5),
+            user_id: Some("test_user".to_string()),
+            ..Default::default()
+        };
+        let results2 = episodic.retrieve(request2).await;
+        assert!(
+            results2.iter().any(|item| item.id == id2),
+            "检索结果应包含 Q4 产品规划那条记忆"
+        );
+
+        cleanup_episodes(&store).await;
+    }
+}
