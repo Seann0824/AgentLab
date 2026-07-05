@@ -350,6 +350,47 @@ impl Neo4jStore {
         Ok(())
     }
 
+    /// 删除某一类型（memory_type）的所有记忆引用图。
+    pub async fn delete_reference_graph_by_memory_type(
+        &self,
+        memory_type: impl Into<String>,
+    ) -> Result<(), String> {
+        let memory_type = memory_type.into();
+
+        // 1) 先删除该类型下所有 memory_id 关联的 RELATED_TO 关系。
+        //    HAS_ENTITY 关系会在 DETACH DELETE m 时一并删除。
+        self.graph
+            .run(
+                neo4rs::query(
+                    r#"
+                    MATCH (m:Memory {memory_type: $memory_type})
+                    MATCH ()-[r:RELATED_TO]->()
+                    WHERE r.memory_id = m.memory_id
+                    DELETE r
+                    "#,
+                )
+                .param("memory_type", memory_type.clone()),
+            )
+            .await
+            .map_err(|e| format!("[Neo4jStore] delete RELATED_TO by memory_type failed: {}", e))?;
+
+        // 2) 删除该类型的所有 Memory 节点（连带 HAS_ENTITY 关系）。
+        self.graph
+            .run(
+                neo4rs::query(
+                    r#"
+                    MATCH (m:Memory {memory_type: $memory_type})
+                    DETACH DELETE m
+                    "#,
+                )
+                .param("memory_type", memory_type),
+            )
+            .await
+            .map_err(|e| format!("[Neo4jStore] delete Memory by memory_type failed: {}", e))?;
+
+        Ok(())
+    }
+
     /// 删除某条记忆在 Neo4j 中的引用图（仅按 memory_id）。
     pub async fn delete_reference_graph_by_memory(
         &self,

@@ -247,7 +247,13 @@ impl MemoryStore {
     }
 
     pub async fn clear_by_type(&self, memory_type: &str) -> Result<u64, String> {
-        self.pg.clear_by_type(memory_type).await
+        let count = self.pg.clear_by_type(memory_type).await?;
+        // PG 清空后，同步清空 Neo4j 中该类型的记忆引用图，避免两侧数据不一致。
+        let _ = self
+            .neo4j
+            .delete_reference_graph_by_memory_type(memory_type)
+            .await;
+        Ok(count)
     }
 
     pub async fn count_by_type(
