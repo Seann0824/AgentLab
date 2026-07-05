@@ -1,21 +1,23 @@
 use chrono::Local;
 use openai_api_rs::v1::types;
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, env, sync::Arc};
 use tokio::sync::Mutex;
 
 use crate::tools::{memory::storage::OllamaEmbedder, types::Tool};
 mod base;
-mod storage;
 mod episodic_memory;
+pub mod extractor;
 mod perceptual_memory;
 mod semantic_memory;
+pub mod storage;
 mod working_memory;
 use base::{Memory, MemoryConfig, MemoryItem, RetrieveRequest, get_db_client};
-use storage::MemoryStore;
 use episodic_memory::EpisodicMemory;
+use extractor::EntityExtractorAgent;
 use perceptual_memory::PerceptualMemory;
 use semantic_memory::SemanticMemory;
+use storage::MemoryStore;
 use working_memory::WorkingMemory;
 
 pub struct MemoryTool {
@@ -476,7 +478,10 @@ impl Tool for MemoryTool {
             }
             "forget" => {
                 let memory_type = args["memory_type"].as_str().map(|v| v.to_string());
-                let strategy = args["strategy"].as_str().unwrap_or("importance_based").to_string();
+                let strategy = args["strategy"]
+                    .as_str()
+                    .unwrap_or("importance_based")
+                    .to_string();
                 let threshold = args["threshold"].as_f64().map(|v| v as f32);
                 let max_age_days = args["max_age_days"].as_u64().map(|v| v as usize);
                 Ok(self
@@ -487,7 +492,9 @@ impl Tool for MemoryTool {
                 let from_type = args["from_type"].as_str().map(|v| v.to_string());
                 let to_type = args["to_type"].as_str().map(|v| v.to_string());
                 let importance_threshold = args["importance_threshold"].as_f64().map(|v| v as f32);
-                Ok(self.consolidate(from_type, to_type, importance_threshold).await)
+                Ok(self
+                    .consolidate(from_type, to_type, importance_threshold)
+                    .await)
             }
             "clear_all" => {
                 let memory_type = args["memory_type"].as_str().map(|v| v.to_string());
@@ -503,6 +510,7 @@ pub struct MemoryManager {
     user_id: String,
     store: MemoryStore,
     memory_types: HashMap<String, Box<dyn Memory>>,
+    extractor: EntityExtractorAgent,
 }
 
 impl MemoryManager {
@@ -522,8 +530,19 @@ impl MemoryManager {
         let enable_perceptual = enable_perceptual.unwrap_or(true);
 
         let db = get_db_client().await;
+        let pg_store = crate::tools::memory::storage::PgStore::new(config.clone(), db);
+
+        let neo4j_uri = env::var("NEO4J_URL").unwrap_or_else(|_| "neo4j://127.0.0.1:7687".into());
+        let neo4j_user = env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".into());
+        let neo4j_password = env::var("NEO4J_PASSWORD").unwrap_or_default();
+        let neo4j_store =
+            crate::tools::memory::storage::Neo4jStore::new(neo4j_uri, neo4j_user, neo4j_password)
+                .await
+                .expect("[MemoryManager] neo4j connection failed");
+
         let embedder = OllamaEmbedder::new(None, None);
-        let store = MemoryStore::new(config.clone(), db, Arc::new(embedder));
+        let store = MemoryStore::new(config.clone(), pg_store, neo4j_store, Arc::new(embedder));
+        let extractor = EntityExtractorAgent::from_env();
 
         let mut memory_types: HashMap<String, Box<dyn Memory>> = HashMap::new();
 
@@ -557,6 +576,7 @@ impl MemoryManager {
             user_id,
             store,
             memory_types,
+            extractor,
         }
     }
 
@@ -571,7 +591,7 @@ impl MemoryManager {
         let memory_item = MemoryItem::new(
             self.user_id.clone(),
             memory_type.clone(),
-            content,
+            content.clone(),
             importance as f64,
             metadata,
         );
@@ -579,16 +599,31 @@ impl MemoryManager {
 
         let target_type = if auto_classify {
             // 简单自动分类：后续可扩展为根据内容选择最合适的记忆类型
-            memory_type
+            memory_type.clone()
         } else {
-            memory_type
+            memory_type.clone()
         };
 
-        let Some(memory_store) = self.memory_types.get_mut(&target_type) else {
+        let Some(_memory_store) = self.memory_types.get_mut(&target_type) else {
             return Err(format!("记忆类型 {} 不存在", target_type));
         };
 
-        memory_store.add(memory_item).await;
+        // 内部子 agent 抽取实体/关系，抽成功且非空则写 Neo4j 引用图。
+        match self.extractor.extract(&content).await {
+            Ok((entities, relations)) if !entities.is_empty() => {
+                self.store
+                    .add_with_reference_graph(memory_item, entities, relations)
+                    .await?;
+            }
+            Ok(_) => {
+                self.store.add(memory_item).await?;
+            }
+            Err(e) => {
+                tracing::warn!("[MemoryManager] entity extraction failed: {}, fallback to pg only", e);
+                self.store.add(memory_item).await?;
+            }
+        }
+
         Ok(memory_id)
     }
 
@@ -686,7 +721,14 @@ impl MemoryManager {
             let _ = (memory_id, content, importance, metadata.clone());
             let _ = memory_store;
         }
-        self.store.update(memory_id, content, importance.map(|v| v as f64), metadata.as_ref()).await
+        self.store
+            .update(
+                memory_id,
+                content,
+                importance.map(|v| v as f64),
+                metadata.as_ref(),
+            )
+            .await
     }
 
     pub async fn remove_memory(&mut self, memory_id: &str) -> Result<bool, String> {

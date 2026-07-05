@@ -36,7 +36,7 @@ impl SimpleAgent {
     }
 
     // 开放给外部注册工具
-    pub fn add_tool(&mut self, tool: Box<dyn Tool>) {
+    pub fn add_tool(&mut self, tool: Box<dyn Tool + Send + Sync>) {
         self.tool_manager.register_tool(tool);
     }
 

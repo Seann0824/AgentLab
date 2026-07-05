@@ -83,10 +83,7 @@ impl EpisodicMemory {
         self.store.list_by_type("episodic", None, None).await
     }
 
-    pub async fn get_stats(
-        &self,
-        user_id: Option<&str>,
-    ) -> Result<Value, String> {
+    pub async fn get_stats(&self, user_id: Option<&str>) -> Result<Value, String> {
         let count = self.store.count_by_type("episodic", user_id).await?;
         let avg_importance = self
             .store
@@ -210,8 +207,7 @@ impl Memory for EpisodicMemory {
                             continue;
                         }
 
-                        let age_days =
-                            ((now_ts - memory_item.timestamp) as f64 / 86400.0).max(0.0);
+                        let age_days = ((now_ts - memory_item.timestamp) as f64 / 86400.0).max(0.0);
                         let recency_score = 1.0 / (1.0 + age_days);
                         let importance_weight = 0.8 + memory_item.importance * 0.4;
                         let keyword_score = 0.5;
@@ -245,8 +241,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::tools::memory::base::{get_db_client, MemoryConfig};
-    use crate::tools::memory::storage::{MemoryStore, embedder::Embedder};
+    use crate::tools::memory::base::{MemoryConfig, get_db_client};
+    use crate::tools::memory::storage::{MemoryStore, Neo4jStore, PgStore, embedder::Embedder};
 
     struct MockEmbedder;
 
@@ -261,8 +257,16 @@ mod tests {
         dotenvy::dotenv().ok();
         let db = get_db_client().await;
         let config = MemoryConfig::new();
+        let pg_store = PgStore::new(config.clone(), db);
+        let neo4j_store = Neo4jStore::new(
+            std::env::var("NEO4J_URL").unwrap_or_else(|_| "neo4j://127.0.0.1:7687".into()),
+            std::env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".into()),
+            std::env::var("NEO4J_PASSWORD").unwrap_or_default(),
+        )
+        .await
+        .expect("neo4j test connection failed");
         let embedder: Arc<dyn Embedder + Send + Sync> = Arc::new(MockEmbedder);
-        MemoryStore::new(config, db, embedder)
+        MemoryStore::new(config, pg_store, neo4j_store, embedder)
     }
 
     async fn cleanup_episodes(store: &MemoryStore) {

@@ -1,34 +1,29 @@
-use std::sync::Arc;
 use serde_json::Value;
 use sqlx::{postgres::PgRow, PgPool, Row};
 use pgvector::Vector;
 
 use crate::tools::memory::base::{MemoryConfig, MemoryItem};
-use crate::tools::memory::storage::embedder::Embedder;
 
 #[derive(Clone)]
-pub struct MemoryStore {
+pub struct PgStore {
+    #[allow(dead_code)]
     config: MemoryConfig,
     db: PgPool,
-    embedder: Arc<dyn Embedder + Send + Sync>,
 }
 
-impl MemoryStore {
-    pub fn new(config: MemoryConfig, db: PgPool, embedder: Arc<dyn Embedder + Send + Sync>) -> Self {
+impl PgStore {
+    pub fn new(config: MemoryConfig, db: PgPool) -> Self {
         Self {
             config,
             db,
-            embedder,
         }
     }
 
-    pub async fn add(&mut self, memory_item: MemoryItem) -> Result<(), String> {
-        // 1. 计算 embedding
-        let embedding = self.embedder
-            .encode(&memory_item.content)
-            .await
-            .expect("[MemoryStore] embedding calc failed");
-
+    pub async fn add(
+        &mut self,
+        memory_item: MemoryItem,
+        embedding: Vec<f32>,
+    ) -> Result<(), String> {
         let pg_vector = Vector::from(embedding);
 
         sqlx::query(r#"
@@ -48,14 +43,14 @@ impl MemoryStore {
             .bind(&memory_item.metadata)
             .execute(&self.db)
             .await
-            .expect("[MemoryStore] insert failed");
+            .map_err(|e| format!("[PgStore] insert failed: {}", e))?;
 
         Ok(())
     }
 
     pub async fn search_similar(
         &self,
-        query: &str,
+        pg_vector: Vector,
         memory_type: &str,
         user_id: Option<&str>,
         session_id: Option<&str>,
@@ -63,13 +58,6 @@ impl MemoryStore {
         time_range: Option<(i64, i64)>,
         limit: usize,
     ) -> Result<Vec<(f64, MemoryItem)>, String> {
-        let embedding = self.embedder
-            .encode(query)
-            .await
-            .map_err(|e| format!("[MemoryStore] embedding calc failed: {}", e))?;
-
-        let pg_vector = Vector::from(embedding);
-
         let (start_time, end_time) = match time_range {
             Some((start, end)) => (Some(start), Some(end)),
             None => (None, None),
@@ -100,7 +88,7 @@ impl MemoryStore {
             .bind(limit as i64)
             .fetch_all(&self.db)
             .await
-            .map_err(|e| format!("[MemoryStore] search failed: {}", e))?;
+            .map_err(|e| format!("[PgStore] search failed: {}", e))?;
 
         let results: Vec<(f64, MemoryItem)> = rows
             .into_iter()
@@ -162,7 +150,7 @@ impl MemoryStore {
             .bind(end_time)
             .fetch_all(&self.db)
             .await
-            .map_err(|e| format!("[MemoryStore] keyword search failed: {}", e))?;
+            .map_err(|e| format!("[PgStore] keyword search failed: {}", e))?;
 
         let results: Vec<MemoryItem> = rows
             .into_iter()
@@ -193,7 +181,7 @@ impl MemoryStore {
             .bind(memory_id)
             .fetch_optional(&self.db)
             .await
-            .map_err(|e| format!("[MemoryStore] get failed: {}", e))?;
+            .map_err(|e| format!("[PgStore] get failed: {}", e))?;
 
         Ok(row.map(|r| Self::row_to_memory_item(&r)))
     }
@@ -204,19 +192,8 @@ impl MemoryStore {
         content: Option<&str>,
         importance: Option<f64>,
         metadata: Option<&Value>,
+        new_embedding: Option<Vector>,
     ) -> Result<bool, String> {
-        // 如果内容变更，需要重新计算 embedding
-        let new_embedding = match content {
-            Some(text) => {
-                let embedding = self.embedder
-                    .encode(text)
-                    .await
-                    .map_err(|e| format!("[MemoryStore] update embedding failed: {}", e))?;
-                Some(Vector::from(embedding))
-            }
-            None => None,
-        };
-
         let updated = sqlx::query(r#"
             UPDATE memories
             SET content = COALESCE($2, content),
@@ -232,7 +209,7 @@ impl MemoryStore {
             .bind(new_embedding)
             .execute(&self.db)
             .await
-            .map_err(|e| format!("[MemoryStore] update failed: {}", e))?
+            .map_err(|e| format!("[PgStore] update failed: {}", e))?
             .rows_affected();
 
         Ok(updated > 0)
@@ -243,7 +220,7 @@ impl MemoryStore {
             .bind(memory_id)
             .execute(&self.db)
             .await
-            .map_err(|e| format!("[MemoryStore] delete failed: {}", e))?
+            .map_err(|e| format!("[PgStore] delete failed: {}", e))?
             .rows_affected();
 
         Ok(deleted > 0)
@@ -272,7 +249,7 @@ impl MemoryStore {
             .bind(limit)
             .fetch_all(&self.db)
             .await
-            .map_err(|e| format!("[MemoryStore] list failed: {}", e))?;
+            .map_err(|e| format!("[PgStore] list failed: {}", e))?;
 
         Ok(rows.iter().map(Self::row_to_memory_item).collect())
     }
@@ -282,7 +259,7 @@ impl MemoryStore {
             .bind(memory_type)
             .execute(&self.db)
             .await
-            .map_err(|e| format!("[MemoryStore] clear failed: {}", e))?
+            .map_err(|e| format!("[PgStore] clear failed: {}", e))?
             .rows_affected();
 
         Ok(deleted)
@@ -300,7 +277,7 @@ impl MemoryStore {
             .bind(user_id)
             .fetch_one(&self.db)
             .await
-            .map_err(|e| format!("[MemoryStore] count failed: {}", e))?;
+            .map_err(|e| format!("[PgStore] count failed: {}", e))?;
 
         Ok(count.0)
     }
@@ -317,7 +294,7 @@ impl MemoryStore {
             .bind(user_id)
             .fetch_one(&self.db)
             .await
-            .map_err(|e| format!("[MemoryStore] avg importance failed: {}", e))?;
+            .map_err(|e| format!("[PgStore] avg importance failed: {}", e))?;
 
         Ok(avg.0)
     }
@@ -336,7 +313,7 @@ impl MemoryStore {
             .bind(user_id)
             .fetch_one(&self.db)
             .await
-            .map_err(|e| format!("[MemoryStore] time span failed: {}", e))?;
+            .map_err(|e| format!("[PgStore] time span failed: {}", e))?;
 
         Ok(span.0)
     }
@@ -361,6 +338,7 @@ mod tests {
     use std::sync::Arc;
     use super::*;
     use crate::tools::memory::base::get_db_client;
+    use crate::tools::memory::storage::embedder::Embedder;
 
     struct MockEmbedder;
 
@@ -373,17 +351,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_memory_store_add() {
+    async fn test_pg_store_add() {
         dotenvy::dotenv().ok();
         let db = get_db_client().await;
         let config = MemoryConfig::new();
         let embedder: Arc<dyn Embedder + Send + Sync> = Arc::new(MockEmbedder);
-        let mut store = MemoryStore::new(config, db.clone(), embedder);
+        let mut store = PgStore::new(config, db.clone());
 
         let memory_item = MemoryItem::new(
             "test_user".to_string(),
             "episodic".to_string(),
-            "test content for MemoryStore::add".to_string(),
+            "test content for PgStore::add".to_string(),
             0.8,
             serde_json::json!({"key": "value"}),
         );
@@ -395,8 +373,9 @@ mod tests {
             .await
             .unwrap();
 
-        let result = store.add(memory_item.clone()).await;
-        assert!(result.is_ok(), "MemoryStore::add should return Ok");
+        let embedding = embedder.encode(&memory_item.content).await.unwrap();
+        let result = store.add(memory_item.clone(), embedding).await;
+        assert!(result.is_ok(), "PgStore::add should return Ok");
 
         let row: (String, String, f64) = sqlx::query_as(
             "SELECT user_id, content, importance FROM memories WHERE memory_id = $1"

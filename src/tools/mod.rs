@@ -8,7 +8,7 @@ use openai_api_rs::v1::chat_completion::{self, ToolCall, ToolType};
 use crate::{tools::types::Tool};
 
 pub struct ToolManager {
-    tools: HashMap<String, Box<dyn Tool>>,
+    tools: HashMap<String, Box<dyn Tool + Send + Sync>>,
 }
 
 impl ToolManager {
@@ -18,11 +18,11 @@ impl ToolManager {
         }
     }
 
-    pub fn register_tool(&mut self, tool: Box<dyn Tool>) {
+    pub fn register_tool(&mut self, tool: Box<dyn Tool + Send + Sync>) {
         self.tools.insert(tool.name().to_string(), tool);
     }
 
-    pub fn with_tool(mut self, tool: Box<dyn Tool>) -> Self {
+    pub fn with_tool(mut self, tool: Box<dyn Tool + Send + Sync>) -> Self {
         self.tools.insert(tool.name().to_string(), tool);
         self
     }

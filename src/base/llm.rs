@@ -1,9 +1,14 @@
 use std::env;
 
-use futures_util::{Stream};
-use openai_api_rs::v1::chat_completion::chat_completion_stream::{ChatCompletionStreamRequest, ChatCompletionStreamResponse};
+use futures_util::Stream;
 use openai_api_rs::v1::api::OpenAIClient;
-use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Tool};
+use openai_api_rs::v1::chat_completion::chat_completion::{
+    ChatCompletionRequest, ChatCompletionResponse,
+};
+use openai_api_rs::v1::chat_completion::chat_completion_stream::{
+    ChatCompletionStreamRequest, ChatCompletionStreamResponse,
+};
+use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Tool, ToolChoiceType};
 
 pub struct AgentsLLM {
     pub model: String,
@@ -13,7 +18,7 @@ pub struct AgentsLLM {
     client: OpenAIClient,
 }
 
-impl AgentsLLM  {
+impl AgentsLLM {
     fn new(
         model: impl Into<String>,
         api_key: impl Into<String>,
@@ -53,17 +58,38 @@ impl AgentsLLM  {
         Self::new(model, api_key, base_url, provider, None)
     }
 
-    pub async fn invoke(&self, messages: Vec<ChatCompletionMessage>, tools: Option<Vec<Tool>>, temperature: Option<f64>) -> impl Stream<Item = ChatCompletionStreamResponse> + use<> {
+    pub async fn invoke(
+        &self,
+        messages: Vec<ChatCompletionMessage>,
+        tools: Option<Vec<Tool>>,
+        temperature: Option<f64>,
+    ) -> impl Stream<Item = ChatCompletionStreamResponse> + use<> {
         // build request
-        let req = ChatCompletionStreamRequest::new(
-            self.model.clone(),
-            messages,
-        )
+        let req = ChatCompletionStreamRequest::new(self.model.clone(), messages)
             .temperature(temperature.unwrap_or(0f64))
             .tools(tools.unwrap_or(vec![]))
             .tool_choice(openai_api_rs::v1::chat_completion::ToolChoiceType::Auto);
 
         let think_stream = self.client.chat_completion_stream(req).await;
         think_stream.unwrap()
-    } 
+    }
+
+    /// 非流式单轮工具调用，适合需要稳定拿到 tool_calls 结果的场景。
+    pub async fn chat_completion(
+        &self,
+        messages: Vec<ChatCompletionMessage>,
+        tools: Vec<Tool>,
+        tool_choice: ToolChoiceType,
+    ) -> Result<ChatCompletionResponse, String> {
+        let req = ChatCompletionRequest::new(self.model.clone(), messages)
+            .tools(tools)
+            .tool_choice(tool_choice)
+            .temperature(0.0);
+
+        self.client
+            .chat_completion(req)
+            .await
+            .map(|resp| resp.inner)
+            .map_err(|e| format!("[AgentsLLM] chat_completion failed: {}", e))
+    }
 }
