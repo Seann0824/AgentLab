@@ -61,6 +61,7 @@ impl Agent for SimpleAgent {
         let user_message = Message::user(input_text, None);
         self.add_message(user_message);
         let mut is_continue = true;
+        let mut final_response = String::new();
 
         loop {
             if !is_continue {
@@ -124,8 +125,10 @@ impl Agent for SimpleAgent {
                                     });
                             },
                             _ => {
+                                let content = content_delta.join("");
                                 self.add_message(Message::assistant(reason_delta.join(""), None));
-                                self.add_message(Message::assistant(content_delta.join(""), None));
+                                self.add_message(Message::assistant(content.clone(), None));
+                                final_response = content;
                                 is_continue = false;
                                 break;
                             },
@@ -137,6 +140,6 @@ impl Agent for SimpleAgent {
             println!();
         }
 
-        "".into()
+        final_response
     }
 }

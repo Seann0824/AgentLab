@@ -544,6 +544,7 @@ impl MemoryManager {
         let embedder = OllamaEmbedder::new(None, None);
         let store = MemoryStore::new(config.clone(), pg_store, neo4j_store, Arc::new(embedder));
         let extractor = EntityExtractorAgent::from_env();
+        let semantic_extractor = EntityExtractorAgent::from_env();
 
         let mut memory_types: HashMap<String, Box<dyn MemoryTrait>> = HashMap::new();
 
@@ -562,7 +563,11 @@ impl MemoryManager {
         if enable_semantic {
             memory_types.insert(
                 "semantic".into(),
-                Box::new(SemanticMemory::new(config.clone())),
+                Box::new(SemanticMemory::new(
+                    config.clone(),
+                    store.clone(),
+                    semantic_extractor,
+                )),
             );
         }
         if enable_perceptual {
@@ -605,11 +610,17 @@ impl MemoryManager {
             memory_type.clone()
         };
 
-        let Some(_memory_store) = self.memory_types.get_mut(&target_type) else {
+        let Some(memory_store) = self.memory_types.get_mut(&target_type) else {
             return Err(format!("记忆类型 {} 不存在", target_type));
         };
 
-        // 内部子 agent 抽取实体/关系，抽成功且非空则写 Neo4j 引用图。
+        if target_type == "semantic" {
+            // 语义记忆自己负责实体抽取、metadata 标记和 Neo4j 引用图写入。
+            memory_store.add(memory_item).await;
+            return Ok(memory_id);
+        }
+
+        // 其他类型：由 MemoryManager 统一抽取实体/关系，抽成功且非空则写 Neo4j 引用图。
         match self.extractor.extract(&content).await {
             Ok((entities, relations)) if !entities.is_empty() => {
                 self.store
@@ -651,6 +662,7 @@ impl MemoryManager {
             let request = RetrieveRequest {
                 query: query_owned.clone(),
                 limit: Some(limit),
+                user_id: Some(self.user_id.clone()),
                 importance_threshold: Some(min_importance as f64),
                 ..Default::default()
             };

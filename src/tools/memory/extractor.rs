@@ -149,7 +149,7 @@ fn extraction_schema() -> types::FunctionParameters {
                 }),
             ),
             (
-                "type".to_string(),
+                "relation_type".to_string(),
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::String),
                     description: Some("关系类型，例如 去过、同事、属于".to_string()),
@@ -162,7 +162,7 @@ fn extraction_schema() -> types::FunctionParameters {
             "from_type".to_string(),
             "to_name".to_string(),
             "to_type".to_string(),
-            "type".to_string(),
+            "relation_type".to_string(),
         ]),
         ..Default::default()
     };

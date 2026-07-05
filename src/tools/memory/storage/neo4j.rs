@@ -53,6 +53,35 @@ impl Neo4jStore {
         let graph = neo4rs::Graph::new(uri, user, password)
             .await
             .map_err(|e| format!("[Neo4jStore] connection failed: {}", e))?;
+
+        // 为 Entity.id 和 Memory 的复合键建立唯一约束，确保 MERGE 的原子性，
+        // 避免并发/重复调用时产生重复节点。
+        // 如果数据库中已存在重复数据，创建约束会失败；这里记录 warning 而不是阻断启动，
+        // 由运维侧在清理重复数据后重新触发约束创建。
+        if let Err(e) = graph
+            .run(neo4rs::query(
+                "CREATE CONSTRAINT entity_id_unique IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE",
+            ))
+            .await
+        {
+            tracing::warn!(
+                "[Neo4jStore] create Entity constraint skipped (probably duplicate entities exist): {}",
+                e
+            );
+        }
+
+        if let Err(e) = graph
+            .run(neo4rs::query(
+                "CREATE CONSTRAINT memory_id_user_unique IF NOT EXISTS FOR (m:Memory) REQUIRE (m.memory_id, m.user_id) IS UNIQUE",
+            ))
+            .await
+        {
+            tracing::warn!(
+                "[Neo4jStore] create Memory constraint skipped (probably duplicate memories exist): {}",
+                e
+            );
+        }
+
         Ok(Self { graph })
     }
 
@@ -109,7 +138,8 @@ impl Neo4jStore {
                     neo4rs::query(
                         r#"
                         MATCH (m:Memory {memory_id: $memory_id, user_id: $user_id})
-                        MERGE (m)-[:HAS_ENTITY]->(n:Entity {id: $id})
+                        MATCH (n:Entity {id: $id})
+                        MERGE (m)-[:HAS_ENTITY]->(n)
                         "#,
                     )
                     .param("memory_id", memory_id.clone())
@@ -192,6 +222,103 @@ impl Neo4jStore {
                 .get("memory_id")
                 .map_err(|e| format!("[Neo4jStore] parse related memory_id failed: {}", e))?;
             results.push(id);
+        }
+
+        Ok(results)
+    }
+
+    /// 根据一组实体 id 查找关联的记忆 id。
+    ///
+    /// 返回 `(memory_id, matched_count)`，按命中实体数降序排列，
+    /// `matched_count` 可用于计算图相关性分数。
+    pub async fn get_memory_ids_by_entities(
+        &self,
+        user_id: impl Into<String>,
+        entity_ids: &[String],
+        limit: usize,
+    ) -> Result<Vec<(String, i64)>, String> {
+        let user_id = user_id.into();
+
+        let mut stream = self
+            .graph
+            .execute(
+                neo4rs::query(
+                    r#"
+                    MATCH (e:Entity)<-[:HAS_ENTITY]-(m:Memory)
+                    WHERE e.id IN $entity_ids AND m.user_id = $user_id
+                    RETURN m.memory_id AS memory_id, count(DISTINCT e.id) AS matched_count
+                    ORDER BY matched_count DESC
+                    LIMIT $limit
+                    "#,
+                )
+                .param("entity_ids", entity_ids)
+                .param("user_id", user_id)
+                .param("limit", limit as i64),
+            )
+            .await
+            .map_err(|e| format!("[Neo4jStore] get memory ids by entities failed: {}", e))?;
+
+        let mut results = Vec::new();
+        while let Ok(Some(row)) = stream.next().await {
+            let memory_id: String = row
+                .get("memory_id")
+                .map_err(|e| format!("[Neo4jStore] parse memory_id failed: {}", e))?;
+            let matched_count: i64 = row
+                .get("matched_count")
+                .map_err(|e| format!("[Neo4jStore] parse matched_count failed: {}", e))?;
+            results.push((memory_id, matched_count));
+        }
+
+        Ok(results)
+    }
+
+    /// 根据一组实体 id，通过实体之间的关系图查找关联记忆。
+    ///
+    /// 路径：查询实体 -> `RELATED_TO*1..depth` -> 相关实体 <- `HAS_ENTITY` - 记忆
+    /// 返回 `(memory_id, related_entity_count)`，按命中相关实体数降序排列。
+    pub async fn get_related_memory_ids_by_entities(
+        &self,
+        user_id: impl Into<String>,
+        entity_ids: &[String],
+        depth: i64,
+        limit: usize,
+    ) -> Result<Vec<(String, i64)>, String> {
+        let user_id = user_id.into();
+        let depth = depth.max(1);
+
+        let cypher = format!(
+            r#"
+            MATCH (qe:Entity)
+            WHERE qe.id IN $entity_ids
+            MATCH (qe)-[:RELATED_TO*1..{}]-(re:Entity)<-[:HAS_ENTITY]-(m:Memory)
+            WHERE m.user_id = $user_id
+            RETURN m.memory_id AS memory_id, count(DISTINCT re.id) AS related_count
+            ORDER BY related_count DESC
+            LIMIT $limit
+            "#,
+            depth
+        );
+
+        let mut stream = self
+            .graph
+            .execute(
+                neo4rs::query(&cypher)
+                    .param("entity_ids", entity_ids)
+                    .param("user_id", user_id)
+                    .param("limit", limit as i64),
+            )
+            .await
+            .map_err(|e| format!("[Neo4jStore] get related memory ids by entities failed: {}", e))?;
+
+        let mut results = Vec::new();
+        while let Ok(Some(row)) = stream.next().await {
+            let memory_id: String = row
+                .get("memory_id")
+                .map_err(|e| format!("[Neo4jStore] parse memory_id failed: {}", e))?;
+            let related_count: i64 = row
+                .get("related_count")
+                .map_err(|e| format!("[Neo4jStore] parse related_count failed: {}", e))?;
+            results.push((memory_id, related_count));
         }
 
         Ok(results)

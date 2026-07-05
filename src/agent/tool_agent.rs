@@ -50,10 +50,12 @@ impl<T: DeserializeOwned> ToolAgent<T> {
         let tools = self.tool_manager.get_tools_scehma();
 
         for attempt in 0..MAX_RETRIES {
+            // 部分推理/Thinking 模型不支持 tool_choice: "required"，降级为 Auto。
+            // 系统提示已强制要求调用工具，若模型未调用会在下方报错并重试。
             let resp = self
                 .base
                 .llm
-                .chat_completion(messages.clone(), tools.clone(), ToolChoiceType::Required)
+                .chat_completion(messages.clone(), tools.clone(), ToolChoiceType::Auto)
                 .await
                 .map_err(|e| format!("[ToolAgent] LLM call failed: {}", e))?;
 

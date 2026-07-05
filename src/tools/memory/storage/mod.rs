@@ -76,19 +76,55 @@ impl MemoryStore {
 
         self.pg.add(memory_item, embedding).await?;
 
+        // 1) 先收集显式抽取出的实体，并计算稳定 id。
         let mut id_map: HashMap<(String, String), String> = HashMap::new();
-        let entity_refs: Vec<neo4j::Entity> = entities
-            .into_iter()
-            .map(|e| {
-                let id = entity_id(&e.name, &e.entity_type);
-                id_map.insert((e.name.clone(), e.entity_type.clone()), id.clone());
+        let mut entity_map: HashMap<(String, String), neo4j::Entity> = HashMap::new();
+        for e in entities {
+            let id = entity_id(&e.name, &e.entity_type);
+            let key = (e.name.clone(), e.entity_type.clone());
+            id_map.insert(key.clone(), id.clone());
+            entity_map.insert(
+                key,
                 neo4j::Entity {
                     id,
                     name: e.name,
                     entity_type: e.entity_type,
-                }
-            })
-            .collect();
+                },
+            );
+        }
+
+        // 2) 关系里引用的实体可能未被 LLM 单独抽出来，必须补全到 entity_map 中，
+        //    否则 Neo4j 里 MATCH 不到节点，关系会静默建不上。
+        for r in &relations {
+            let from_key = (r.from_name.clone(), r.from_entity_type.clone());
+            if !entity_map.contains_key(&from_key) {
+                let id = entity_id(&r.from_name, &r.from_entity_type);
+                id_map.insert(from_key.clone(), id.clone());
+                entity_map.insert(
+                    from_key,
+                    neo4j::Entity {
+                        id,
+                        name: r.from_name.clone(),
+                        entity_type: r.from_entity_type.clone(),
+                    },
+                );
+            }
+            let to_key = (r.to_name.clone(), r.to_entity_type.clone());
+            if !entity_map.contains_key(&to_key) {
+                let id = entity_id(&r.to_name, &r.to_entity_type);
+                id_map.insert(to_key.clone(), id.clone());
+                entity_map.insert(
+                    to_key,
+                    neo4j::Entity {
+                        id,
+                        name: r.to_name.clone(),
+                        entity_type: r.to_entity_type.clone(),
+                    },
+                );
+            }
+        }
+
+        let entity_refs: Vec<neo4j::Entity> = entity_map.into_values().collect();
 
         let relation_refs: Vec<neo4j::Relation> = relations
             .into_iter()
@@ -238,6 +274,33 @@ impl MemoryStore {
         self.pg.time_span_days_by_type(memory_type, user_id).await
     }
 
+    /// 根据一组实体 id 查找关联的记忆 id 及其命中实体数。
+    ///
+    /// 代理到 Neo4j，返回 `(memory_id, matched_count)`，供语义记忆做图检索分数。
+    pub async fn get_memory_ids_by_entities(
+        &self,
+        user_id: &str,
+        entity_ids: &[String],
+        limit: usize,
+    ) -> Result<Vec<(String, i64)>, String> {
+        self.neo4j
+            .get_memory_ids_by_entities(user_id, entity_ids, limit)
+            .await
+    }
+
+    /// 根据一组实体 id，通过实体关系图查找关联记忆及其命中相关实体数。
+    pub async fn get_related_memory_ids_by_entities(
+        &self,
+        user_id: &str,
+        entity_ids: &[String],
+        depth: i64,
+        limit: usize,
+    ) -> Result<Vec<(String, i64)>, String> {
+        self.neo4j
+            .get_related_memory_ids_by_entities(user_id, entity_ids, depth, limit)
+            .await
+    }
+
     pub async fn get_related(
         &self,
         memory_id: &str,
@@ -274,6 +337,9 @@ pub fn entity_id(name: &str, entity_type: &str) -> String {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
 
+    // 对 name/type 做规范化，避免大小写、前后空格等导致同一实体产生多个节点。
+    let name = name.trim().to_lowercase();
+    let entity_type = entity_type.trim().to_lowercase();
     let key = format!("{}:{}", name, entity_type);
     let mut hash = FNV_OFFSET;
     for byte in key.bytes() {

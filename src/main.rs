@@ -1,37 +1,88 @@
 use agent_lab::{
     agent::simple_agent::SimpleAgent,
     base::{agent::Agent, config::Config, llm::AgentsLLM},
-    tools::{ToolManager, memory::MemoryTool},
+    tools::{ToolManager, memory::MemoryTool, types::Tool},
 };
 
 #[tokio::main]
-async fn main() -> () {
-    let mut agent = SimpleAgent::new(
-        "情景记忆助手",
+async fn main() {
+    if let Err(e) = run_agent_semantic_memory_test().await {
+        eprintln!("\n❌ 语义记忆 Agent 测试失败: {}", e);
+        std::process::exit(1);
+    }
+    println!("\n✅ 语义记忆 Agent 测试通过");
+}
+
+/// Agent 场景下的语义记忆端到端测试。
+///
+/// 通过 `SimpleAgent + MemoryTool` 完成：
+/// 1. 清空历史语义记忆，避免多次运行累积重复数据；
+/// 2. 记录三条用户个人事实；
+/// 3. 清空对话历史，分别询问这三条事实；
+/// 4. 断言回答中同时出现对应的关键信息组合。
+async fn run_agent_semantic_memory_test() -> Result<(), String> {
+    // 测试前置：清空当前用户的语义记忆，保证每次测试环境干净。
+    let cleanup_tool = MemoryTool::new().await;
+    let _ = cleanup_tool
+        .execute(serde_json::json!({
+            "action": "clear_all",
+            "memory_type": "semantic"
+        }))
+        .await;
+
+    let mut semantic_agent = SimpleAgent::new(
+        "语义记忆助手",
         AgentsLLM::from_env(),
-        "你是一个有情景记忆的助手。当用户描述一个具体事件、经历或交互时，必须立即调用 memory 工具的 add 动作保存，memory_type 使用 episodic；当用户询问过去的事件、经历时，必须调用 memory 工具的 search 动作查找，memory_type 使用 episodic。".to_string(),
+        "你是一个帮助用户记录个人事实的助手。\n\
+         规则：\n\
+         1. 当用户告诉你关于他自己的偏好、属性或长期事实时，必须立即调用 memory 工具的 add 动作保存，memory_type 使用 semantic。\n\
+         2. 当用户询问关于他自己的事实或偏好时，必须调用 memory 工具的 search 动作查找，memory_type 使用 semantic。\n\
+         3. 只基于 memory 工具返回的结果回答，不要编造。".to_string(),
         Config::from_env(),
         ToolManager::new()
             .with_tool(Box::new(MemoryTool::new().await)),
         true,
     );
 
-    // // 第一轮：让 agent 记录几个具体事件到情景记忆
-    // println!("\n=== 第一轮：记录情景事件 ===");
-    // let _ = agent.run("请记录：我上周去了杭州西湖，天气很好，拍了很多照片").await;
-    // let _ = agent.run("请记录：昨天我和同事在会议室讨论了 Q4 的产品规划").await;
-    // let _ = agent.run("请记录：今天早上我在地铁站帮一位老人搬了行李").await;
+    println!("\n=== 第一阶段：记录个人事实 ===");
+    semantic_agent.run("请记住：我喜欢喝美式咖啡，不加糖").await;
+    semantic_agent.run("请记住：我的狗叫豆豆，今年三岁了").await;
+    semantic_agent.run("请记住：我每天早上 8 点起床跑步").await;
 
-    // // 清空对话历史，排除模型仅靠上下文记住答案的情况
-    // agent.clear_history();
+    println!("\n=== 第二阶段：通过语义记忆回答个人问题 ===");
 
-    // 第二轮：测试情景记忆是否能被独立召回
-    println!("\n=== 第二轮：回忆情景事件 ===");
-    let _ = agent.run("我上周去了哪里？").await;
+    semantic_agent.clear_history();
+    let coffee_answer = semantic_agent.run("我喜欢喝什么咖啡？").await;
+    println!("\n[Q1] 我喜欢喝什么咖啡？\n{A}", A = coffee_answer);
+    if !coffee_answer.contains("美式咖啡") || !coffee_answer.contains("不加糖") {
+        return Err(format!("咖啡问题回答未命中关键信息: {}", coffee_answer));
+    }
 
-    agent.clear_history();
-    let _ = agent.run("我和同事讨论了什么？").await;
+    semantic_agent.clear_history();
+    let dog_answer = semantic_agent.run("我的狗叫什么名字？").await;
+    println!("\n[Q2] 我的狗叫什么名字？\n{A}", A = dog_answer);
+    if !dog_answer.contains("豆豆") || !dog_answer.contains("三岁") {
+        return Err(format!("狗问题回答未命中关键信息: {}", dog_answer));
+    }
 
-    agent.clear_history();
-    let _ = agent.run("今天早上我做了什么？").await;
+    semantic_agent.clear_history();
+    let morning_answer = semantic_agent.run("我早上几点起床跑步？").await;
+    println!("\n[Q3] 我早上几点起床跑步？\n{A}", A = morning_answer);
+    if !morning_answer.contains("8") || !morning_answer.contains("跑步") {
+        return Err(format!("早晨问题回答未命中关键信息: {}", morning_answer));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_agent_semantic_memory() {
+        run_agent_semantic_memory_test()
+            .await
+            .expect("agent semantic memory test failed");
+    }
 }
