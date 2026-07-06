@@ -1,11 +1,12 @@
 pub mod types;
 // pub mod base_shell;
-pub mod web_search;
 pub mod memory;
+pub mod rag;
+pub mod web_search;
 
-use std::{collections::HashMap};
+use crate::tools::types::Tool;
 use openai_api_rs::v1::chat_completion::{self, ToolCall, ToolType};
-use crate::{tools::types::Tool};
+use std::collections::HashMap;
 
 pub struct ToolManager {
     tools: HashMap<String, Box<dyn Tool + Send + Sync>>,
@@ -32,17 +33,16 @@ impl ToolManager {
     }
 
     pub fn get_tools_scehma(&self) -> Vec<chat_completion::Tool> {
-        let schema = self.tools
+        let schema = self
+            .tools
             .values()
-            .map(|tool| {
-                chat_completion::Tool {
-                    r#type: ToolType::Function,
-                    function: openai_api_rs::v1::types::Function {
-                        name: tool.name().to_string(),
-                        description: Some(tool.description().to_string()),
-                        parameters: tool.parameters_schema()
-                    },
-                }
+            .map(|tool| chat_completion::Tool {
+                r#type: ToolType::Function,
+                function: openai_api_rs::v1::types::Function {
+                    name: tool.name().to_string(),
+                    description: Some(tool.description().to_string()),
+                    parameters: tool.parameters_schema(),
+                },
             })
             .collect();
         schema
@@ -56,6 +56,10 @@ impl ToolManager {
         };
 
         let arguments = tool_call.function.arguments.unwrap_or("{}".to_string());
-        (tool_call_id, tool.execute(serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}))).await)
+        (
+            tool_call_id,
+            tool.execute(serde_json::from_str(&arguments).unwrap_or(serde_json::json!({})))
+                .await,
+        )
     }
 }
