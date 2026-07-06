@@ -399,7 +399,7 @@ impl Tool for RagTool {
     }
 
     fn description(&self) -> &str {
-        "RAG 资料库工具：支持 index（索引 Markdown 文档）和 search（语义检索资料库）。"
+        "RAG 资料库工具：支持 add_document（索引 Markdown 文档）和 search（语义检索）。"
     }
 
     fn parameters_schema(&self) -> openai_api_rs::v1::types::FunctionParameters {
@@ -408,7 +408,15 @@ impl Tool for RagTool {
             "action".to_string(),
             Box::new(openai_api_rs::v1::types::JSONSchemaDefine {
                 schema_type: Some(openai_api_rs::v1::types::JSONSchemaType::String),
-                description: Some("操作类型：index 或 search".to_string()),
+                description: Some("操作类型：add_document 或 search".to_string()),
+                ..Default::default()
+            }),
+        );
+        properties.insert(
+            "file_path".to_string(),
+            Box::new(openai_api_rs::v1::types::JSONSchemaDefine {
+                schema_type: Some(openai_api_rs::v1::types::JSONSchemaType::String),
+                description: Some("add_document 时必填：Markdown 文件路径".to_string()),
                 ..Default::default()
             }),
         );
@@ -416,31 +424,7 @@ impl Tool for RagTool {
             "query".to_string(),
             Box::new(openai_api_rs::v1::types::JSONSchemaDefine {
                 schema_type: Some(openai_api_rs::v1::types::JSONSchemaType::String),
-                description: Some("search 时使用的查询问题".to_string()),
-                ..Default::default()
-            }),
-        );
-        properties.insert(
-            "namespace".to_string(),
-            Box::new(openai_api_rs::v1::types::JSONSchemaDefine {
-                schema_type: Some(openai_api_rs::v1::types::JSONSchemaType::String),
-                description: Some("资料库命名空间，默认 default".to_string()),
-                ..Default::default()
-            }),
-        );
-        properties.insert(
-            "path".to_string(),
-            Box::new(openai_api_rs::v1::types::JSONSchemaDefine {
-                schema_type: Some(openai_api_rs::v1::types::JSONSchemaType::String),
-                description: Some("index 时要索引的 Markdown 文件路径".to_string()),
-                ..Default::default()
-            }),
-        );
-        properties.insert(
-            "limit".to_string(),
-            Box::new(openai_api_rs::v1::types::JSONSchemaDefine {
-                schema_type: Some(openai_api_rs::v1::types::JSONSchemaType::Number),
-                description: Some("search 时返回的最大结果数，默认 5".to_string()),
+                description: Some("search 时必填：查询问题".to_string()),
                 ..Default::default()
             }),
         );
@@ -453,19 +437,17 @@ impl Tool for RagTool {
 
     async fn execute(&self, args: serde_json::Value) -> Result<String, String> {
         let action = args["action"].as_str().unwrap_or("").to_string();
-        let namespace = args["namespace"].as_str().unwrap_or("default").to_string();
 
         match action.as_str() {
-            "index" => {
-                let path = args["path"].as_str().unwrap_or("").to_string();
+            "add_document" => {
+                let path = args["file_path"].as_str().unwrap_or("").to_string();
                 if path.is_empty() {
-                    return Err("index 操作需要 path 参数".to_string());
+                    return Err("add_document 操作需要 file_path 参数".to_string());
                 }
-                let chunk_tokens = args["chunk_tokens"].as_u64().unwrap_or(1024) as usize;
-                let overlap_tokens = args["overlap_tokens"].as_u64().unwrap_or(128) as usize;
 
+                // 内部固定参数：整个 RAG 视为统一数据库
                 let count = self
-                    .index_file(&path, &namespace, chunk_tokens, overlap_tokens)
+                    .index_file(&path, "default", 512, 64)
                     .await?;
                 Ok(format!("索引完成，共 {} 个 chunk", count))
             }
@@ -474,10 +456,10 @@ impl Tool for RagTool {
                 if query.is_empty() {
                     return Err("search 操作需要 query 参数".to_string());
                 }
-                let limit = args["limit"].as_u64().unwrap_or(5) as usize;
 
                 let index = self.index()?;
-                let results = index.search(&query, Some(&namespace), limit).await?;
+                // 不限制 namespace，在整个 RAG 数据库里按向量语义相似度排序
+                let results = index.search(&query, None, 5).await?;
 
                 let formatted: Vec<String> = results
                     .iter()

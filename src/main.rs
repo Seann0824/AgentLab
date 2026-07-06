@@ -25,9 +25,9 @@ async fn run_rag_agent_loop() -> Result<(), String> {
     println!("=== RAG Agent 问答系统 ===");
     println!("资料库 namespace: {}\n", namespace);
 
-    let system_prompt = "你是基于 RAG 资料库回答问题的助手。\
+    let system_prompt = "你是 FigmaAgent 助手，专门回答关于 Figma Agent 设计系统与 Agent 架构的问题。\
         当用户询问文档相关内容时，你必须调用 `rag` 工具的 `search` action，\
-        传入用户问题和 namespace=figma_agent 获取参考资料，然后基于资料回答。\
+        传入用户问题获取参考资料，然后基于资料回答。\
         不要编造资料中没有的内容。"
         .to_string();
 
