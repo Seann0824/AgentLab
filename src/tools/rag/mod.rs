@@ -7,7 +7,10 @@ use sqlx::{PgPool, Row};
 
 use crate::tools::memory::storage::embedder::Embedder;
 use crate::tools::memory::storage::OllamaEmbedder;
+use crate::tools::rag::query_expansion::QueryExpansionAgent;
 use crate::tools::types::Tool;
+
+pub mod query_expansion;
 
 pub struct RagTool {
     index: Option<RagIndex>,
@@ -496,6 +499,7 @@ pub struct RagIndex {
     db: PgPool,
     embedder: Arc<dyn Embedder + Send + Sync>,
     dimension: usize,
+    query_expander: Option<Arc<tokio::sync::Mutex<QueryExpansionAgent>>>,
 }
 
 impl RagIndex {
@@ -504,14 +508,29 @@ impl RagIndex {
             db,
             embedder,
             dimension,
+            query_expander: None,
         }
     }
 
-    /// 使用默认的 Ollama embedder 创建索引器。
+    /// 使用默认的 Ollama embedder 创建索引器，并启用 MQE 查询扩展。
     /// 默认维度 768，与 `init_pg.sql` 中的 rag_chunks.embedding VECTOR(768) 对应。
     pub fn with_default_embedder(db: PgPool) -> Self {
         let embedder = Arc::new(OllamaEmbedder::new(None, None));
-        Self::new(db, embedder, 768)
+        let query_expander = Some(Arc::new(tokio::sync::Mutex::new(
+            QueryExpansionAgent::from_env(),
+        )));
+        Self {
+            db,
+            embedder,
+            dimension: 768,
+            query_expander,
+        }
+    }
+
+    /// 是否启用 MQE 查询扩展。
+    pub fn with_query_expansion(mut self, agent: QueryExpansionAgent) -> Self {
+        self.query_expander = Some(Arc::new(tokio::sync::Mutex::new(agent)));
+        self
     }
 
     /// 将 RAG chunk 预处理后生成 embedding，批量写入 `rag_chunks`。
@@ -577,7 +596,57 @@ impl RagIndex {
     }
 
     /// 语义检索：把 query 向量化后在 `rag_chunks` 中搜索最近的 chunk。
+    ///
+    /// 如果启用了 MQE（默认启用），会先用子 agent 把 query 扩展成多个等价查询句，
+    /// 分别检索后合并、去重、按最佳相似度重排，提升召回率。
     pub async fn search(
+        &self,
+        query: &str,
+        namespace: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(f64, RagChunk)>, String> {
+        let queries = match &self.query_expander {
+            Some(expander) => {
+                let mut guard = expander.lock().await;
+                guard.expand(query).await.unwrap_or_else(|e| {
+                    eprintln!(
+                        "[RagIndex] query expansion failed: {}, fallback to original query",
+                        e
+                    );
+                    vec![query.to_string()]
+                })
+            }
+            None => vec![query.to_string()],
+        };
+
+        // 对每个扩展查询分别检索
+        let mut all_results: Vec<(f64, RagChunk)> = Vec::new();
+        for q in queries {
+            let results = self.search_single(&q, namespace, limit).await?;
+            all_results.extend(results);
+        }
+
+        // 按 chunk id 去重，保留最佳（最小）distance
+        let mut best: HashMap<String, (f64, RagChunk)> = HashMap::new();
+        for (score, chunk) in all_results {
+            best.entry(chunk.id.clone())
+                .and_modify(|(s, _)| {
+                    if score < *s {
+                        *s = score;
+                    }
+                })
+                .or_insert((score, chunk));
+        }
+
+        // 按 distance 升序排列，取 top limit
+        let mut merged: Vec<(f64, RagChunk)> = best.into_values().collect();
+        merged.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        merged.truncate(limit);
+
+        Ok(merged)
+    }
+
+    async fn search_single(
         &self,
         query: &str,
         namespace: Option<&str>,
