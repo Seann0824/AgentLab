@@ -43,32 +43,41 @@ async fn run_neo4j_graph_memory_case() -> Result<(), String> {
 
     println!("\n=== 阶段 1：直接录入 11 条记忆（含核心事实与干扰项）===");
 
-    // 核心事实：3 条记忆组合起来才能回答问题
-    let core_facts = vec![
-        "小林毕业于杭州科技大学计算机学院",
-        "张伟是杭州科技大学人工智能学院的教授",
-        "上个月公司年会上，小林把张伟介绍给了自己的女朋友小美",
+    // 核心事实：3 条记忆组合起来才能回答问题，重要性最高
+    let core_facts: Vec<(&str, f64)> = vec![
+        ("小林毕业于杭州科技大学计算机学院", 0.9),
+        ("张伟是杭州科技大学人工智能学院的教授", 0.9),
+        ("上个月公司年会上，小林把张伟介绍给了自己的女朋友小美", 0.85),
     ];
 
-    // 干扰项：与主题相关但单独看无法直接回答问题，用来挤占向量检索的 top-K 位置
-    let distractors = vec![
-        "小美目前在阿里云做大模型产品经理",
-        "小林和小美已经恋爱两年了",
-        "张伟的研究方向是大模型安全",
-        "小林每天早上八点起床",
-        "小林周末喜欢去西湖骑行",
-        "杭州科技大学的校园在杭州市余杭区",
-        "杭州科技大学的校训是求是创新",
-        "阿里云总部位于杭州未来科技城",
+    // 半干扰项：与人物有关，但单独看无法直接回答问题
+    let semi_distractors: Vec<(&str, f64)> = vec![
+        ("小美目前在阿里云做大模型产品经理", 0.5),
+        ("小林和小美已经恋爱两年了", 0.5),
+        ("张伟的研究方向是大模型安全", 0.55),
+    ];
+
+    // 纯干扰项：与主题弱相关，主要用来挤占向量检索的 top-K 位置
+    let distractors: Vec<(&str, f64)> = vec![
+        ("小林每天早上八点起床", 0.2),
+        ("小林周末喜欢去西湖骑行", 0.2),
+        ("杭州科技大学的校园在杭州市余杭区", 0.3),
+        ("杭州科技大学的校训是求是创新", 0.3),
+        ("阿里云总部位于杭州未来科技城", 0.25),
     ];
 
     // 直接调用 MemoryTool 录入，避免每个事实都走一轮 Agent LLM，显著减少运行时间。
-    for fact in core_facts.iter().chain(distractors.iter()) {
+    for (fact, importance) in core_facts
+        .iter()
+        .chain(semi_distractors.iter())
+        .chain(distractors.iter())
+    {
         match memory_tool
             .execute(serde_json::json!({
                 "action": "add",
                 "content": fact,
-                "memory_type": "semantic"
+                "memory_type": "semantic",
+                "importance": importance
             }))
             .await
         {
