@@ -1,5 +1,7 @@
 use std::{collections::HashMap, thread::panicking};
 
+use scirs2_text::is_cjk_char;
+
 use crate::tools::types::Tool;
 
 struct RagTool {}
@@ -100,9 +102,8 @@ impl RagTool {
         let mut chunks: Vec<Paragraph> = vec![];
         let mut current_chunk: Vec<Paragraph> = vec![];
         let mut current_tokens = 0usize;
-        let mut i = 0usize;
 
-        let mut build_chunk = |current_chunk: &Vec<Paragraph>| {
+        let build_chunk = |current_chunk: &Vec<Paragraph>| {
             let start = current_chunk
                 .first()
                 .and_then(|p| Some(p.start))
@@ -173,7 +174,21 @@ impl RagTool {
     }
 
     fn approx_token_len(&self, content: &str) -> usize {
-        0
+        let is_cjk = |ch: char| {
+            matches!(ch as u32,
+                0x4E00..=0x9FFF |   // CJK统一汉字
+                0x3400..=0x4DBF |   // CJK扩展A
+                0x20000..=0x2A6DF | // CJK扩展B
+                0x2A700..=0x2B73F | // CJK扩展C
+                0x2B740..=0x2B81F | // CJK扩展D
+                0x2B820..=0x2CEAF | // CJK扩展E
+                0xF900..=0xFAFF     // CJK兼容汉字
+            )
+        };
+
+        let cjk = content.chars().filter(|&ch| is_cjk(ch)).count();
+        let non_cjk_tokens = content.split_whitespace().filter(|t| !t.is_empty()).count();
+        cjk + non_cjk_tokens
     }
 }
 
