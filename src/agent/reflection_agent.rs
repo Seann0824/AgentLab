@@ -86,6 +86,7 @@ impl ReflectionAgent {
     }
 }
 
+#[async_trait::async_trait]
 impl Agent for ReflectionAgent {
     fn base(&self) -> &AgentBase {
         &self.base

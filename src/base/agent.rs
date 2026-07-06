@@ -41,7 +41,8 @@ impl AgentBase {
 
 }
 
-pub trait Agent {
+#[async_trait::async_trait]
+pub trait Agent: Send + Sync {
     fn base(&self) -> &AgentBase;
     fn base_mut(&mut self) -> &mut AgentBase;
 

@@ -33,7 +33,7 @@
 ```text
 src/
 ├── main.rs                  # 可执行入口：交互式 RAG Agent
-├── lib.rs                   # 库入口，导出 agent / autogen_agentchat / model / tools / base
+├── lib.rs                   # 库入口，导出 agent / tools / base / db
 ├── db.rs                    # 全局 PostgreSQL 连接池 get_db_client
 ├── base/                    # 基础抽象
 │   ├── agent.rs             # AgentBase、Agent trait
@@ -45,11 +45,8 @@ src/
 │   ├── react_agent.rs       # ReAct 风格循环，带 max_steps
 │   ├── reflection_agent.rs  # 反射/迭代优化 Agent
 │   ├── tool_agent.rs        # 强制单次/多次工具调用并反序列化结果
-│   ├── plan_and_solve_agent.rs  # 计划-执行 Agent（目前为半成品）
-│   └── mod.rs               # AssistantAgent / UserProxyAgent / RoundRobinGroupChat 旧实现也在此
-├── autogen_agentchat/mod.rs # 简易多 Agent 轮询群聊（TextMentionTermination）
-├── model/
-│   └── openai.rs            # OpenaiChatCompletionClient（旧封装，与 AgentsLLM 并存）
+│   ├── group_chat.rs        # 基于 Agent trait 的 RoundRobinGroupChat
+│   └── mod.rs               # 模块声明与 re-export
 └── tools/                   # 工具系统
     ├── mod.rs               # ToolManager：注册、调度、schema 生成
     ├── types.rs             # Tool trait、ToolEvent
@@ -195,7 +192,7 @@ psql $DATABASE_URL -f init_pg.sql
 - `ReActAgent`：与 SimpleAgent 类似，但内置 `max_steps` 限制。
 - `ReflectionAgent`：支持三段式 prompt（initial / reflect / refine）迭代。
 - `ToolAgent<T>`：强制模型调用工具，并将工具返回 JSON 反序列化为 `T`，失败自动重试 3 次。
-- `AssistantAgent` / `UserProxyAgent` / `RoundRobinGroupChat`：较早的 AutoGen 风格群聊实现，主要供 `novel_generation` 示例使用。
+- `RoundRobinGroupChat`：基于 `Agent` trait 的多 Agent 轮询群聊，供 `novel_generation` 示例使用。
 
 ### 7.2 Tools
 
@@ -263,9 +260,9 @@ cargo test --lib
 
 ## 9. 代码风格与约定
 
-- 模块组织：领域驱动，`base` / `agent` / `tools` / `model` 分层。
+- 模块组织：领域驱动，`base` / `agent` / `tools` / `db` 分层。
 - 异步 trait：使用 `async-trait` crate（如 `Tool`、`Memory`）。
-- LLM 调用：同时存在两套封装——新的 `AgentsLLM`（`src/base/llm.rs`）和旧的 `OpenaiChatCompletionClient`（`src/model/openai.rs`）。新增代码建议复用 `AgentsLLM`。
+- LLM 调用：统一使用 `AgentsLLM`（`src/base/llm.rs`），不再保留旧客户端。
 - 工具 schema：使用 `openai_api-rs::v1::types::{FunctionParameters, JSONSchemaDefine, JSONSchemaType}` 构造，不要手写 JSON。
 - 错误处理：大量使用 `Result<T, String>`；存储层错误带 `[Module] reason` 前缀。
 - 注释：以中文为主，保留现有中文注释风格。
@@ -282,11 +279,9 @@ cargo test --lib
 
 ## 11. 已知问题与 TODO（基于代码实际内容）
 
-- `PlanAndSolveAgent` 编译未导出，内部依赖未 import，处于不可用状态。
-- `MemoryManager` 的 `forget_by_type`、`consolidate_memories`、`update_memory`、`get_summary`、`get_stats` 等接口有 `TODO` 或空实现。
-- `agent/mod.rs` 中的旧 `Agent::AssistantAgent` 与新 `SimpleAgent` 并存，历史包袱较重。
+- `MemoryManager` 的 `consolidate_memories` 仍为占位实现，待后续补充真正的记忆整合逻辑。
 - `Config` 中的 `log_level`、`max_history_length` 等字段当前未使用。
-- `qdrant-client` 依赖在 `Cargo.toml` 中声明，但代码里未使用。
+- 多处 `std::io::Write::flush(...)` 返回值未处理，产生 `unused_must_use` warning。
 - 多处 `std::io::Write::flush(...)` 返回值未处理，产生 `unused_must_use` warning。
 
 ## 12. 快速开始检查清单

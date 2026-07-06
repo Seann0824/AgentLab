@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 use futures_util::stream::StreamExt;
 use openai_api_rs::v1::chat_completion::{FinishReason, chat_completion_stream::ChatCompletionStreamResponse};
-use crate::{base::{agent::{Agent, AgentBase}, config::Config, llm::AgentsLLM, message::Message}, tools::{ToolManager, types::Tool, web_search::WebSearch}};
+use crate::{base::{agent::{Agent, AgentBase}, config::Config, llm::AgentsLLM, message::Message}, tools::{ToolManager, types::Tool}};
 
 pub struct SimpleAgent {
     enable_tool_calling: bool,
@@ -46,6 +46,7 @@ impl SimpleAgent {
 
 }
 
+#[async_trait::async_trait]
 impl Agent for SimpleAgent {
     fn base(&self) -> &AgentBase {
         &self.base
