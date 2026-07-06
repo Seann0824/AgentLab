@@ -1,55 +1,44 @@
 use agent_lab::{
-    base::llm::AgentsLLM,
-    tools::{
-        memory::base::get_db_client,
-        rag::{RagIndex, RagTool},
-    },
+    agent::simple_agent::SimpleAgent,
+    base::{agent::Agent, config::Config, llm::AgentsLLM},
+    tools::{ToolManager, memory::base::get_db_client, rag::RagTool},
 };
-use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Content, MessageRole, ToolChoiceType};
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = run_rag_qa_loop().await {
-        eprintln!("\n❌ RAG 问答失败: {}", e);
+    if let Err(e) = run_rag_agent_loop().await {
+        eprintln!("\n❌ RAG Agent 失败: {}", e);
         std::process::exit(1);
     }
 }
 
-/// 交互式 RAG 问答循环。
+/// 交互式 RAG Agent 问答循环。
 ///
-/// 启动时一次性索引 `Figma Agent：设计系统 × Agent 架构分享.md`，
-/// 之后用户可反复输入问题，系统从 rag_chunks 检索相关段落并用 LLM 生成答案。
-async fn run_rag_qa_loop() -> Result<(), String> {
+/// Agent 持有 `rag` 工具，可自行决定调用 search 检索资料库并基于结果回答。
+/// 启动时先索引一次文档，之后用户反复输入问题即可。
+async fn run_rag_agent_loop() -> Result<(), String> {
     let db = get_db_client().await;
-    let index = RagIndex::with_default_embedder(db);
-    let rag_tool = RagTool::new();
+    let rag_tool = RagTool::with_default_embedder(db);
 
-    let path = "Figma Agent：设计系统 × Agent 架构分享.md";
     let namespace = "figma_agent";
 
-    println!("=== RAG 问答系统 ===");
-    println!("正在索引文档: {}", path);
+    println!("=== RAG Agent 问答系统 ===");
+    println!("资料库 namespace: {}\n", namespace);
 
-    let text = rag_tool.get_markdown_content(path)?;
-    if text.is_empty() {
-        return Err(format!("{} 为空或读取失败", path));
-    }
+    let system_prompt = "你是基于 RAG 资料库回答问题的助手。\
+        当用户询问文档相关内容时，你必须调用 `rag` 工具的 `search` action，\
+        传入用户问题和 namespace=figma_agent 获取参考资料，然后基于资料回答。\
+        不要编造资料中没有的内容。"
+        .to_string();
 
-    let paragraphs = rag_tool.split_paragraphs_with_headings(text);
-    let chunks = rag_tool.chunk_paragraphs(paragraphs, 512, 64);
-
-    let deleted = index.clear_namespace(namespace).await?;
-    if deleted > 0 {
-        println!("清空旧索引: {} 条", deleted);
-    }
-
-    index
-        .index_chunks(chunks.clone(), path, namespace, 8)
-        .await
-        .map_err(|e| format!("索引失败: {}（请确认 Ollama 已启动并加载 nomic-embed-text）", e))?;
-    println!("索引完成，共 {} 个 chunk\n", chunks.len());
-
-    let llm = AgentsLLM::from_env();
+    let mut agent = SimpleAgent::new(
+        "RAGAgent",
+        AgentsLLM::from_env(),
+        Some(system_prompt),
+        Some(Config::from_env()),
+        ToolManager::new().with_tool(Box::new(rag_tool)),
+        true,
+    );
 
     println!("请输入问题（空行 / quit / exit 退出）：\n");
 
@@ -70,61 +59,8 @@ async fn run_rag_qa_loop() -> Result<(), String> {
             break;
         }
 
-        let results = index
-            .search(question, Some(namespace), 5)
-            .await
-            .map_err(|e| format!("检索失败: {}（请确认 Ollama 已启动）", e))?;
-
-        if results.is_empty() {
-            println!("未找到相关资料。\n");
-            continue;
-        }
-
-        let context = results
-            .iter()
-            .enumerate()
-            .map(|(i, (_, chunk))| {
-                format!(
-                    "[{}] 来源: {} | 标题路径: {}\n{}",
-                    i + 1,
-                    chunk.source,
-                    chunk.heading_path.as_deref().unwrap_or("无"),
-                    chunk.content
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        let prompt = format!(
-            "你是基于以下参考资料回答问题的助手。请严格根据参考资料回答，不要编造。\
-             如果资料不足以回答问题，请明确说明。\n\n参考资料：\n{}\n\n用户问题：{}",
-            context, question
-        );
-
-        let messages = vec![ChatCompletionMessage {
-            role: MessageRole::user,
-            content: Content::Text(prompt),
-            name: None,
-            tool_calls: None,
-            tool_call_id: None,
-        }];
-
-        match llm
-            .chat_completion(messages, vec![], ToolChoiceType::None)
-            .await
-        {
-            Ok(resp) => {
-                if let Some(choice) = resp.choices.first() {
-                    match &choice.message.content {
-                        Some(answer) => println!("\n🤖 {}\n", answer.trim()),
-                        None => println!("\n🤖 （模型未返回内容）\n"),
-                    }
-                } else {
-                    println!("\n🤖 （模型未返回内容）\n");
-                }
-            }
-            Err(e) => println!("\n❌ LLM 调用失败: {}\n", e),
-        }
+        let _answer = agent.run(question).await;
+        println!();
     }
 
     Ok(())

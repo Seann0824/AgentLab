@@ -9,7 +9,9 @@ use crate::tools::memory::storage::embedder::Embedder;
 use crate::tools::memory::storage::OllamaEmbedder;
 use crate::tools::types::Tool;
 
-pub struct RagTool {}
+pub struct RagTool {
+    index: Option<RagIndex>,
+}
 
 #[derive(Clone, serde::Serialize, Debug, PartialEq)]
 pub struct Paragraph {
@@ -36,8 +38,55 @@ pub struct RagChunk {
 }
 
 impl RagTool {
+    /// 创建一个不带索引器的 RagTool，仅用于分块、预处理和 token 估算等本地操作。
     pub fn new() -> Self {
-        Self {}
+        Self { index: None }
+    }
+
+    /// 使用已有的 RagIndex 创建 RagTool。
+    pub fn with_index(index: RagIndex) -> Self {
+        Self { index: Some(index) }
+    }
+
+    /// 便捷方法：用默认 Ollama embedder + PG 连接创建 RagTool。
+    pub fn with_default_embedder(db: PgPool) -> Self {
+        Self::with_index(RagIndex::with_default_embedder(db))
+    }
+
+    fn index(&self) -> Result<&RagIndex, String> {
+        self.index
+            .as_ref()
+            .ok_or_else(|| "RagTool 未初始化索引器".to_string())
+    }
+
+    /// 把本地 Markdown 文件索引到 `rag_chunks`。
+    pub async fn index_file(
+        &self,
+        path: &str,
+        namespace: &str,
+        chunk_tokens: usize,
+        overlap_tokens: usize,
+    ) -> Result<usize, String> {
+        let text = self.get_markdown_content(path)?;
+        if text.is_empty() {
+            return Err("file is empty or could not be read".to_string());
+        }
+
+        let paragraphs = self.split_paragraphs_with_headings(text);
+        let chunks = self.chunk_paragraphs(paragraphs, chunk_tokens, overlap_tokens);
+        let count = chunks.len();
+
+        let index = self.index()?;
+        index
+            .clear_namespace(namespace)
+            .await
+            .map_err(|e| format!("clear namespace failed: {}", e))?;
+        index
+            .index_chunks(chunks, path, namespace, 8)
+            .await
+            .map_err(|e| format!("index chunks failed: {}", e))?;
+
+        Ok(count)
     }
 
     // 获取 markdown 内容
@@ -260,8 +309,14 @@ impl RagTool {
     }
 
     pub fn preprocess_markdown_for_embedding(&self, content: &str) -> String {
-        /// 缓存所有 markdown 清洗正则，避免每次调用重新编译。
-        struct MarkdownRegexes {
+        preprocess_markdown_for_embedding(content)
+    }
+}
+
+/// 预处理 Markdown 文本，去掉标记符号但保留语义内容，用于生成更干净的 embedding。
+pub fn preprocess_markdown_for_embedding(content: &str) -> String {
+    /// 缓存所有 markdown 清洗正则，避免每次调用重新编译。
+    struct MarkdownRegexes {
             headers: Regex,
             links: Regex,
             reference_links: Regex,
@@ -336,7 +391,6 @@ impl RagTool {
 
         text.trim().to_string()
     }
-}
 
 #[async_trait::async_trait]
 impl Tool for RagTool {
@@ -345,60 +399,109 @@ impl Tool for RagTool {
     }
 
     fn description(&self) -> &str {
-        "读取本地 Markdown 文件，按标题结构分割段落并做 token 分块，返回可用于检索的文本块列表。"
+        "RAG 资料库工具：支持 index（索引 Markdown 文档）和 search（语义检索资料库）。"
     }
 
     fn parameters_schema(&self) -> openai_api_rs::v1::types::FunctionParameters {
         let mut properties = HashMap::new();
         properties.insert(
+            "action".to_string(),
+            Box::new(openai_api_rs::v1::types::JSONSchemaDefine {
+                schema_type: Some(openai_api_rs::v1::types::JSONSchemaType::String),
+                description: Some("操作类型：index 或 search".to_string()),
+                ..Default::default()
+            }),
+        );
+        properties.insert(
+            "query".to_string(),
+            Box::new(openai_api_rs::v1::types::JSONSchemaDefine {
+                schema_type: Some(openai_api_rs::v1::types::JSONSchemaType::String),
+                description: Some("search 时使用的查询问题".to_string()),
+                ..Default::default()
+            }),
+        );
+        properties.insert(
+            "namespace".to_string(),
+            Box::new(openai_api_rs::v1::types::JSONSchemaDefine {
+                schema_type: Some(openai_api_rs::v1::types::JSONSchemaType::String),
+                description: Some("资料库命名空间，默认 default".to_string()),
+                ..Default::default()
+            }),
+        );
+        properties.insert(
             "path".to_string(),
             Box::new(openai_api_rs::v1::types::JSONSchemaDefine {
                 schema_type: Some(openai_api_rs::v1::types::JSONSchemaType::String),
-                description: Some("要读取的 Markdown 文件路径".to_string()),
+                description: Some("index 时要索引的 Markdown 文件路径".to_string()),
                 ..Default::default()
             }),
         );
         properties.insert(
-            "chunk_tokens".to_string(),
+            "limit".to_string(),
             Box::new(openai_api_rs::v1::types::JSONSchemaDefine {
                 schema_type: Some(openai_api_rs::v1::types::JSONSchemaType::Number),
-                description: Some("每个 chunk 的最大 token 数，默认 1024".to_string()),
-                ..Default::default()
-            }),
-        );
-        properties.insert(
-            "overlap_tokens".to_string(),
-            Box::new(openai_api_rs::v1::types::JSONSchemaDefine {
-                schema_type: Some(openai_api_rs::v1::types::JSONSchemaType::Number),
-                description: Some("相邻 chunk 之间的重叠 token 数，默认 128".to_string()),
+                description: Some("search 时返回的最大结果数，默认 5".to_string()),
                 ..Default::default()
             }),
         );
         openai_api_rs::v1::types::FunctionParameters {
             schema_type: openai_api_rs::v1::types::JSONSchemaType::Object,
             properties: Some(properties),
-            required: Some(vec!["path".to_string()]),
+            required: Some(vec!["action".to_string()]),
         }
     }
 
     async fn execute(&self, args: serde_json::Value) -> Result<String, String> {
-        let path = args["path"].as_str().unwrap_or("").to_string();
-        if path.is_empty() {
-            return Err("path is required".to_string());
+        let action = args["action"].as_str().unwrap_or("").to_string();
+        let namespace = args["namespace"].as_str().unwrap_or("default").to_string();
+
+        match action.as_str() {
+            "index" => {
+                let path = args["path"].as_str().unwrap_or("").to_string();
+                if path.is_empty() {
+                    return Err("index 操作需要 path 参数".to_string());
+                }
+                let chunk_tokens = args["chunk_tokens"].as_u64().unwrap_or(1024) as usize;
+                let overlap_tokens = args["overlap_tokens"].as_u64().unwrap_or(128) as usize;
+
+                let count = self
+                    .index_file(&path, &namespace, chunk_tokens, overlap_tokens)
+                    .await?;
+                Ok(format!("索引完成，共 {} 个 chunk", count))
+            }
+            "search" => {
+                let query = args["query"].as_str().unwrap_or("").to_string();
+                if query.is_empty() {
+                    return Err("search 操作需要 query 参数".to_string());
+                }
+                let limit = args["limit"].as_u64().unwrap_or(5) as usize;
+
+                let index = self.index()?;
+                let results = index.search(&query, Some(&namespace), limit).await?;
+
+                let formatted: Vec<String> = results
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (score, chunk))| {
+                        format!(
+                            "[{}] distance={:.3}\n来源: {}\n标题路径: {}\n{}",
+                            i + 1,
+                            score,
+                            chunk.source,
+                            chunk.heading_path.as_deref().unwrap_or("无"),
+                            chunk.content
+                        )
+                    })
+                    .collect();
+
+                Ok(format!(
+                    "检索到 {} 条相关 chunk：\n\n{}",
+                    formatted.len(),
+                    formatted.join("\n\n")
+                ))
+            }
+            _ => Err(format!("不支持的 action: {}", action)),
         }
-
-        let chunk_tokens = args["chunk_tokens"].as_u64().unwrap_or(1024) as usize;
-        let overlap_tokens = args["overlap_tokens"].as_u64().unwrap_or(128) as usize;
-
-        let text = self.get_markdown_content(&path)?;
-        if text.is_empty() {
-            return Err("file is empty or could not be read".to_string());
-        }
-
-        let paragraphs = self.split_paragraphs_with_headings(text);
-        let chunks = self.chunk_paragraphs(paragraphs, chunk_tokens, overlap_tokens);
-
-        serde_json::to_string(&chunks).map_err(|e| e.to_string())
     }
 }
 
@@ -445,11 +548,10 @@ impl RagIndex {
             return Ok(());
         }
 
-        let rag_tool = RagTool::new();
         let processed: Vec<(Paragraph, String)> = chunks
             .into_iter()
             .map(|chunk| {
-                let processed = rag_tool.preprocess_markdown_for_embedding(&chunk.content);
+                let processed = preprocess_markdown_for_embedding(&chunk.content);
                 (chunk, processed)
             })
             .collect();
