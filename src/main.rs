@@ -1,7 +1,8 @@
 use agent_lab::{
     agent::simple_agent::SimpleAgent,
     base::{agent::Agent, config::Config, llm::AgentsLLM},
-    tools::{ToolManager, memory::base::get_db_client, rag::RagTool},
+    db::get_db_client,
+    tools::{ToolManager, rag::RagTool},
 };
 
 #[tokio::main]

@@ -1,4 +1,3 @@
-use std::env;
 use chrono::Local;
 
 #[derive(Clone, sqlx::FromRow)]
@@ -49,6 +48,16 @@ pub struct RetrieveRequest {
 pub trait Memory: Send + Sync {
     async fn add(&mut self, memory_item: MemoryItem) -> String;
     async fn retrieve(&mut self, request: RetrieveRequest) -> Vec<MemoryItem>;
+
+    /// 遗忘策略入口。默认不实现，返回 0。
+    async fn forget(
+        &self,
+        _strategy: &str,
+        _threshold: f64,
+        _max_age_days: i64,
+    ) -> Result<usize, String> {
+        Ok(0)
+    }
 }
 
 #[derive(Clone)]
@@ -68,8 +77,3 @@ impl MemoryConfig {
     }
 }
 
-pub async fn get_db_client() -> sqlx::PgPool {
-    dotenvy::dotenv().ok();
-    let database_url = env::var("DATABASE_URL").expect("database_url is not empty");
-    sqlx::PgPool::connect(&database_url).await.expect("database connection build failed")
-}

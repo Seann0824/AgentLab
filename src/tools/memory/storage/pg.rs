@@ -337,7 +337,7 @@ impl PgStore {
 mod tests {
     use std::sync::Arc;
     use super::*;
-    use crate::tools::memory::base::get_db_client;
+    use crate::db::get_db_client;
     use crate::tools::memory::storage::embedder::Embedder;
 
     struct MockEmbedder;
