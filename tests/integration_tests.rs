@@ -6,4 +6,8 @@ mod tools {
             mod neo4j_test;
         }
     }
+
+    mod rag {
+        mod rag_test;
+    }
 }

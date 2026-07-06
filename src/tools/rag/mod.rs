@@ -4,24 +4,29 @@ use scirs2_text::is_cjk_char;
 
 use crate::tools::types::Tool;
 
-struct RagTool {}
+pub struct RagTool {}
 
-#[derive(Clone, serde::Serialize)]
-struct Paragraph {
-    content: String,
-    heading_path: Option<String>,
-    start: usize,
-    end: usize,
+#[derive(Clone, serde::Serialize, Debug, PartialEq)]
+pub struct Paragraph {
+    pub content: String,
+    pub heading_path: Option<String>,
+    pub start: usize,
+    pub end: usize,
 }
 
 impl RagTool {
+    pub fn new() -> Self {
+        Self {}
+    }
+
     // 获取 markdown 内容
-    fn get_markdown_content(&self, path: &str) -> Result<String, String> {
+    pub fn get_markdown_content(&self, path: &str) -> Result<String, String> {
         std::fs::read_to_string(path).map_err(|e| format!("failed to read {}: {}", path, e))
     }
 
-    fn split_paragraphs_with_headings(&self, text: String) -> Vec<Paragraph> {
-        let lines = text.lines();
+    pub fn split_paragraphs_with_headings(&self, text: String) -> Vec<Paragraph> {
+        // 使用 split_inclusive 保留换行符信息，让 char_pos 能精确对应原文位置
+        let lines = text.split_inclusive('\n');
         let mut heading_stack: Vec<String> = vec![];
         let mut paragraphs: Vec<Paragraph> = vec![];
 
@@ -53,8 +58,13 @@ impl RagTool {
             })
         };
 
-        for line in lines {
-            let raw = line;
+        for line_with_sep in lines {
+            // 去掉行尾的换行符（兼容 \r\n 和 \n）
+            let raw = line_with_sep
+                .strip_suffix('\n')
+                .map(|s| s.strip_suffix('\r').unwrap_or(s))
+                .unwrap_or(line_with_sep);
+
             if raw.trim().starts_with("#") {
                 flush_buf(
                     char_pos,
@@ -78,7 +88,7 @@ impl RagTool {
                 }
                 heading_stack.push(title);
 
-                char_pos += raw.len() + 1;
+                char_pos += line_with_sep.len();
                 continue;
             }
             // 段落内容积累
@@ -97,7 +107,7 @@ impl RagTool {
                 }
                 buf.push(raw.to_string());
             }
-            char_pos += raw.len() + 1;
+            char_pos += line_with_sep.len();
         }
 
         flush_buf(
@@ -123,7 +133,7 @@ impl RagTool {
     // 在结构化段落划分的基础上，根据 Token 数量进行智能分块。
     // 注意：overlap 部分会出现在相邻 chunk 中，这是为了保证检索时上下文的连续性，
     // 属于 RAG 中常见的冗余设计。如果不需要重叠，可把 overlap_tokens 设为 0。
-    fn chunk_paragraphs(
+    pub fn chunk_paragraphs(
         &self,
         paragraphs: Vec<Paragraph>,
         chunk_tokens: usize,
@@ -209,7 +219,7 @@ impl RagTool {
         chunks
     }
 
-    fn approx_token_len(&self, content: &str) -> usize {
+    pub fn approx_token_len(&self, content: &str) -> usize {
         content
             .split_whitespace()
             .map(|token| {
@@ -227,6 +237,8 @@ impl RagTool {
             })
             .sum()
     }
+
+    
 }
 
 #[async_trait::async_trait]
