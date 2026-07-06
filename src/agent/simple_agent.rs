@@ -103,7 +103,22 @@ impl Agent for SimpleAgent {
                         match finish_reason {
                             FinishReason::tool_calls | FinishReason::function_call => {
                                 let tools_call = tools_call.clone().unwrap_or_default().clone();
-                                self.add_message(Message::assistant(reason_delta.join(""), None));
+                                // 如果模型声明要调用工具但没有给出具体 tool_call，降级为普通内容回复。
+                                if tools_call.is_empty() {
+                                    let content = content_delta.join("");
+                                    if !content.is_empty() {
+                                        self.add_message(Message::assistant(content.clone(), None));
+                                        final_response = content;
+                                    }
+                                    is_continue = false;
+                                    break;
+                                }
+                                // 部分模型/提供商不接受 content 和 tool_calls 同时为空的 assistant 消息。
+                                // 如果 reasoning 内容为空，则不加入历史，避免后续请求被 API 拒绝。
+                                let reasoning = reason_delta.join("");
+                                if !reasoning.is_empty() {
+                                    self.add_message(Message::assistant(reasoning, None));
+                                }
                                 self.add_message(Message::assistant_with_tools(content_delta.join(""), tools_call.clone(),None));
                                 // 工具调用开始
                                 let tasks = tools_call
@@ -126,7 +141,10 @@ impl Agent for SimpleAgent {
                             },
                             _ => {
                                 let content = content_delta.join("");
-                                self.add_message(Message::assistant(reason_delta.join(""), None));
+                                let reasoning = reason_delta.join("");
+                                if !reasoning.is_empty() {
+                                    self.add_message(Message::assistant(reasoning, None));
+                                }
                                 self.add_message(Message::assistant(content.clone(), None));
                                 final_response = content;
                                 is_continue = false;
