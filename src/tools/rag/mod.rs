@@ -1,7 +1,12 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc, sync::OnceLock};
 
+use pgvector::Vector;
+use regex::Regex;
 use scirs2_text::is_cjk_char;
+use sqlx::{PgPool, Row};
 
+use crate::tools::memory::storage::embedder::Embedder;
+use crate::tools::memory::storage::OllamaEmbedder;
 use crate::tools::types::Tool;
 
 pub struct RagTool {}
@@ -12,6 +17,22 @@ pub struct Paragraph {
     pub heading_path: Option<String>,
     pub start: usize,
     pub end: usize,
+}
+
+/// RAG 全局资料库中的一条 chunk 记录。
+/// 与 memory 的 `memories` 表解耦，字段更精简，面向文档检索场景。
+#[derive(Clone, serde::Serialize, Debug, PartialEq)]
+pub struct RagChunk {
+    pub id: String,
+    pub namespace: String,
+    pub source: String,
+    pub content: String,
+    pub embedding: Vec<f32>,
+    pub heading_path: Option<String>,
+    pub start: usize,
+    pub end: usize,
+    pub chunk_index: usize,
+    pub metadata: serde_json::Value,
 }
 
 impl RagTool {
@@ -238,7 +259,83 @@ impl RagTool {
             .sum()
     }
 
-    
+    pub fn preprocess_markdown_for_embedding(&self, content: &str) -> String {
+        /// 缓存所有 markdown 清洗正则，避免每次调用重新编译。
+        struct MarkdownRegexes {
+            headers: Regex,
+            links: Regex,
+            reference_links: Regex,
+            images: Regex,
+            code_blocks: Regex,
+            bold_asterisks: Regex,
+            bold_underscores: Regex,
+            italic_asterisks: Regex,
+            italic_underscores: Regex,
+            strikethrough: Regex,
+            inline_code: Regex,
+            html_tags: Regex,
+            blockquotes: Regex,
+            blank_lines: Regex,
+            spaces: Regex,
+        }
+
+        impl MarkdownRegexes {
+            fn get() -> &'static MarkdownRegexes {
+                static INSTANCE: OnceLock<MarkdownRegexes> = OnceLock::new();
+                INSTANCE.get_or_init(|| MarkdownRegexes {
+                    headers: Regex::new(r"(?m)^#{1,6}\s+").unwrap(),
+                    links: Regex::new(r"\[([^\]]+)\]\([^)]+?\)").unwrap(),
+                    reference_links: Regex::new(r"\[([^\]]+)\]\[[^\]]*\]").unwrap(),
+                    images: Regex::new(r"!\[([^\]]*)\]\([^)]+?\)").unwrap(),
+                    code_blocks: Regex::new(r"```[^\n]*\n([\s\S]*?)```").unwrap(),
+                    bold_asterisks: Regex::new(r"\*\*([^*]+?)\*\*").unwrap(),
+                    bold_underscores: Regex::new(r"__([^_]+?)__").unwrap(),
+                    italic_asterisks: Regex::new(r"\*([^*]+?)\*").unwrap(),
+                    italic_underscores: Regex::new(r"_([^_]+?)_").unwrap(),
+                    strikethrough: Regex::new(r"~~([^~]+?)~~").unwrap(),
+                    inline_code: Regex::new(r"`([^`]+)`").unwrap(),
+                    html_tags: Regex::new(r"<[^>]+>").unwrap(),
+                    blockquotes: Regex::new(r"(?m)^>\s?").unwrap(),
+                    blank_lines: Regex::new(r"\n\s*\n").unwrap(),
+                    spaces: Regex::new(r"[ \t]+").unwrap(),
+                })
+            }
+        }
+
+        let re = MarkdownRegexes::get();
+
+        // 1. 代码块（必须先处理，否则 inline code 会误吃 ``` 里的反引号）
+        let text = re.code_blocks.replace_all(content, "$1");
+
+        // 2. 行内代码
+        let text = re.inline_code.replace_all(&text, "$1");
+
+        // 3. 图片与链接：保留可见文本/alt 文本
+        // 必须先处理图片，否则普通链接正则会吃掉 ![alt](url) 里的 [alt](url)
+        let text = re.images.replace_all(&text, "$1");
+        let text = re.links.replace_all(&text, "$1");
+        let text = re.reference_links.replace_all(&text, "$1");
+
+        // 4. 强调：先粗体（双标记），再斜体（单标记），避免 `_text_` 吃掉 `__text__`
+        let text = re.bold_asterisks.replace_all(&text, "$1");
+        let text = re.bold_underscores.replace_all(&text, "$1");
+        let text = re.italic_asterisks.replace_all(&text, "$1");
+        let text = re.italic_underscores.replace_all(&text, "$1");
+        let text = re.strikethrough.replace_all(&text, "$1");
+
+        // 5. 标题符号
+        let text = re.headers.replace_all(&text, "");
+
+        // 6. HTML 标签与 blockquote 标记
+        let text = re.html_tags.replace_all(&text, " ");
+        let text = re.blockquotes.replace_all(&text, "");
+
+        // 7. 空白规范化
+        let text = re.blank_lines.replace_all(&text, "\n\n");
+        let text = re.spaces.replace_all(&text, " ");
+
+        text.trim().to_string()
+    }
 }
 
 #[async_trait::async_trait]
@@ -302,5 +399,216 @@ impl Tool for RagTool {
         let chunks = self.chunk_paragraphs(paragraphs, chunk_tokens, overlap_tokens);
 
         serde_json::to_string(&chunks).map_err(|e| e.to_string())
+    }
+}
+
+/// RAG 索引器：负责把分块后的文本生成 embedding 并写入独立的 `rag_chunks` 表。
+///
+/// 与 memory 体系解耦：`rag_chunks` 是全局资料库，字段精简，
+/// namespace 仅用于多资料库隔离，不对应具体用户。
+#[derive(Clone)]
+pub struct RagIndex {
+    db: PgPool,
+    embedder: Arc<dyn Embedder + Send + Sync>,
+    dimension: usize,
+}
+
+impl RagIndex {
+    pub fn new(db: PgPool, embedder: Arc<dyn Embedder + Send + Sync>, dimension: usize) -> Self {
+        Self {
+            db,
+            embedder,
+            dimension,
+        }
+    }
+
+    /// 使用默认的 Ollama embedder 创建索引器。
+    /// 默认维度 768，与 `init_pg.sql` 中的 rag_chunks.embedding VECTOR(768) 对应。
+    pub fn with_default_embedder(db: PgPool) -> Self {
+        let embedder = Arc::new(OllamaEmbedder::new(None, None));
+        Self::new(db, embedder, 768)
+    }
+
+    /// 将 RAG chunk 预处理后生成 embedding，批量写入 `rag_chunks`。
+    ///
+    /// - `source`: 来源文档标识（如文件路径）
+    /// - `namespace`: RAG 命名空间，用于多资料库隔离
+    /// - `batch_size`: 每批写入的 chunk 数量
+    pub async fn index_chunks(
+        &self,
+        chunks: Vec<Paragraph>,
+        source: &str,
+        namespace: &str,
+        batch_size: usize,
+    ) -> Result<(), String> {
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        let rag_tool = RagTool::new();
+        let processed: Vec<(Paragraph, String)> = chunks
+            .into_iter()
+            .map(|chunk| {
+                let processed = rag_tool.preprocess_markdown_for_embedding(&chunk.content);
+                (chunk, processed)
+            })
+            .collect();
+
+        let mut batch: Vec<RagChunk> = Vec::with_capacity(batch_size);
+
+        for (chunk_index, (chunk, text)) in processed.into_iter().enumerate() {
+            let mut embedding = self
+                .embedder
+                .encode(&text)
+                .await
+                .map_err(|e| format!("[RagIndex] embedding failed: {}", e))?;
+            self.normalize_embedding(&mut embedding);
+
+            batch.push(RagChunk {
+                id: uuid::Uuid::new_v4().to_string(),
+                namespace: namespace.to_string(),
+                source: source.to_string(),
+                content: text,
+                embedding,
+                heading_path: chunk.heading_path,
+                start: chunk.start,
+                end: chunk.end,
+                chunk_index,
+                metadata: serde_json::json!({
+                    "original_content": chunk.content,
+                }),
+            });
+
+            if batch.len() >= batch_size {
+                self.insert_batch(&batch).await?;
+                batch.clear();
+            }
+        }
+
+        if !batch.is_empty() {
+            self.insert_batch(&batch).await?;
+        }
+
+        Ok(())
+    }
+
+    /// 语义检索：把 query 向量化后在 `rag_chunks` 中搜索最近的 chunk。
+    pub async fn search(
+        &self,
+        query: &str,
+        namespace: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(f64, RagChunk)>, String> {
+        let mut embedding = self
+            .embedder
+            .encode(query)
+            .await
+            .map_err(|e| format!("[RagIndex] query embedding failed: {}", e))?;
+        self.normalize_embedding(&mut embedding);
+        let pg_vector = Vector::from(embedding);
+
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                id, namespace, source, content, embedding,
+                heading_path, start_pos, end_pos, chunk_index, metadata,
+                embedding <=> $1 AS score
+            FROM rag_chunks
+            WHERE namespace = $2 OR $2 IS NULL
+            ORDER BY embedding <=> $1
+            LIMIT $3
+            "#,
+        )
+        .bind(pg_vector)
+        .bind(namespace)
+        .bind(limit as i64)
+        .fetch_all(&self.db)
+        .await
+        .map_err(|e| format!("[RagIndex] search failed: {}", e))?;
+
+        let results = rows
+            .into_iter()
+            .map(|row| {
+                let chunk = RagChunk {
+                    id: row.get("id"),
+                    namespace: row.get("namespace"),
+                    source: row.get("source"),
+                    content: row.get("content"),
+                    embedding: row
+                        .get::<Option<Vector>, _>("embedding")
+                        .map(|v| v.to_vec())
+                        .unwrap_or_default(),
+                    heading_path: row.get("heading_path"),
+                    start: row.get::<i64, _>("start_pos") as usize,
+                    end: row.get::<i64, _>("end_pos") as usize,
+                    chunk_index: row.get::<i32, _>("chunk_index") as usize,
+                    metadata: row
+                        .get::<Option<serde_json::Value>, _>("metadata")
+                        .unwrap_or_else(|| serde_json::json!({})),
+                };
+                let score: f64 = row.get("score");
+                (score, chunk)
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    fn normalize_embedding(&self, embedding: &mut Vec<f32>) {
+        if embedding.len() < self.dimension {
+            embedding.extend(vec![0.0f32; self.dimension - embedding.len()]);
+        } else if embedding.len() > self.dimension {
+            embedding.truncate(self.dimension);
+        }
+    }
+
+    /// 清空某个 namespace 下的所有 chunk，便于重新索引同一资料库。
+    pub async fn clear_namespace(&self, namespace: &str) -> Result<u64, String> {
+        let deleted = sqlx::query("DELETE FROM rag_chunks WHERE namespace = $1")
+            .bind(namespace)
+            .execute(&self.db)
+            .await
+            .map_err(|e| format!("[RagIndex] clear namespace failed: {}", e))?
+            .rows_affected();
+        Ok(deleted)
+    }
+
+    async fn insert_batch(&self, batch: &[RagChunk]) -> Result<(), String> {
+        let mut tx = self
+            .db
+            .begin()
+            .await
+            .map_err(|e| format!("[RagIndex] transaction begin failed: {}", e))?;
+
+        for chunk in batch {
+            let pg_vector = Vector::from(chunk.embedding.clone());
+            sqlx::query(
+                r#"
+                INSERT INTO rag_chunks (
+                    id, namespace, source, content, embedding,
+                    heading_path, start_pos, end_pos, chunk_index, metadata
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                "#,
+            )
+            .bind(&chunk.id)
+            .bind(&chunk.namespace)
+            .bind(&chunk.source)
+            .bind(&chunk.content)
+            .bind(pg_vector)
+            .bind(&chunk.heading_path)
+            .bind(chunk.start as i64)
+            .bind(chunk.end as i64)
+            .bind(chunk.chunk_index as i32)
+            .bind(&chunk.metadata)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("[RagIndex] insert failed: {}", e))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("[RagIndex] transaction commit failed: {}", e))?;
+
+        Ok(())
     }
 }

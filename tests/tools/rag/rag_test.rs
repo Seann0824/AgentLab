@@ -208,3 +208,175 @@ fn test_chunk_does_not_drop_paragraph() {
     assert_eq!(chunks[0].content, "aaa bbb");
     assert_eq!(chunks[1].content, "ccc ddd");
 }
+
+#[test]
+fn test_preprocess_headers() {
+    let rag = tool();
+    let input = "# Title\n## Section\n### Sub\nbody text";
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding(input),
+        "Title\nSection\nSub\nbody text"
+    );
+}
+
+#[test]
+fn test_preprocess_links() {
+    let rag = tool();
+    let input = "See [example](https://example.com) for details";
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding(input),
+        "See example for details"
+    );
+}
+
+#[test]
+fn test_preprocess_emphasis() {
+    let rag = tool();
+    let input = "**bold** and *italic* text";
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding(input),
+        "bold and italic text"
+    );
+}
+
+#[test]
+fn test_preprocess_inline_code() {
+    let rag = tool();
+    let input = "Use `cargo build` to compile";
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding(input),
+        "Use cargo build to compile"
+    );
+}
+
+#[test]
+fn test_preprocess_code_block() {
+    let rag = tool();
+    let input = "```rust\nlet x = 1;\nlet y = 2;\n```";
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding(input),
+        "let x = 1;\nlet y = 2;"
+    );
+}
+
+#[test]
+fn test_preprocess_excessive_whitespace() {
+    let rag = tool();
+    let input = "line one\n\n\n\n   \nline two\t\tthree";
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding(input),
+        "line one\n\nline two three"
+    );
+}
+
+#[test]
+fn test_preprocess_combined() {
+    let rag = tool();
+    let input = "# Intro\n\nRead [docs](https://docs.rs) and run `cargo test`.\n\n**Note**: *important* code below.\n\n```rust\nfn main() {}\n```";
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding(input),
+        "Intro\n\nRead docs and run cargo test.\n\nNote: important code below.\n\nfn main() {}"
+    );
+}
+
+#[test]
+fn test_preprocess_bold_underscore() {
+    let rag = tool();
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding("__bold__ text"),
+        "bold text"
+    );
+}
+
+#[test]
+fn test_preprocess_italic_underscore() {
+    let rag = tool();
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding("_italic_ text"),
+        "italic text"
+    );
+}
+
+#[test]
+fn test_preprocess_bold_underscore_not_eaten_by_italic() {
+    let rag = tool();
+    // __text__ 应该整体变成 text，而不是被 _text_ 截断
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding("__text__"),
+        "text"
+    );
+}
+
+#[test]
+fn test_preprocess_strikethrough() {
+    let rag = tool();
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding("~~deleted~~ text"),
+        "deleted text"
+    );
+}
+
+#[test]
+fn test_preprocess_images() {
+    let rag = tool();
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding("![diagram](https://example.com/d.png)"),
+        "diagram"
+    );
+}
+
+#[test]
+fn test_preprocess_reference_links() {
+    let rag = tool();
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding("See [docs][ref] for more."),
+        "See docs for more."
+    );
+}
+
+#[test]
+fn test_preprocess_html_tags() {
+    let rag = tool();
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding("Hello <br> world"),
+        "Hello world"
+    );
+}
+
+#[test]
+fn test_preprocess_blockquotes() {
+    let rag = tool();
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding("> quoted text\n> more quote"),
+        "quoted text\nmore quote"
+    );
+}
+
+#[test]
+fn test_preprocess_emphasis_order() {
+    let rag = tool();
+    // 混合强调：粗体里包含斜体的情况
+    assert_eq!(
+        rag.preprocess_markdown_for_embedding("**bold and _italic_**"),
+        "bold and italic"
+    );
+}
+
+use agent_lab::tools::rag::RagIndex;
+use sqlx::PgPool;
+
+#[tokio::test]
+async fn test_rag_index_empty_chunks() {
+    dotenvy::dotenv().ok();
+    let Ok(database_url) = std::env::var("DATABASE_URL") else {
+        // 没有数据库环境时跳过
+        return;
+    };
+    let Ok(db) = PgPool::connect(&database_url).await else {
+        return;
+    };
+
+    let index = RagIndex::with_default_embedder(db);
+    let result = index.index_chunks(vec![], "test.md", "default", 64).await;
+    assert!(result.is_ok());
+}

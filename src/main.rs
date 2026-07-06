@@ -1,130 +1,131 @@
 use agent_lab::{
-    agent::simple_agent::SimpleAgent,
-    base::{agent::Agent, config::Config, llm::AgentsLLM},
-    tools::{ToolManager, memory::MemoryTool, types::Tool},
+    base::llm::AgentsLLM,
+    tools::{
+        memory::base::get_db_client,
+        rag::{RagIndex, RagTool},
+    },
 };
+use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Content, MessageRole, ToolChoiceType};
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = run_neo4j_graph_memory_case().await {
-        eprintln!("\n❌ Neo4j 图关系 Agent 案例失败: {}", e);
+    if let Err(e) = run_rag_qa_loop().await {
+        eprintln!("\n❌ RAG 问答失败: {}", e);
         std::process::exit(1);
     }
-    println!("\n✅ Neo4j 图关系 Agent 案例完成");
 }
 
-/// 一个专门展示 Neo4j 在 Agent 记忆系统中作用的案例。
+/// 交互式 RAG 问答循环。
 ///
-/// 设计思路：
-/// - PG + pgvector 擅长召回“文本语义相似”的记忆。
-/// - Neo4j 擅长召回“实体关系相关”的记忆，即使文本本身和查询关键词不相似。
-///
-/// 本案例会录入 11 条记忆：其中 3 条是回答核心问题所必需的，其余是干扰项。
-/// 核心问题为：“小美是通过什么场合认识杭州科技大学的人的？”
-///
-/// 回答该问题必须组合：
-///   记忆 A：小林毕业于杭州科技大学（建立小林 ↔ 杭州科技大学）
-///   记忆 B：张伟是杭州科技大学的教授（建立张伟 ↔ 杭州科技大学）
-///   记忆 C：上个月公司年会上，小林把张伟介绍给了自己的女朋友小美
-///            （该记忆不含“杭州科技大学”字样，向量相似度低，但图关系上把三人串了起来）
-///
-/// 默认 limit=5 召回时，PG 向量检索容易被 11 条记忆挤占；
-/// Neo4j 通过 `Memory -[:HAS_ENTITY]-> Entity <-[:HAS_ENTITY]- Memory`
-/// 以及 `Entity -[:RELATED_TO]-> Entity` 的图扩散，把记忆 C 重新找回来。
-async fn run_neo4j_graph_memory_case() -> Result<(), String> {
-    // 前置清理：保证每次运行环境干净，避免旧数据干扰演示效果。
-    let memory_tool = MemoryTool::new().await;
-    let _ = memory_tool
-        .execute(serde_json::json!({
-            "action": "clear_all",
-            "memory_type": "semantic"
-        }))
-        .await;
+/// 启动时一次性索引 `Figma Agent：设计系统 × Agent 架构分享.md`，
+/// 之后用户可反复输入问题，系统从 rag_chunks 检索相关段落并用 LLM 生成答案。
+async fn run_rag_qa_loop() -> Result<(), String> {
+    let db = get_db_client().await;
+    let index = RagIndex::with_default_embedder(db);
+    let rag_tool = RagTool::new();
 
-    println!("\n=== 阶段 1：直接录入 11 条记忆（含核心事实与干扰项）===");
+    let path = "Figma Agent：设计系统 × Agent 架构分享.md";
+    let namespace = "figma_agent";
 
-    // 核心事实：3 条记忆组合起来才能回答问题，重要性最高
-    let core_facts: Vec<(&str, f64)> = vec![
-        ("小林毕业于杭州科技大学计算机学院", 0.9),
-        ("张伟是杭州科技大学人工智能学院的教授", 0.9),
-        ("上个月公司年会上，小林把张伟介绍给了自己的女朋友小美", 0.85),
-    ];
+    println!("=== RAG 问答系统 ===");
+    println!("正在索引文档: {}", path);
 
-    // 半干扰项：与人物有关，但单独看无法直接回答问题
-    let semi_distractors: Vec<(&str, f64)> = vec![
-        ("小美目前在阿里云做大模型产品经理", 0.5),
-        ("小林和小美已经恋爱两年了", 0.5),
-        ("张伟的研究方向是大模型安全", 0.55),
-    ];
-
-    // 纯干扰项：与主题弱相关，主要用来挤占向量检索的 top-K 位置
-    let distractors: Vec<(&str, f64)> = vec![
-        ("小林每天早上八点起床", 0.2),
-        ("小林周末喜欢去西湖骑行", 0.2),
-        ("杭州科技大学的校园在杭州市余杭区", 0.3),
-        ("杭州科技大学的校训是求是创新", 0.3),
-        ("阿里云总部位于杭州未来科技城", 0.25),
-    ];
-
-    // 直接调用 MemoryTool 录入，避免每个事实都走一轮 Agent LLM，显著减少运行时间。
-    for (fact, importance) in core_facts
-        .iter()
-        .chain(semi_distractors.iter())
-        .chain(distractors.iter())
-    {
-        match memory_tool
-            .execute(serde_json::json!({
-                "action": "add",
-                "content": fact,
-                "memory_type": "semantic",
-                "importance": importance
-            }))
-            .await
-        {
-            Ok(msg) => println!("✅ {}", msg),
-            Err(e) => eprintln!("⚠️  录入失败: {}", e),
-        }
+    let text = rag_tool.get_markdown_content(path)?;
+    if text.is_empty() {
+        return Err(format!("{} 为空或读取失败", path));
     }
 
-    println!("\n=== 阶段 2：Agent 基于记忆关系图回答跨记忆问题 ===");
+    let paragraphs = rag_tool.split_paragraphs_with_headings(text);
+    let chunks = rag_tool.chunk_paragraphs(paragraphs, 512, 64);
 
-    let mut graph_agent = SimpleAgent::new(
-        "图关系记忆助手",
-        AgentsLLM::from_env(),
-        "你是一个基于长期记忆回答用户问题的助手。\n\
-         规则：\n\
-         1. 当用户询问涉及多个人或事物之间关系的问题时，必须调用 memory 工具的 search 动作查找，memory_type 使用 semantic；为提高召回率，limit 请设为 10。\n\
-         2. 回答时要说明你是根据哪些记忆片段以及它们之间的什么关系得出结论的，不要编造。".to_string(),
-        Config::from_env(),
-        ToolManager::new()
-            .with_tool(Box::new(MemoryTool::new().await)),
-        true,
-    );
+    let deleted = index.clear_namespace(namespace).await?;
+    if deleted > 0 {
+        println!("清空旧索引: {} 条", deleted);
+    }
 
-    graph_agent.clear_history();
-    let answer1 = graph_agent
-        .run("小美是通过什么场合认识杭州科技大学的人的？请说明推理链条。")
-        .await;
-    println!("\n[问题1答案]\n{}", answer1);
+    index
+        .index_chunks(chunks.clone(), path, namespace, 8)
+        .await
+        .map_err(|e| format!("索引失败: {}（请确认 Ollama 已启动并加载 nomic-embed-text）", e))?;
+    println!("索引完成，共 {} 个 chunk\n", chunks.len());
 
-    graph_agent.clear_history();
-    let answer2 = graph_agent
-        .run("小林的社交圈里，哪些人和杭州科技大学有关？分别是什么关系？")
-        .await;
-    println!("\n[问题2答案]\n{}", answer2);
+    let llm = AgentsLLM::from_env();
 
-    graph_agent.clear_history();
-    let answer3 = graph_agent.run("张伟和小美之间有什么交集？").await;
-    println!("\n[问题3答案]\n{}", answer3);
+    println!("请输入问题（空行 / quit / exit 退出）：\n");
 
-    println!("\n=== 为什么这个案例能体现 Neo4j 的作用 ===");
-    println!("1. 核心答案记忆（“公司年会介绍”）不含“杭州科技大学”关键词，向量相似度天然偏低。");
-    println!("2. 默认 top-5 召回下，PG 向量检索容易被干扰项挤占，漏掉关键记忆。");
-    println!("3. Neo4j 把每条记忆抽取成实体节点与关系边，形成跨记忆的知识网络。");
-    println!(
-        "4. 查询“小美 + 杭州科技大学”时，图检索能沿着 小美-介绍-小林-毕业-杭科大 / 小美-介绍-张伟-任职-杭科大 的多跳路径召回关键记忆。"
-    );
-    println!("5. 最终 Agent 能把“公司年会介绍”和“杭科大校友/教授”两条记忆组合成完整的因果链条。");
+    loop {
+        print!("> ");
+        if let Err(e) = std::io::Write::flush(&mut std::io::stdout()) {
+            return Err(format!("flush stdout failed: {}", e));
+        }
+
+        let mut question = String::new();
+        if let Err(e) = std::io::stdin().read_line(&mut question) {
+            return Err(format!("read stdin failed: {}", e));
+        }
+        let question = question.trim();
+
+        if question.is_empty() || question == "quit" || question == "exit" {
+            println!("再见！");
+            break;
+        }
+
+        let results = index
+            .search(question, Some(namespace), 5)
+            .await
+            .map_err(|e| format!("检索失败: {}（请确认 Ollama 已启动）", e))?;
+
+        if results.is_empty() {
+            println!("未找到相关资料。\n");
+            continue;
+        }
+
+        let context = results
+            .iter()
+            .enumerate()
+            .map(|(i, (_, chunk))| {
+                format!(
+                    "[{}] 来源: {} | 标题路径: {}\n{}",
+                    i + 1,
+                    chunk.source,
+                    chunk.heading_path.as_deref().unwrap_or("无"),
+                    chunk.content
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let prompt = format!(
+            "你是基于以下参考资料回答问题的助手。请严格根据参考资料回答，不要编造。\
+             如果资料不足以回答问题，请明确说明。\n\n参考资料：\n{}\n\n用户问题：{}",
+            context, question
+        );
+
+        let messages = vec![ChatCompletionMessage {
+            role: MessageRole::user,
+            content: Content::Text(prompt),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+        }];
+
+        match llm
+            .chat_completion(messages, vec![], ToolChoiceType::None)
+            .await
+        {
+            Ok(resp) => {
+                if let Some(choice) = resp.choices.first() {
+                    match &choice.message.content {
+                        Some(answer) => println!("\n🤖 {}\n", answer.trim()),
+                        None => println!("\n🤖 （模型未返回内容）\n"),
+                    }
+                } else {
+                    println!("\n🤖 （模型未返回内容）\n");
+                }
+            }
+            Err(e) => println!("\n❌ LLM 调用失败: {}\n", e),
+        }
+    }
 
     Ok(())
 }

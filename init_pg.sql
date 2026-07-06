@@ -29,3 +29,30 @@ CREATE INDEX IF NOT EXISTS idx_memories_timestamp
 CREATE INDEX IF NOT EXISTS idx_memories_embedding
     ON memories
     USING hnsw (embedding vector_cosine_ops);
+
+-- 创建 rag_chunks 表（RAG 专用全局资料库，与用户体系解耦）
+CREATE TABLE IF NOT EXISTS rag_chunks (
+    id TEXT PRIMARY KEY,
+    namespace TEXT NOT NULL DEFAULT 'default',
+    source TEXT NOT NULL,
+    content TEXT NOT NULL,
+    embedding VECTOR(768) NOT NULL,
+    heading_path TEXT,
+    start_pos BIGINT,
+    end_pos BIGINT,
+    chunk_index INTEGER,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- 常用过滤索引
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_namespace
+    ON rag_chunks(namespace);
+
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_source
+    ON rag_chunks(source);
+
+-- HNSW 向量索引
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding
+    ON rag_chunks
+    USING hnsw (embedding vector_cosine_ops);
