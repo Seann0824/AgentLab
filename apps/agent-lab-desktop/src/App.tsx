@@ -21,6 +21,17 @@ function App() {
     console.log(file);
   }
 
+  function login() {
+    const payload = {
+      user: "tauri",
+      password: "tauri",
+    };
+    console.log("login");
+    invoke("login", payload)
+      .then((message) => console.log(message))
+      .catch((error) => console.error(error));
+  }
+
   return (
     <main className="container">
       <h1>Welcome to Tauri + React</h1>
@@ -37,7 +48,7 @@ function App() {
         </a>
       </div>
       <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
+      <button onClick={() => login()}>登录</button>
       <form
         className="row"
         onSubmit={async (e) => {

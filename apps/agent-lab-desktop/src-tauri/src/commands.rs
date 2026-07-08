@@ -17,3 +17,12 @@ pub fn read_file(file_path: &str) -> Response {
     let data = std::fs::read(file_path).unwrap();
     tauri::ipc::Response::new(data)
 }
+
+#[tauri::command]
+pub fn login(user: &str, password: &str) -> Result<String, String> {
+    if user == "tauri" && password == "tauri" {
+        Ok("logged_in".to_string())
+    } else {
+        Err("invalid credentials".to_string())
+    }
+}
