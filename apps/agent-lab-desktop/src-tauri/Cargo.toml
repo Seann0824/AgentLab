@@ -31,3 +31,6 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# 独立 workspace，避免被外层 Rust workspace 自动继承
+[workspace]
