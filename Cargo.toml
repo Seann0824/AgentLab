@@ -1,3 +1,6 @@
 [workspace]
-members = ["crates/agent-lab-core", "crates/openai-api-rs"]
+members = [
+    "crates/agent-lab-core",
+    "crates/openai-api-rs",
+]
 resolver = "2"

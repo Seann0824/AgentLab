@@ -26,13 +26,15 @@
 - **序列化/配置**：`serde`、`serde_json`、`dotenvy`
 - **日志**：`tracing`
 
-> 注意：仓库根目录存在一个 `node_modules/`，但项目当前没有 `package.json` 或前端构建脚本，该目录是历史遗留，不参与当前 Rust 构建流程。
+> 注意：仓库根目录存在一个 `node_modules/`，属于历史遗留。现在根目录另有 `package.json`，仅作为 Rust / Tauri 任务的聚合入口（见第 4 节），不参与 Rust 编译。
 
 ## 3. 项目结构
 
 ```text
-Cargo.toml                   # workspace 根
+Cargo.toml                   # Rust workspace 根
 Cargo.lock                   # 共享 lock 文件
+package.json                 # 任务聚合入口（pnpm lab / novel / desktop 等）
+.cargo/config.toml           # cargo alias（lab / novel / c / t 等）
 crates/
 └── agent-lab-core/          # 核心 crate（库 + CLI）
     ├── Cargo.toml
@@ -64,7 +66,7 @@ crates/
         ├── integration_tests.rs
         └── tools/...
 
-apps/                        # 应用 crate（后续 Tauri 桌面端）
+apps/                        # 应用目录（Tauri 桌面端）
 init_pg.sql                  # PG 建表/索引脚本
 .env                         # 环境变量（已加入 .gitignore，勿提交）
 ```
@@ -73,9 +75,33 @@ init_pg.sql                  # PG 建表/索引脚本
 
 ### 4.1 基础命令
 
+推荐通过根目录 `package.json` 运行常用任务（需先安装 pnpm）：
+
+```bash
+# 运行主程序（交互式 RAG Agent）
+pnpm lab
+
+# 运行示例（多 Agent 小说创作）
+pnpm novel
+
+# 运行桌面端（Tauri dev）
+pnpm desktop
+
+# 构建桌面端
+pnpm desktop:build
+
+# 检查 workspace
+pnpm check
+
+# 运行库单元测试
+pnpm test
+```
+
+等价原生 cargo 命令（也已在 `.cargo/config.toml` 中配置为 alias）：
+
 ```bash
 # 检查
-cargo check
+cargo check          # 或 cargo c
 
 # 构建
 cargo build
@@ -83,14 +109,14 @@ cargo build
 # 构建 Release
 cargo build --release
 
-# 运行主程序（交互式 RAG Agent）
-cargo run -p agent-lab-core --bin agent-lab
+# 运行主程序
+cargo run -p agent-lab-core --bin agent-lab    # 或 cargo lab
 
 # 运行示例
-cargo run -p agent-lab-core --example novel_generation
+cargo run -p agent-lab-core --example novel_generation    # 或 cargo novel
 
 # 运行测试
-cargo test
+cargo test           # 或 cargo t
 
 # 只运行库单元测试
 cargo test --lib
@@ -265,9 +291,14 @@ cargo test --lib
 
 ## 12. 快速开始检查清单
 
-1. `cargo check` 通过。
+1. `cargo check` 通过（或 `pnpm check`）。
 2. 准备 PostgreSQL + pgvector，执行 `init_pg.sql`。
 3. 准备 Neo4j 并启动。
 4. 准备 Ollama 并拉取 `nomic-embed-text`。
 5. 在 `.env` 中填入 `DATABASE_URL`、`API_KEY`、`BASE_URL`、`MODEL`、`NEO4J_PASSWORD`。
-6. `cargo run -p agent-lab-core --bin agent-lab` 启动交互式 RAG Agent，或 `cargo run -p agent-lab-core --example novel_generation` 体验多 Agent 示例。
+6. 启动交互式 RAG Agent：
+   - `pnpm lab`，或
+   - `cargo run -p agent-lab-core --bin agent-lab`（等价）
+7. 体验多 Agent 小说示例：
+   - `pnpm novel`，或
+   - `cargo run -p agent-lab-core --example novel_generation`（等价）
