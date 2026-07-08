@@ -31,9 +31,11 @@ function App() {
 
       <form
         className="row"
-        onSubmit={(e) => {
+        onSubmit={async (e) => {
           e.preventDefault();
           greet();
+          let a = await invoke("my_custom_command", { invokeMessage: "text" });
+          alert(a);
         }}
       >
         <input
