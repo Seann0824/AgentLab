@@ -1,7 +1,13 @@
 import { useState } from "react";
 import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import "./App.css";
+
+interface FileChunk {
+  chunk: number[];
+  progress: number;
+  done: boolean;
+}
 
 function App() {
   const [greetMsg, setGreetMsg] = useState("");
@@ -13,12 +19,50 @@ function App() {
   }
 
   async function getGitignoreFile() {
-    let file = await invoke("read_file", {
-      filePath: "xxx",
+    try {
+      let file = await invoke("read_file", {
+        filePath: "/Users/sean/Desktop/repo/agent-lab/.gitignore",
+      });
+
+      // file 是 Uint8Array / ArrayBuffer
+      console.log("file size:", (file as Uint8Array).length);
+      console.log(
+        "file content:",
+        new TextDecoder().decode(file as Uint8Array)
+      );
+    } catch (error) {
+      console.error("read file failed:", error);
+    }
+  }
+
+  async function getGitignoreFileByChannel() {
+    const chunks: Uint8Array[] = [];
+    const channel = new Channel<FileChunk>((payload) => {
+      console.log(
+        "progress:",
+        (payload.progress * 100).toFixed(2) + "%",
+        "done:",
+        payload.done
+      );
+      if (payload.chunk.length > 0) {
+        chunks.push(new Uint8Array(payload.chunk));
+      }
     });
 
-    // file 如何读取呢？
-    console.log(file);
+    await invoke("read_file_channel", {
+      filePath: "/Users/sean/Desktop/repo/agent-lab/.gitignore",
+      onChunk: channel,
+    });
+
+    const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+    const result = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    console.log("file content:", new TextDecoder().decode(result));
   }
 
   function login() {
@@ -49,6 +93,9 @@ function App() {
       </div>
       <p>Click on the Tauri, Vite, and React logos to learn more.</p>
       <button onClick={() => login()}>登录</button>
+      <button onClick={() => getGitignoreFileByChannel()}>
+        通过 Channel 读取文件
+      </button>
       <form
         className="row"
         onSubmit={async (e) => {
