@@ -1,4 +1,4 @@
-use agent_lab::{
+use agent_lab_core::{
     agent::simple_agent::SimpleAgent,
     base::{agent::Agent, config::Config, llm::AgentsLLM},
     db::get_db_client,

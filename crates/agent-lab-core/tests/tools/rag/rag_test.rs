@@ -1,4 +1,4 @@
-use agent_lab::tools::rag::{Paragraph, RagTool};
+use agent_lab_core::tools::rag::{Paragraph, RagTool};
 
 fn tool() -> RagTool {
     RagTool::new()
@@ -362,7 +362,7 @@ fn test_preprocess_emphasis_order() {
     );
 }
 
-use agent_lab::tools::rag::RagIndex;
+use agent_lab_core::tools::rag::RagIndex;
 use sqlx::PgPool;
 
 #[tokio::test]

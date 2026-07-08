@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use agent_lab::db::get_db_client;
-use agent_lab::tools::memory::base::{MemoryConfig, MemoryItem, RetrieveRequest};
-use agent_lab::tools::memory::episodic_memory::EpisodicMemory;
-use agent_lab::tools::memory::storage::{MemoryStore, Neo4jStore, PgStore, embedder::Embedder};
-use agent_lab::tools::memory::Memory;
+use agent_lab_core::db::get_db_client;
+use agent_lab_core::tools::memory::base::{MemoryConfig, MemoryItem, RetrieveRequest};
+use agent_lab_core::tools::memory::episodic_memory::EpisodicMemory;
+use agent_lab_core::tools::memory::storage::{MemoryStore, Neo4jStore, PgStore, embedder::Embedder};
+use agent_lab_core::tools::memory::Memory;
 
 struct MockEmbedder;
 

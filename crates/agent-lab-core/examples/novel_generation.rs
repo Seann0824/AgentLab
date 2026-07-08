@@ -1,7 +1,7 @@
-use agent_lab::agent::group_chat::{RoundRobinGroupChat, TextMentionTermination};
-use agent_lab::agent::simple_agent::SimpleAgent;
-use agent_lab::base::llm::AgentsLLM;
-use agent_lab::tools::{web_search::WebSearch, ToolManager};
+use agent_lab_core::agent::group_chat::{RoundRobinGroupChat, TextMentionTermination};
+use agent_lab_core::agent::simple_agent::SimpleAgent;
+use agent_lab_core::base::llm::AgentsLLM;
+use agent_lab_core::tools::{ToolManager, web_search::WebSearch};
 
 #[tokio::main]
 async fn main() {
@@ -28,7 +28,7 @@ fn create_agent(name: &str, system_prompt: &str) -> SimpleAgent {
         name,
         AgentsLLM::from_env(),
         system_prompt.to_string(),
-        None::<agent_lab::base::config::Config>,
+        None::<agent_lab_core::base::config::Config>,
         tool_manager,
         true,
     )
