@@ -6,11 +6,22 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .manage(GlobalState {
-            name: "test".to_string(),
-        })
+    // CrabNebula DevTools：只在 debug 构建中启用，用于实时查看日志、command 性能等
+    #[cfg(debug_assertions)]
+    let devtools = tauri_plugin_devtools::init();
+
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(devtools);
+    }
+
+    builder
         .setup(|app| {
+            app.manage(GlobalState {
+                name: "test".to_string(),
+            });
             {
                 let window = app.get_webview_window("main").unwrap();
                 window.open_devtools();
