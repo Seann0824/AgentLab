@@ -12,6 +12,15 @@ function App() {
     setGreetMsg(await invoke("greet", { name }));
   }
 
+  async function getGitignoreFile() {
+    let file = await invoke("read_file", {
+      filePath: "xxx",
+    });
+
+    // file 如何读取呢？
+    console.log(file);
+  }
+
   return (
     <main className="container">
       <h1>Welcome to Tauri + React</h1>
@@ -34,8 +43,7 @@ function App() {
         onSubmit={async (e) => {
           e.preventDefault();
           greet();
-          let a = await invoke("my_custom_command", { invokeMessage: "text" });
-          alert(a);
+          getGitignoreFile();
         }}
       >
         <input

@@ -10,3 +10,10 @@ pub fn my_custom_command(invoke_message: String) {
         invoke_message
     );
 }
+
+use tauri::ipc::Response;
+#[tauri::command]
+pub fn read_file(file_path: &str) -> Response {
+    let data = std::fs::read(file_path).unwrap();
+    tauri::ipc::Response::new(data)
+}
