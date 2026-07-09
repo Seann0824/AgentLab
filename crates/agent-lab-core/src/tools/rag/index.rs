@@ -3,6 +3,7 @@ use std::sync::Arc;
 use pgvector::Vector;
 use sqlx::{PgPool, Row};
 
+use crate::base::llm::AgentsLLM;
 use crate::tools::memory::storage::embedder::Embedder;
 use crate::tools::memory::storage::OllamaEmbedder;
 use crate::tools::rag::chunking::Paragraph;
@@ -52,12 +53,13 @@ impl RagIndex {
 
     /// 使用默认的 Ollama embedder 创建索引器，并启用 MQE + HyDE。
     /// 默认维度 768，与 `init_pg.sql` 中的 rag_chunks.embedding VECTOR(768) 对应。
-    pub fn with_default_embedder(db: PgPool) -> Self {
+    /// `llm` 用于驱动查询扩展与 HyDE 子 agent。
+    pub fn with_default_embedder(db: PgPool, llm: AgentsLLM) -> Self {
         let embedder = Arc::new(OllamaEmbedder::new(None, None));
         let query_expander = Some(Arc::new(tokio::sync::Mutex::new(
-            QueryExpansionAgent::from_env(),
+            QueryExpansionAgent::new(llm.clone()),
         )));
-        let hyde_generator = Some(Arc::new(tokio::sync::Mutex::new(HydeAgent::from_env())));
+        let hyde_generator = Some(Arc::new(tokio::sync::Mutex::new(HydeAgent::new(llm))));
         Self {
             db,
             embedder,

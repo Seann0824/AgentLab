@@ -1,14 +1,10 @@
-use std::env;
-
 use sqlx::PgPool;
 
-/// 创建全局 PostgreSQL 连接池。
+/// 创建 PostgreSQL 连接池。
 ///
-/// 通过 `DATABASE_URL` 环境变量连接，供 RAG、Memory 等模块复用。
-pub async fn get_db_client() -> PgPool {
-    dotenvy::dotenv().ok();
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL is not empty");
-    PgPool::connect(&database_url)
+/// `database_url` 由调用方（应用层）提供，core 库不再读取环境变量。
+pub async fn get_db_client(database_url: &str) -> PgPool {
+    PgPool::connect(database_url)
         .await
         .expect("database connection build failed")
 }

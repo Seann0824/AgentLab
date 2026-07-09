@@ -1,15 +1,19 @@
-use std::{collections::HashMap, env};
+use std::collections::HashMap;
 use openai_api_rs::v1::types;
 use serpapi::serpapi::Client;
 use crate::tools::types::Tool;
 
-
-
-pub struct WebSearch;
+pub struct WebSearch {
+    api_key: String,
+}
 
 impl WebSearch {
-    pub fn new() -> Self {
-        Self {}
+    /// 创建一个使用 SerpApi 的网页搜索工具。
+    /// `api_key` 对应 SerpApi 的 API Key。
+    pub fn serpapi(api_key: impl Into<String>) -> Self {
+        Self {
+            api_key: api_key.into(),
+        }
     }
 }
 
@@ -43,13 +47,13 @@ impl Tool for WebSearch  {
 
     async fn execute(&self, args: serde_json::Value) -> Result<String, String> {
         let query = args["query"].as_str().unwrap_or("").to_string();
-        let Ok(api_key) = env::var("SERPAPI_API_KEY") else {
-            return Err("Api key invalid".into());
-        };
+        if self.api_key.is_empty() {
+            return Err("WebSearch api_key is empty".into());
+        }
 
         let Ok(client) = Client::new(
             HashMap::from([
-                ("api_key".to_string(), api_key),
+                ("api_key".to_string(), self.api_key.clone()),
                 ("engine".to_string(), "google".to_string())
             ])
         ) else {

@@ -43,7 +43,7 @@ impl ReflectionAgent {
         tool_manager: impl Into<Option<ToolManager>>,
         max_steps: impl Into<Option<u64>>,
     ) -> Self {
-        let config = config.into().unwrap_or(Config::from_env());
+        let config = config.into().unwrap_or_default();
         let tool_manager = tool_manager.into().unwrap_or(ToolManager::new());
         let max_steps = max_steps.into().unwrap_or(5);
         let prompt_templates = prompt_templates.into();

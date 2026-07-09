@@ -353,7 +353,8 @@ mod tests {
     #[tokio::test]
     async fn test_pg_store_add() {
         dotenvy::dotenv().ok();
-        let db = get_db_client().await;
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
+        let db = get_db_client(&database_url).await;
         let config = MemoryConfig::new();
         let embedder: Arc<dyn Embedder + Send + Sync> = Arc::new(MockEmbedder);
         let mut store = PgStore::new(config, db.clone());

@@ -23,10 +23,6 @@ pub struct HydeResult {
 }
 
 impl HydeAgent {
-    pub fn from_env() -> Self {
-        Self::new(AgentsLLM::from_env())
-    }
-
     pub fn new(llm: AgentsLLM) -> Self {
         let system_prompt = r#"
         你是一名假设文档生成专家。用户会给你一个查询问题，请你生成一段 200~400 字的假设答案段落。

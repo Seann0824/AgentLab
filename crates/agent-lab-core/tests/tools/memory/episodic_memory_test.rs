@@ -17,7 +17,8 @@ impl Embedder for MockEmbedder {
 
 async fn create_test_store() -> MemoryStore {
     dotenvy::dotenv().ok();
-    let db = get_db_client().await;
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let db = get_db_client(&database_url).await;
     let config = MemoryConfig::new();
     let pg_store = PgStore::new(config.clone(), db);
     let neo4j_store = Neo4jStore::new(

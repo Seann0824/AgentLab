@@ -1,6 +1,7 @@
 use serde_json::Value;
-use std::{collections::HashMap, env, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
+use crate::base::llm::AgentsLLM;
 use crate::db::get_db_client;
 use crate::tools::memory::base::Memory as MemoryTrait;
 use crate::tools::memory::base::{MemoryConfig, MemoryItem, RetrieveRequest};
@@ -24,6 +25,11 @@ impl MemoryManager {
     pub async fn new(
         config: Option<MemoryConfig>,
         user_id: Option<String>,
+        llm: AgentsLLM,
+        database_url: impl Into<String>,
+        neo4j_uri: impl Into<String>,
+        neo4j_user: impl Into<String>,
+        neo4j_password: impl Into<String>,
         enable_working: Option<bool>,
         enable_episodic: Option<bool>,
         enable_semantic: Option<bool>,
@@ -36,20 +42,21 @@ impl MemoryManager {
         let enable_semantic = enable_semantic.unwrap_or(true);
         let enable_perceptual = enable_perceptual.unwrap_or(true);
 
-        let db = get_db_client().await;
+        let db = get_db_client(&database_url.into()).await;
         let pg_store = PgStore::new(config.clone(), db);
 
-        let neo4j_uri = env::var("NEO4J_URL").unwrap_or_else(|_| "neo4j://127.0.0.1:7687".into());
-        let neo4j_user = env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".into());
-        let neo4j_password = env::var("NEO4J_PASSWORD").unwrap_or_default();
-        let neo4j_store = Neo4jStore::new(neo4j_uri, neo4j_user, neo4j_password)
-            .await
-            .expect("[MemoryManager] neo4j connection failed");
+        let neo4j_store = Neo4jStore::new(
+            neo4j_uri.into(),
+            neo4j_user.into(),
+            neo4j_password.into(),
+        )
+        .await
+        .expect("[MemoryManager] neo4j connection failed");
 
         let embedder = OllamaEmbedder::new(None, None);
         let store = MemoryStore::new(config.clone(), pg_store, neo4j_store, Arc::new(embedder));
-        let extractor = EntityExtractorAgent::from_env();
-        let semantic_extractor = EntityExtractorAgent::from_env();
+        let extractor = EntityExtractorAgent::new(llm.clone());
+        let semantic_extractor = EntityExtractorAgent::new(llm);
 
         let mut memory_types: HashMap<String, Box<dyn MemoryTrait>> = HashMap::new();
 

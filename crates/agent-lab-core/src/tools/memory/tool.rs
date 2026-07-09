@@ -4,6 +4,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 
+use crate::base::llm::AgentsLLM;
 use crate::tools::memory::manager::MemoryManager;
 use crate::tools::types::Tool;
 
@@ -17,11 +18,30 @@ struct MemoryToolInner {
 }
 
 impl MemoryTool {
-    pub async fn new() -> Self {
+    pub async fn new(
+        llm: AgentsLLM,
+        database_url: impl Into<String>,
+        neo4j_uri: impl Into<String>,
+        neo4j_user: impl Into<String>,
+        neo4j_password: impl Into<String>,
+    ) -> Self {
         Self {
             inner: Mutex::new(MemoryToolInner {
                 current_session_id: None,
-                memory_manager: MemoryManager::new(None, None, None, None, None, None).await,
+                memory_manager: MemoryManager::new(
+                    None,
+                    None,
+                    llm,
+                    database_url,
+                    neo4j_uri,
+                    neo4j_user,
+                    neo4j_password,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await,
             }),
         }
     }

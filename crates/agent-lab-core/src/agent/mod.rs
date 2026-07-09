@@ -5,3 +5,4 @@ pub mod reflection_agent;
 pub mod tool_agent;
 
 pub use group_chat::{RoundRobinGroupChat, TextMentionTermination};
+pub use simple_agent::SimpleAgent as Agent;

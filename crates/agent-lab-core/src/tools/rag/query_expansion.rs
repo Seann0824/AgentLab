@@ -22,10 +22,6 @@ pub struct ExpansionResult {
 }
 
 impl QueryExpansionAgent {
-    pub fn from_env() -> Self {
-        Self::new(AgentsLLM::from_env())
-    }
-
     pub fn new(llm: AgentsLLM) -> Self {
         let system_prompt = r#"
         你是一名查询扩展专家。用户会给你一个问题，请你生成 3~5 个语义等价但表述不同的查询句。

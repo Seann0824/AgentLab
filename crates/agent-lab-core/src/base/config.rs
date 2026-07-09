@@ -1,11 +1,4 @@
-use std::env;
-
 pub struct Config {
-    default_model: String,
-    default_provider: String,
-    temperature: f64,
-    max_tokens: Option<u64>,
-
     // 系统配置
     debug: bool,
     log_level: String,
@@ -17,11 +10,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            default_model: "deepseek-v4-flash".into(),
-            default_provider: "DeepSeek".into(),
-            temperature: 0.7,
-            max_tokens: None,
-
             // 系统配置
             debug: false,
             log_level: "INFO".into(),
@@ -33,25 +21,65 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn from_env() -> Config {
-        dotenvy::dotenv().ok();
-        let mut config = Config::default();
-        if let Ok(default_model) = env::var("DEFAULT_MODEL") {
-            config.default_model = default_model;
-        }
-        if let Ok(default_provider) = env::var("DEFAULT_PROVIDER") {
-            config.default_provider = default_provider;
-        }
-        if let Ok(debug) = env::var("DEBUG") {
-            config.debug = debug == "true";
-        }
-        if let Ok(temperature) = env::var("TEMPERATURE") {
-            config.temperature = temperature.parse().unwrap();
-        }
-        if let Ok(max_tokens) = env::var("MAX_TOKENS") {
-            config.max_tokens = Some(max_tokens.parse().unwrap_or_default());
-        }
+    pub fn builder() -> ConfigBuilder {
+        ConfigBuilder::new()
+    }
 
-        config
+    pub fn debug(&self) -> bool {
+        self.debug
+    }
+
+    pub fn log_level(&self) -> &str {
+        &self.log_level
+    }
+
+    pub fn max_history_length(&self) -> u64 {
+        self.max_history_length
+    }
+}
+
+pub struct ConfigBuilder {
+    debug: bool,
+    log_level: String,
+    max_history_length: u64,
+}
+
+impl Default for ConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConfigBuilder {
+    pub fn new() -> Self {
+        let config = Config::default();
+        Self {
+            debug: config.debug,
+            log_level: config.log_level,
+            max_history_length: config.max_history_length,
+        }
+    }
+
+    pub fn debug(mut self, debug: bool) -> Self {
+        self.debug = debug;
+        self
+    }
+
+    pub fn log_level(mut self, log_level: impl Into<String>) -> Self {
+        self.log_level = log_level.into();
+        self
+    }
+
+    pub fn max_history_length(mut self, max_history_length: u64) -> Self {
+        self.max_history_length = max_history_length;
+        self
+    }
+
+    pub fn build(self) -> Config {
+        Config {
+            debug: self.debug,
+            log_level: self.log_level,
+            max_history_length: self.max_history_length,
+        }
     }
 }

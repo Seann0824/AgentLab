@@ -24,10 +24,6 @@ struct ExtractionResult {
 }
 
 impl EntityExtractorAgent {
-    pub fn from_env() -> Self {
-        Self::new(AgentsLLM::from_env())
-    }
-
     pub fn new(llm: AgentsLLM) -> Self {
         let system_prompt = r#"
         你是一名实体与关系抽取专家。用户会给你一段记忆内容，请你：

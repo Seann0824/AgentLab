@@ -1,5 +1,3 @@
-use std::env;
-
 use super::Embedder;
 use reqwest::Client;
 use serde_json::json;
@@ -12,14 +10,10 @@ pub struct OllamaEmbedder {
 
 impl OllamaEmbedder {
     pub fn new(base_url: Option<String>, model: Option<String>) -> Self {
-        dotenvy::dotenv().ok();
-        let base_url = base_url.unwrap_or(env::var("EMBEDDER_URL")
-            .unwrap_or("http://localhost:11434/api/embeddings".into()));
-        let client = Client::new();
-        let model = model.unwrap_or(env::var("EMBEDDER_MODEL")
-            .unwrap_or("nomic-embed-text".into()));
+        let base_url = base_url.unwrap_or_else(|| "http://localhost:11434/api/embeddings".into());
+        let model = model.unwrap_or_else(|| "nomic-embed-text".into());
         Self {
-            client,
+            client: Client::new(),
             base_url,
             model,
         }

@@ -1,5 +1,3 @@
-use std::env;
-
 use futures_util::Stream;
 use openai_api_rs::v1::api::OpenAIClient;
 use openai_api_rs::v1::chat_completion::chat_completion::{
@@ -16,6 +14,18 @@ pub struct AgentsLLM {
     base_url: String,
     api_key: String,
     client: OpenAIClient,
+}
+
+impl Clone for AgentsLLM {
+    fn clone(&self) -> Self {
+        Self::new(
+            self.model.clone(),
+            self.api_key.clone(),
+            self.base_url.clone(),
+            self.provider.clone(),
+            None::<u64>,
+        )
+    }
 }
 
 impl AgentsLLM {
@@ -47,15 +57,8 @@ impl AgentsLLM {
         }
     }
 
-    pub fn from_env() -> Self {
-        // 从环境变量获取模型和提供商
-        dotenvy::dotenv().ok();
-        let api_key = env::var("API_KEY").expect("API_KEY is not valid");
-        let base_url = env::var("BASE_URL").expect("BASE_URL is not valid");
-        let model = env::var("MODEL").expect("MODEL is not valid");
-        let provider = env::var("PROVIDER").unwrap_or("Custom".into());
-
-        Self::new(model, api_key, base_url, provider, None)
+    pub fn builder() -> AgentsLLMBuilder {
+        AgentsLLMBuilder::new()
     }
 
     pub async fn invoke(
@@ -91,5 +94,71 @@ impl AgentsLLM {
             .await
             .map(|resp| resp.inner)
             .map_err(|e| format!("[AgentsLLM] chat_completion failed: {}", e))
+    }
+}
+
+pub struct AgentsLLMBuilder {
+    model: Option<String>,
+    api_key: Option<String>,
+    base_url: Option<String>,
+    provider: Option<String>,
+    timeout: Option<u64>,
+}
+
+impl Default for AgentsLLMBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AgentsLLMBuilder {
+    pub fn new() -> Self {
+        Self {
+            model: None,
+            api_key: None,
+            base_url: None,
+            provider: None,
+            timeout: None,
+        }
+    }
+
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    pub fn api_key(mut self, api_key: impl Into<String>) -> Self {
+        self.api_key = Some(api_key.into());
+        self
+    }
+
+    pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+
+    pub fn provider(mut self, provider: impl Into<String>) -> Self {
+        self.provider = Some(provider.into());
+        self
+    }
+
+    pub fn timeout(mut self, timeout: u64) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    pub fn build(self) -> AgentsLLM {
+        let model = self
+            .model
+            .expect("AgentsLLMBuilder: model is required, use .model(...) to set it");
+        let api_key = self
+            .api_key
+            .expect("AgentsLLMBuilder: api_key is required, use .api_key(...) to set it");
+        let base_url = self
+            .base_url
+            .expect("AgentsLLMBuilder: base_url is required, use .base_url(...) to set it");
+        let provider = self.provider.unwrap_or_else(|| "Custom".into());
+
+        AgentsLLM::new(model, api_key, base_url, provider, self.timeout)
     }
 }

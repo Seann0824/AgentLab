@@ -25,6 +25,7 @@ serde_json = "1"
 tokio = { version = "1.52.3", features = ["full"] }
 tauri-plugin-devtools = "2.0.0"
 tauri-specta = { version = "2.0.0-rc.25", features = ["typescript"] }
+agent-lab-core = { path = "../../../crates/agent-lab-core" }
 specta = "2.0.0-rc.25"
 specta-typescript = "0.0.12"
 

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use sqlx::PgPool;
 
+use crate::base::llm::AgentsLLM;
 use crate::tools::rag::chunking::{self, Paragraph};
 use crate::tools::rag::index::RagIndex;
 use crate::tools::rag::markdown::preprocess_markdown_for_embedding;
@@ -24,8 +25,9 @@ impl RagTool {
     }
 
     /// 便捷方法：用默认 Ollama embedder + PG 连接创建 RagTool。
-    pub fn with_default_embedder(db: PgPool) -> Self {
-        Self::with_index(RagIndex::with_default_embedder(db))
+    /// `llm` 用于驱动查询扩展与 HyDE 子 agent。
+    pub fn with_default_embedder(db: PgPool, llm: AgentsLLM) -> Self {
+        Self::with_index(RagIndex::with_default_embedder(db, llm))
     }
 
     fn index(&self) -> Result<&RagIndex, String> {

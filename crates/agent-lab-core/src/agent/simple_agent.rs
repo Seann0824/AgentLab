@@ -27,7 +27,7 @@ impl SimpleAgent {
         tool_manager: impl Into<Option<ToolManager>>,
         enable_tool_calling: bool,
     ) -> Self {
-        let config = config.into().unwrap_or(Config::from_env());
+        let config = config.into().unwrap_or_default();
         let system_prompt = system_prompt.into().unwrap_or("".into());
         let tool_manager = tool_manager.into().unwrap_or(ToolManager::new());
         let agent_base =
@@ -40,6 +40,10 @@ impl SimpleAgent {
         }
     }
 
+    pub fn builder() -> AgentBuilder {
+        AgentBuilder::new()
+    }
+
     // 开放给外部注册工具
     pub fn add_tool(&mut self, tool: Box<dyn Tool + Send + Sync>) {
         self.tool_manager.register_tool(tool);
@@ -47,6 +51,86 @@ impl SimpleAgent {
 
     pub fn remove_tool(&mut self, tool_name: &String) {
         self.tool_manager.remove_tool(tool_name);
+    }
+}
+
+pub struct AgentBuilder {
+    name: Option<String>,
+    llm: Option<AgentsLLM>,
+    system_prompt: Option<String>,
+    config: Option<Config>,
+    tool_manager: ToolManager,
+    enable_tool_calling: bool,
+}
+
+impl Default for AgentBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AgentBuilder {
+    pub fn new() -> Self {
+        Self {
+            name: None,
+            llm: None,
+            system_prompt: None,
+            config: None,
+            tool_manager: ToolManager::new(),
+            enable_tool_calling: false,
+        }
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn llm(mut self, llm: AgentsLLM) -> Self {
+        self.llm = Some(llm);
+        self
+    }
+
+    pub fn system_prompt(mut self, system_prompt: impl Into<Option<String>>) -> Self {
+        self.system_prompt = system_prompt.into();
+        self
+    }
+
+    pub fn config(mut self, config: Config) -> Self {
+        self.config = Some(config);
+        self
+    }
+
+    pub fn tool(mut self, tool: Box<dyn Tool + Send + Sync>) -> Self {
+        self.tool_manager.register_tool(tool);
+        self
+    }
+
+    pub fn enable_tool_calling(mut self, enable: bool) -> Self {
+        self.enable_tool_calling = enable;
+        self
+    }
+
+    pub fn build(self) -> SimpleAgent {
+        let name = self
+            .name
+            .expect("AgentBuilder: name is required, use .name(...) to set it");
+        let llm = self
+            .llm
+            .expect("AgentBuilder: llm is required. Use .llm(AgentsLLM::builder()...build())");
+        let config = self
+            .config
+            .expect("AgentBuilder: config is required. Use .config(Config::builder()...build()) or .config(Config::default())");
+        let system_prompt = self.system_prompt.unwrap_or_default();
+
+        SimpleAgent::new(
+            name,
+            llm,
+            Some(system_prompt),
+            Some(config),
+            Some(self.tool_manager),
+            self.enable_tool_calling,
+        )
     }
 }
 

@@ -5,6 +5,8 @@ use agent_lab_core::tools::{ToolManager, web_search::WebSearch};
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
+
     let mut novel_team = RoundRobinGroupChat::new(
         vec![
             Box::new(create_story_architect()),
@@ -22,11 +24,22 @@ async fn main() {
     novel_team.run(&task).await;
 }
 
+fn create_llm() -> AgentsLLM {
+    AgentsLLM::builder()
+        .api_key(std::env::var("API_KEY").expect("API_KEY not set"))
+        .base_url(std::env::var("BASE_URL").expect("BASE_URL not set"))
+        .model(std::env::var("MODEL").expect("MODEL not set"))
+        .provider(std::env::var("PROVIDER").unwrap_or_else(|_| "Custom".into()))
+        .build()
+}
+
 fn create_agent(name: &str, system_prompt: &str) -> SimpleAgent {
-    let tool_manager = ToolManager::new().with_tool(Box::new(WebSearch::new()));
+    let tool_manager = ToolManager::new().with_tool(Box::new(WebSearch::serpapi(
+        std::env::var("SERPAPI_API_KEY").unwrap_or_default(),
+    )));
     SimpleAgent::new(
         name,
-        AgentsLLM::from_env(),
+        create_llm(),
         system_prompt.to_string(),
         None::<agent_lab_core::base::config::Config>,
         tool_manager,

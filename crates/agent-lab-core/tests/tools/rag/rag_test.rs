@@ -362,6 +362,7 @@ fn test_preprocess_emphasis_order() {
     );
 }
 
+use agent_lab_core::base::llm::AgentsLLM;
 use agent_lab_core::tools::rag::RagIndex;
 use sqlx::PgPool;
 
@@ -376,7 +377,12 @@ async fn test_rag_index_empty_chunks() {
         return;
     };
 
-    let index = RagIndex::with_default_embedder(db);
+    let llm = AgentsLLM::builder()
+        .api_key("dummy")
+        .base_url("http://localhost")
+        .model("dummy")
+        .build();
+    let index = RagIndex::with_default_embedder(db, llm);
     let result = index.index_chunks(vec![], "test.md", "default", 64).await;
     assert!(result.is_ok());
 }
