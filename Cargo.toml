@@ -2,5 +2,6 @@
 members = [
     "crates/agent-lab-core",
     "crates/openai-api-rs",
+    "apps/agent-lab-desktop/src-tauri",
 ]
 resolver = "2"

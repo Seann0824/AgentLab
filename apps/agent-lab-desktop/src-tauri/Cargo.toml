@@ -28,6 +28,7 @@ tauri-specta = { version = "2.0.0-rc.25", features = ["typescript"] }
 agent-lab-core = { path = "../../../crates/agent-lab-core" }
 specta = "2.0.0-rc.25"
 specta-typescript = "0.0.12"
+uuid = { version = "1.23.4", features = ["v4", "serde"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -37,6 +38,3 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
-
-# 独立 workspace，避免被外层 Rust workspace 自动继承
-[workspace]

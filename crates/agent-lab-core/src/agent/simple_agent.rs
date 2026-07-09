@@ -1,6 +1,6 @@
 use crate::{
     base::{
-        agent::{Agent, AgentBase},
+        agent::{Agent, AgentBase, AgentStreamEvent},
         config::Config,
         llm::AgentsLLM,
         message::Message,
@@ -176,12 +176,30 @@ impl Agent for SimpleAgent {
             while let Some(chunck) = agent_stream.next().await {
                 match chunck {
                     ChatCompletionStreamResponse::Content(delta) => {
+                        self.base
+                            .emit(AgentStreamEvent::Content {
+                                delta: delta.clone(),
+                            })
+                            .await;
                         content_delta.push(delta);
                     }
                     ChatCompletionStreamResponse::Reasoning(delta) => {
+                        self.base
+                            .emit(AgentStreamEvent::Reason {
+                                delta: delta.clone(),
+                            })
+                            .await;
                         reason_delta.push(delta);
                     }
                     ChatCompletionStreamResponse::ToolCall(tc) => {
+                        for tc in tc.clone().into_iter() {
+                            self.base
+                                .emit(AgentStreamEvent::ToolCall {
+                                    tool_name: tc.function.name.unwrap_or("内部工具".to_string()),
+                                    tool_call_id: tc.id,
+                                })
+                                .await;
+                        }
                         tools_call = Some(tc);
                     }
                     ChatCompletionStreamResponse::Done(finish_reason) => {
@@ -223,23 +241,53 @@ impl Agent for SimpleAgent {
 
                                 let tools_call_result = futures_util::future::join_all(tasks).await;
 
-                                tools_call_result.into_iter().for_each(
-                                    |(tool_call_id, tool_call_result)| {
-                                        let tool_call_result = match tool_call_result {
-                                            Ok(content) => content,
-                                            Err(error_msg) => error_msg,
-                                        };
-                                        self.add_message(Message::tool_response(
-                                            tool_call_id,
-                                            tool_call_result,
-                                            None,
-                                        ));
-                                    },
-                                );
+                                for (tool_name, tool_call_id, tool_call_result) in
+                                    tools_call_result.into_iter()
+                                {
+                                    let mut is_error = false;
+                                    let tool_call_result = match tool_call_result {
+                                        Ok(content) => content,
+                                        Err(error_msg) => {
+                                            is_error = true;
+                                            error_msg
+                                        }
+                                    };
+
+                                    self.base
+                                        .emit(AgentStreamEvent::ToolCallResult {
+                                            is_error,
+                                            tool_name: tool_name.clone(),
+                                            tool_call_id: tool_call_id.clone(),
+                                            tool_call_result: tool_call_result.clone(),
+                                        })
+                                        .await;
+
+                                    self.add_message(Message::tool_response(
+                                        tool_call_id,
+                                        tool_call_result,
+                                        None,
+                                    ));
+                                }
                             }
                             _ => {
                                 let content = content_delta.join("");
                                 let reasoning = reason_delta.join("");
+                                if !reasoning.is_empty() {
+                                    self.base
+                                        .emit(AgentStreamEvent::ReasonDone {
+                                            reason: reasoning.clone(),
+                                        })
+                                        .await;
+                                }
+
+                                if !content.is_empty() {
+                                    self.base
+                                        .emit(AgentStreamEvent::ContentDone {
+                                            content: content.clone(),
+                                        })
+                                        .await;
+                                }
+
                                 if !reasoning.is_empty() {
                                     self.add_message(Message::assistant(reasoning, None));
                                 }

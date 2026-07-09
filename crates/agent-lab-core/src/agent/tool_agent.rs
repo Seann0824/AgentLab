@@ -81,7 +81,7 @@ impl<T: DeserializeOwned> ToolAgent<T> {
             );
 
             // 真正执行工具。
-            let (tool_call_id, tool_result) = self.tool_manager.run(first_call).await;
+            let (_, tool_call_id, tool_result) = self.tool_manager.run(first_call).await;
             let response_text = match &tool_result {
                 Ok(content) => content.clone(),
                 Err(error_msg) => error_msg.clone(),
@@ -93,23 +93,21 @@ impl<T: DeserializeOwned> ToolAgent<T> {
             );
 
             match tool_result {
-                Ok(content) => {
-                    match serde_json::from_str::<T>(&content) {
-                        Ok(value) => return Ok(value),
-                        Err(e) => {
-                            if attempt + 1 == MAX_RETRIES {
-                                return Err(format!(
-                                    "[ToolAgent] failed to deserialize tool output after {} attempts: {}",
-                                    MAX_RETRIES, e
-                                ));
-                            }
-                            messages.push(Message::user(
+                Ok(content) => match serde_json::from_str::<T>(&content) {
+                    Ok(value) => return Ok(value),
+                    Err(e) => {
+                        if attempt + 1 == MAX_RETRIES {
+                            return Err(format!(
+                                "[ToolAgent] failed to deserialize tool output after {} attempts: {}",
+                                MAX_RETRIES, e
+                            ));
+                        }
+                        messages.push(Message::user(
                                 format!("工具返回的结果格式不正确：{}。请重新调用工具并输出合法的 JSON。", e),
                                 None,
                             ).naive_message);
-                        }
                     }
-                }
+                },
                 Err(e) => {
                     if attempt + 1 == MAX_RETRIES {
                         return Err(format!(
@@ -117,10 +115,10 @@ impl<T: DeserializeOwned> ToolAgent<T> {
                             MAX_RETRIES, e
                         ));
                     }
-                    messages.push(Message::user(
-                        format!("工具执行失败：{}。请修正后重新调用工具。", e),
-                        None,
-                    ).naive_message);
+                    messages.push(
+                        Message::user(format!("工具执行失败：{}。请修正后重新调用工具。", e), None)
+                            .naive_message,
+                    );
                 }
             }
         }

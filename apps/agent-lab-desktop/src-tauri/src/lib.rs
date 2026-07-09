@@ -2,7 +2,11 @@
 mod commands;
 mod state;
 use state::GlobalState;
+use std::{collections::HashMap, sync::Arc};
 use tauri::Manager;
+use tokio::sync::RwLock;
+
+use crate::state::Sessions;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -38,8 +42,10 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            let sessions: Sessions = Arc::new(RwLock::new(HashMap::new()));
             app.manage(GlobalState {
                 name: "test".to_string(),
+                sessions,
             });
             {
                 let window = app.get_webview_window("main").unwrap();
@@ -54,6 +60,7 @@ pub fn run() {
             commands::read_file,
             commands::login,
             commands::read_file_channel,
+            commands::chat_completion_stream,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

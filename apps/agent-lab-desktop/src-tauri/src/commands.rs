@@ -30,7 +30,16 @@ pub fn login(user: &str, password: &str) -> Result<String, String> {
     }
 }
 
-use tauri::ipc::Channel;
+use std::sync::Arc;
+
+use agent_lab_core::{
+    agent::simple_agent::AgentBuilder,
+    base::{agent::Agent, agent::AgentStreamEvent, llm::AgentsLLM},
+};
+use tauri::{ipc::Channel, State};
+use tokio::sync::Mutex;
+
+use crate::state::GlobalState;
 
 #[derive(Clone, serde::Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -90,4 +99,52 @@ pub async fn read_file_channel(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn chat_completion_stream(
+    state: State<'_, GlobalState>,
+    channel: Channel<AgentStreamEvent>,
+    session_id: Option<String>,
+    message: String,
+) -> Result<String, String> {
+    let session_id = session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let agent = {
+        let mut sessions = state.sessions.write().await;
+        sessions
+            .entry(session_id.clone())
+            .or_insert_with(|| {
+                let llm = AgentsLLM::builder()
+                    .api_key(std::env::var("API_KEY").unwrap())
+                    .base_url(std::env::var("BASE_URL").unwrap())
+                    .model(std::env::var("MODEL").unwrap())
+                    .provider(std::env::var("PROVIDER").unwrap_or_else(|_| "Custom".into()))
+                    .build();
+                let agent = AgentBuilder::new().name("test agent").llm(llm).build();
+
+                Arc::new(Mutex::new(agent))
+            })
+            .clone()
+    };
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentStreamEvent>(64);
+
+    // 桥接：内部 tokio channel -> Tauri Channel
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if channel.send(event).is_err() {
+                break;
+            }
+        }
+    });
+
+    // 运行 Agent
+    tokio::spawn(async move {
+        let mut guard = agent.lock().await;
+        guard.base_mut().set_event_sender(Some(tx));
+        let _ = guard.run(&message).await;
+    });
+
+    Ok(session_id)
 }

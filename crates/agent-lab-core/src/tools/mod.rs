@@ -48,15 +48,20 @@ impl ToolManager {
         schema
     }
 
-    pub async fn run(&self, tool_call: ToolCall) -> (String, Result<String, String>) {
+    pub async fn run(&self, tool_call: ToolCall) -> (String, String, Result<String, String>) {
         let tool_name = tool_call.function.name.unwrap_or("none".to_string());
         let tool_call_id = tool_call.id;
         let Some(tool) = self.tools.get(&tool_name) else {
-            return (tool_call_id, Err(format!("{} 不存在", tool_name)));
+            return (
+                tool_name.clone(),
+                tool_call_id,
+                Err(format!("{} 不存在", tool_name)),
+            );
         };
 
         let arguments = tool_call.function.arguments.unwrap_or("{}".to_string());
         (
+            tool_name,
             tool_call_id,
             tool.execute(serde_json::from_str(&arguments).unwrap_or(serde_json::json!({})))
                 .await,

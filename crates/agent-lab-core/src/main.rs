@@ -2,7 +2,7 @@ use agent_lab_core::{
     agent::Agent,
     base::{agent::Agent as _, config::Config, llm::AgentsLLM},
     db::get_db_client,
-    tools::{rag::RagTool},
+    tools::rag::RagTool,
 };
 
 #[tokio::main]
@@ -20,7 +20,8 @@ async fn main() {
 async fn run_rag_agent_loop() -> Result<(), String> {
     dotenvy::dotenv().ok();
 
-    let database_url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL not set".to_string())?;
+    let database_url =
+        std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL not set".to_string())?;
     let db = get_db_client(&database_url).await;
     let llm = AgentsLLM::builder()
         .api_key(std::env::var("API_KEY").map_err(|_| "API_KEY not set".to_string())?)
@@ -40,11 +41,12 @@ async fn run_rag_agent_loop() -> Result<(), String> {
         .debug(std::env::var("DEBUG").map(|v| v == "true").unwrap_or(false))
         .build();
 
-    let system_prompt = "你是 FigmaAgent 助手，专门回答关于 Figma Agent 设计系统与 Agent 架构的问题。\
+    let system_prompt =
+        "你是 FigmaAgent 助手，专门回答关于 Figma Agent 设计系统与 Agent 架构的问题。\
         当用户询问文档相关内容时，你必须调用 `rag` 工具的 `search` action，\
         传入用户问题获取参考资料，然后基于资料回答。\
         不要编造资料中没有的内容。"
-        .to_string();
+            .to_string();
 
     let mut agent = Agent::builder()
         .name("RAGAgent")

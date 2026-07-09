@@ -154,16 +154,15 @@ impl Agent for ReflectionAgent {
                                 
                                 let tools_call_result = futures_util::future::join_all(tasks).await;
                                 
-                                tools_call_result
-                                    .into_iter()
-                                    .for_each(|(tool_call_id, tool_call_result)| {
-                                        let tool_call_result = match tool_call_result {
-                                            Ok(content) => content,
-                                            Err(error_msg) => error_msg,
-                                        };
-                                        println!("tool_call_result: {}", tool_call_result);
-                                        self.add_message(Message::tool_response(tool_call_id, tool_call_result, None));
-                                    });
+                                for (tool_name, tool_call_id, tool_call_result) in tools_call_result.into_iter() {
+                                    let _ = tool_name;
+                                    let tool_call_result = match tool_call_result {
+                                        Ok(content) => content,
+                                        Err(error_msg) => error_msg,
+                                    };
+                                    println!("tool_call_result: {}", tool_call_result);
+                                    self.add_message(Message::tool_response(tool_call_id, tool_call_result, None));
+                                }
                             },
                             _ => {
                                 self.add_message(Message::assistant(reason_delta.join(""), None));
