@@ -1,0 +1,13 @@
+{
+  "name": "agent-lab",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "lab": "cargo run -p agent-lab-core --example rag_agent",
+    "novel": "cargo run -p agent-lab-core --example novel_generation",
+    "desktop": "pnpm -C apps/agent-lab-desktop tauri dev",
+    "desktop:build": "pnpm -C apps/agent-lab-desktop tauri build",
+    "check": "cargo check --workspace",
+    "test": "cargo test --workspace --lib"
+  }
+}

@@ -1,0 +1,17 @@
+[alias]
+# 运行交互式 RAG Agent 示例
+lab = "run -p agent-lab-core --example rag_agent"
+
+# 运行小说生成示例
+novel = "run -p agent-lab-core --example novel_generation"
+
+# 桌面端完整开发流程请使用：pnpm desktop
+# 详见根目录 package.json
+
+# 检查整个 workspace
+c = "check"
+cw = "check --workspace"
+
+# 测试
+t = "test --lib"
+tw = "test --workspace --lib"
