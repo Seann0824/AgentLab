@@ -2,17 +2,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Local;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
 
 use crate::agent::simple_agent::{AgentBuilder, SimpleAgent};
 use crate::base::agent::{Agent as AgentTrait, AgentStreamEvent};
-use openai_api_rs::v1::chat_completion::ChatCompletionMessage;
 use crate::base::config::Config;
 use crate::base::llm::AgentsLLM;
 use crate::error::AgentLabError;
 use crate::services::chat_dto::{ChatMessage, SessionSummary};
 use crate::services::{MessageService, SessionService};
+use crate::tools::web_search::WebSearch;
+use openai_api_rs::v1::chat_completion::ChatCompletionMessage;
 
 pub type SessionId = String;
 
@@ -46,10 +47,15 @@ impl ChatService {
     }
 
     fn build_agent(llm: AgentsLLM) -> SimpleAgent {
+        let search_tool = Box::new(WebSearch::serpapi(
+            std::env::var("SERPAPI_API_KEY").expect("SERPAPI_API_KEY missing"),
+        ));
         AgentBuilder::new()
             .name("chat agent")
             .llm(llm)
             .config(Config::default())
+            .tool(search_tool)
+            .enable_tool_calling(true)
             .build()
     }
 
