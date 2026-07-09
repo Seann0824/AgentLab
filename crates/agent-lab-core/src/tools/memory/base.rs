@@ -1,5 +1,7 @@
 use chrono::Local;
 
+use crate::error::AgentLabError;
+
 #[derive(Clone, sqlx::FromRow)]
 pub struct MemoryItem {
     pub id: String,
@@ -55,7 +57,7 @@ pub trait Memory: Send + Sync {
         _strategy: &str,
         _threshold: f64,
         _max_age_days: i64,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, AgentLabError> {
         Ok(0)
     }
 }

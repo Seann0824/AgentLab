@@ -21,5 +21,8 @@ pub async fn chat_completion_stream(
         }
     });
 
-    chat_service.send_message(session_id, message, tx).await
+    chat_service
+        .send_message(session_id, message, tx)
+        .await
+        .map_err(|e| e.to_string())
 }

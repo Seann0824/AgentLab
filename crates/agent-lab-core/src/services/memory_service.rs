@@ -4,6 +4,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::base::llm::AgentsLLM;
 use crate::db::get_db_client;
+use crate::error::AgentLabError;
+use crate::services::ServiceError;
 use crate::storage::{MemoryStore, Neo4jStore, OllamaEmbedder, PgStore};
 use crate::tools::memory::base::Memory as MemoryTrait;
 use crate::tools::memory::base::{MemoryConfig, MemoryItem, RetrieveRequest};
@@ -37,7 +39,7 @@ impl MemoryService {
         enable_episodic: Option<bool>,
         enable_semantic: Option<bool>,
         enable_perceptual: Option<bool>,
-    ) -> Self {
+    ) -> Result<Self, AgentLabError> {
         let user_id = user_id.unwrap_or("default_user".into());
         let config = config.unwrap_or(MemoryConfig::new());
         let enable_working = enable_working.unwrap_or(true);
@@ -48,13 +50,8 @@ impl MemoryService {
         let db = get_db_client(&database_url.into()).await;
         let pg_store = PgStore::new(config.clone(), db);
 
-        let neo4j_store = Neo4jStore::new(
-            neo4j_uri.into(),
-            neo4j_user.into(),
-            neo4j_password.into(),
-        )
-        .await
-        .expect("[MemoryService] neo4j connection failed");
+        let neo4j_store =
+            Neo4jStore::new(neo4j_uri.into(), neo4j_user.into(), neo4j_password.into()).await?;
 
         let embedder = OllamaEmbedder::new(None, None);
         let store = MemoryStore::new(config.clone(), pg_store, neo4j_store, Arc::new(embedder));
@@ -92,14 +89,14 @@ impl MemoryService {
             );
         }
 
-        Self {
+        Ok(Self {
             config,
             user_id,
             store,
             memory_types,
             extractor,
             current_session_id: None,
-        }
+        })
     }
 
     /// 添加一条记忆。
@@ -110,7 +107,7 @@ impl MemoryService {
         memory_type: String,
         importance: f32,
         metadata: Option<Value>,
-    ) -> Result<String, String> {
+    ) -> Result<String, AgentLabError> {
         if self.current_session_id.is_none() {
             self.current_session_id =
                 Some(format!("session_{}", Local::now().format("%Y%m%d_%H%M%S")));
@@ -130,7 +127,10 @@ impl MemoryService {
         let memory_id = memory_item.id.clone();
 
         let Some(memory_store) = self.memory_types.get_mut(&memory_type) else {
-            return Err(format!("记忆类型 {} 不存在", memory_type));
+            return Err(ServiceError::invalid_argument(format!(
+                "记忆类型 {} 不存在",
+                memory_type
+            )))?;
         };
 
         if memory_type == "semantic" {
@@ -167,7 +167,7 @@ impl MemoryService {
         limit: usize,
         memory_types: &[String],
         min_importance: f32,
-    ) -> Result<Vec<MemoryItem>, String> {
+    ) -> Result<Vec<MemoryItem>, AgentLabError> {
         let query_owned = query.to_string();
         let mut all_results = vec![];
 
@@ -206,14 +206,18 @@ impl MemoryService {
         strategy: &str,
         threshold: f32,
         max_age_days: i64,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, AgentLabError> {
         let Some(memory_store) = self.memory_types.get(memory_type) else {
-            return Err(format!("记忆类型 {} 不存在", memory_type));
+            return Err(ServiceError::invalid_argument(format!(
+                "记忆类型 {} 不存在",
+                memory_type
+            )))?;
         };
 
-        memory_store
+        let count = memory_store
             .forget(strategy, threshold as f64, max_age_days)
-            .await
+            .await?;
+        Ok(count)
     }
 
     pub async fn consolidate_memories(
@@ -221,7 +225,7 @@ impl MemoryService {
         _from_type: &str,
         _to_type: &str,
         _importance_threshold: f32,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, AgentLabError> {
         // TODO: 实现真正的记忆整合（如 working → episodic 的聚合/摘要）
         Ok(0)
     }
@@ -232,22 +236,29 @@ impl MemoryService {
         content: Option<&str>,
         importance: Option<f32>,
         metadata: Option<Value>,
-    ) -> Result<bool, String> {
-        self.store
+    ) -> Result<bool, AgentLabError> {
+        let ok = self
+            .store
             .update(
                 memory_id,
                 content,
                 importance.map(|v| v as f64),
                 metadata.as_ref(),
             )
-            .await
+            .await?;
+        Ok(ok)
     }
 
-    pub async fn remove_memory(&mut self, memory_id: &str) -> Result<bool, String> {
-        self.store.delete(memory_id).await
+    pub async fn remove_memory(&mut self, memory_id: &str) -> Result<bool, AgentLabError> {
+        let ok = self.store.delete(memory_id).await?;
+        Ok(ok)
     }
 
-    pub async fn get_summary(&self, memory_type: &str, limit: usize) -> Result<String, String> {
+    pub async fn get_summary(
+        &self,
+        memory_type: &str,
+        limit: usize,
+    ) -> Result<String, AgentLabError> {
         let items = self
             .store
             .list_by_type(memory_type, Some(&self.user_id), Some(limit as i64))
@@ -278,8 +289,11 @@ impl MemoryService {
         ))
     }
 
-    pub async fn get_stats(&self, memory_type: &str) -> Result<String, String> {
-        let count = self.store.count_by_type(memory_type, Some(&self.user_id)).await?;
+    pub async fn get_stats(&self, memory_type: &str) -> Result<String, AgentLabError> {
+        let count = self
+            .store
+            .count_by_type(memory_type, Some(&self.user_id))
+            .await?;
         let avg_importance = self
             .store
             .avg_importance_by_type(memory_type, Some(&self.user_id))
@@ -298,13 +312,15 @@ impl MemoryService {
             "time_span_days": time_span_days,
         });
 
-        serde_json::to_string_pretty(&stats)
-            .map_err(|e| format!("[MemoryService] serialize stats failed: {}", e))
+        serde_json::to_string_pretty(&stats).map_err(|e| AgentLabError::Serialization(e))
     }
 
-    pub async fn clear_all(&mut self, memory_type: Option<&str>) -> Result<u64, String> {
+    pub async fn clear_all(&mut self, memory_type: Option<&str>) -> Result<u64, AgentLabError> {
         match memory_type {
-            Some(t) => self.store.clear_by_type(t).await,
+            Some(t) => {
+                let count = self.store.clear_by_type(t).await?;
+                Ok(count)
+            }
             None => {
                 let mut total = 0u64;
                 for t in self.memory_types.keys() {

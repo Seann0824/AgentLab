@@ -35,6 +35,7 @@ dependencies = [
  "serde_json",
  "serpapi",
  "sqlx",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tracing",

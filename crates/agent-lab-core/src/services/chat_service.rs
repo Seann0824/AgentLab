@@ -9,6 +9,7 @@ use crate::agent::Agent;
 use crate::base::agent::{Agent as AgentTrait, AgentStreamEvent};
 use crate::base::config::Config;
 use crate::base::llm::AgentsLLM;
+use crate::error::AgentLabError;
 
 pub type SessionId = String;
 
@@ -37,7 +38,7 @@ impl ChatService {
     pub async fn get_or_create_session(
         &self,
         session_id: Option<String>,
-    ) -> Result<(String, Arc<Mutex<Agent>>), String> {
+    ) -> Result<(String, Arc<Mutex<Agent>>), AgentLabError> {
         let session_id = session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
         let mut sessions = self.sessions.write().await;
@@ -62,7 +63,7 @@ impl ChatService {
         session_id: Option<String>,
         message: String,
         channel: mpsc::Sender<AgentStreamEvent>,
-    ) -> Result<String, String> {
+    ) -> Result<String, AgentLabError> {
         let (session_id, agent) = self.get_or_create_session(session_id).await?;
 
         // 桥接：内部 tokio channel -> 调用方 channel

@@ -123,7 +123,11 @@ impl Tool for RagTool {
                     return Err("add_document 操作需要 file_path 参数".to_string());
                 }
 
-                let count = self.service()?.index_document(&path, "default", 512, 64).await?;
+                let count = self
+                    .service()?
+                    .index_document(&path, "default", 512, 64)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 Ok(format!("索引完成，共 {} 个 chunk", count))
             }
             "search" => {
@@ -132,7 +136,11 @@ impl Tool for RagTool {
                     return Err("search 操作需要 query 参数".to_string());
                 }
 
-                let results = self.service()?.search(&query, None, 5).await?;
+                let results = self
+                    .service()?
+                    .search(&query, None, 5)
+                    .await
+                    .map_err(|e| e.to_string())?;
 
                 let formatted: Vec<String> = results
                     .iter()

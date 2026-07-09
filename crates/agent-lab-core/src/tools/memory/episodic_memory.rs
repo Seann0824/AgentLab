@@ -2,6 +2,7 @@ use chrono::Local;
 use serde_json::Value;
 
 use super::base::{Memory, MemoryConfig, MemoryItem, RetrieveRequest};
+use crate::error::AgentLabError;
 use crate::storage::MemoryStore;
 
 pub struct EpisodicMemory {
@@ -20,18 +21,22 @@ impl EpisodicMemory {
         content: Option<&str>,
         importance: Option<f64>,
         metadata: Option<&Value>,
-    ) -> Result<bool, String> {
-        self.store
+    ) -> Result<bool, AgentLabError> {
+        let ok = self
+            .store
             .update(memory_id, content, importance, metadata)
-            .await
+            .await?;
+        Ok(ok)
     }
 
-    pub async fn remove(&self, memory_id: &str) -> Result<bool, String> {
-        self.store.delete(memory_id).await
+    pub async fn remove(&self, memory_id: &str) -> Result<bool, AgentLabError> {
+        let ok = self.store.delete(memory_id).await?;
+        Ok(ok)
     }
 
-    pub async fn clear(&self) -> Result<u64, String> {
-        self.store.clear_by_type("episodic").await
+    pub async fn clear(&self) -> Result<u64, AgentLabError> {
+        let count = self.store.clear_by_type("episodic").await?;
+        Ok(count)
     }
 
     pub async fn forget(
@@ -39,11 +44,11 @@ impl EpisodicMemory {
         strategy: &str,
         threshold: f64,
         max_age_days: i64,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, AgentLabError> {
         let now_ts = Local::now().timestamp();
         let cutoff_ts = now_ts - max_age_days * 86400;
 
-        let episodes = self.store.list_by_type("episodic", None, None).await?;
+        let episodes: Vec<MemoryItem> = self.store.list_by_type("episodic", None, None).await?;
         let mut to_remove = Vec::new();
 
         for episode in &episodes {
@@ -79,11 +84,12 @@ impl EpisodicMemory {
         Ok(forgotten)
     }
 
-    pub async fn get_all(&self) -> Result<Vec<MemoryItem>, String> {
-        self.store.list_by_type("episodic", None, None).await
+    pub async fn get_all(&self) -> Result<Vec<MemoryItem>, AgentLabError> {
+        let items: Vec<MemoryItem> = self.store.list_by_type("episodic", None, None).await?;
+        Ok(items)
     }
 
-    pub async fn get_stats(&self, user_id: Option<&str>) -> Result<Value, String> {
+    pub async fn get_stats(&self, user_id: Option<&str>) -> Result<Value, AgentLabError> {
         let count = self.store.count_by_type("episodic", user_id).await?;
         let avg_importance = self
             .store
@@ -235,5 +241,3 @@ impl Memory for EpisodicMemory {
             .collect()
     }
 }
-
-

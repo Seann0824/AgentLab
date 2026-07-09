@@ -4,6 +4,8 @@ use pgvector::Vector;
 use sqlx::{PgPool, Row};
 
 use crate::base::llm::AgentsLLM;
+use crate::error::AgentLabError;
+use crate::services::ServiceError;
 use crate::storage::embedder::Embedder;
 use crate::storage::OllamaEmbedder;
 use crate::tools::rag::chunking::{self, Paragraph};
@@ -70,11 +72,13 @@ impl RagService {
         namespace: &str,
         chunk_tokens: usize,
         overlap_tokens: usize,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, AgentLabError> {
         let text = std::fs::read_to_string(file_path)
-            .map_err(|e| format!("failed to read {}: {}", file_path, e))?;
+            .map_err(|e| ServiceError::external(format!("failed to read {}: {}", file_path, e)))?;
         if text.is_empty() {
-            return Err("file is empty or could not be read".to_string());
+            return Err(ServiceError::invalid_argument(
+                "file is empty or could not be read",
+            ))?;
         }
 
         let paragraphs = chunking::split_paragraphs_with_headings(text);
@@ -93,7 +97,7 @@ impl RagService {
         query: &str,
         namespace: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<(f64, RagChunk)>, String> {
+    ) -> Result<Vec<(f64, RagChunk)>, AgentLabError> {
         retrieval::search(self, query, namespace, limit).await
     }
 
@@ -104,7 +108,7 @@ impl RagService {
         source: &str,
         namespace: &str,
         batch_size: usize,
-    ) -> Result<(), String> {
+    ) -> Result<(), AgentLabError> {
         if chunks.is_empty() {
             return Ok(());
         }
@@ -124,7 +128,7 @@ impl RagService {
                 .embedder
                 .encode(&text)
                 .await
-                .map_err(|e| format!("[RagService] embedding failed: {}", e))?;
+                .map_err(|e| ServiceError::embedding(format!("[RagService] embedding failed: {}", e)))?;
             self.normalize_embedding(&mut embedding);
 
             batch.push(RagChunk {
@@ -156,12 +160,12 @@ impl RagService {
     }
 
     /// 清空某个 namespace 下的所有 chunk。
-    pub async fn clear_namespace(&self, namespace: &str) -> Result<u64, String> {
+    pub async fn clear_namespace(&self, namespace: &str) -> Result<u64, AgentLabError> {
         let deleted = sqlx::query("DELETE FROM rag_chunks WHERE namespace = $1")
             .bind(namespace)
             .execute(&self.db)
             .await
-            .map_err(|e| format!("[RagService] clear namespace failed: {}", e))?
+            .map_err(|e| ServiceError::external(format!("[RagService] clear namespace failed: {}", e)))?
             .rows_affected();
         Ok(deleted)
     }
@@ -172,12 +176,12 @@ impl RagService {
         query: &str,
         namespace: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<(f64, RagChunk)>, String> {
+    ) -> Result<Vec<(f64, RagChunk)>, AgentLabError> {
         let mut embedding = self
             .embedder
             .encode(query)
             .await
-            .map_err(|e| format!("[RagService] query embedding failed: {}", e))?;
+            .map_err(|e| ServiceError::embedding(format!("[RagService] query embedding failed: {}", e)))?;
         self.normalize_embedding(&mut embedding);
         let pg_vector = Vector::from(embedding);
 
@@ -198,7 +202,7 @@ impl RagService {
         .bind(limit as i64)
         .fetch_all(&self.db)
         .await
-        .map_err(|e| format!("[RagService] search failed: {}", e))?;
+        .map_err(|e| ServiceError::external(format!("[RagService] search failed: {}", e)))?;
 
         let results = rows
             .into_iter()
@@ -236,12 +240,12 @@ impl RagService {
         }
     }
 
-    async fn insert_batch(&self, batch: &[RagChunk]) -> Result<(), String> {
+    async fn insert_batch(&self, batch: &[RagChunk]) -> Result<(), AgentLabError> {
         let mut tx = self
             .db
             .begin()
             .await
-            .map_err(|e| format!("[RagService] transaction begin failed: {}", e))?;
+            .map_err(|e| ServiceError::external(format!("[RagService] transaction begin failed: {}", e)))?;
 
         for chunk in batch {
             let pg_vector = Vector::from(chunk.embedding.clone());
@@ -265,12 +269,12 @@ impl RagService {
             .bind(&chunk.metadata)
             .execute(&mut *tx)
             .await
-            .map_err(|e| format!("[RagService] insert failed: {}", e))?;
+            .map_err(|e| ServiceError::external(format!("[RagService] insert failed: {}", e)))?;
         }
 
         tx.commit()
             .await
-            .map_err(|e| format!("[RagService] transaction commit failed: {}", e))?;
+            .map_err(|e| ServiceError::external(format!("[RagService] transaction commit failed: {}", e)))?;
 
         Ok(())
     }

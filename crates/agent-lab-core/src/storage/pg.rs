@@ -2,6 +2,7 @@ use serde_json::Value;
 use sqlx::{postgres::PgRow, PgPool, Row};
 use pgvector::Vector;
 
+use crate::storage::error::StorageError;
 use crate::tools::memory::base::{MemoryConfig, MemoryItem};
 
 #[derive(Clone)]
@@ -23,7 +24,7 @@ impl PgStore {
         &mut self,
         memory_item: MemoryItem,
         embedding: Vec<f32>,
-    ) -> Result<(), String> {
+    ) -> Result<(), StorageError> {
         let pg_vector = Vector::from(embedding);
 
         sqlx::query(r#"
@@ -43,7 +44,7 @@ impl PgStore {
             .bind(&memory_item.metadata)
             .execute(&self.db)
             .await
-            .map_err(|e| format!("[PgStore] insert failed: {}", e))?;
+            .map_err(|e| StorageError::database(format!("[PgStore] insert failed: {}", e)))?;
 
         Ok(())
     }
@@ -57,7 +58,7 @@ impl PgStore {
         importance_threshold: Option<f64>,
         time_range: Option<(i64, i64)>,
         limit: usize,
-    ) -> Result<Vec<(f64, MemoryItem)>, String> {
+    ) -> Result<Vec<(f64, MemoryItem)>, StorageError> {
         let (start_time, end_time) = match time_range {
             Some((start, end)) => (Some(start), Some(end)),
             None => (None, None),
@@ -88,7 +89,7 @@ impl PgStore {
             .bind(limit as i64)
             .fetch_all(&self.db)
             .await
-            .map_err(|e| format!("[PgStore] search failed: {}", e))?;
+            .map_err(|e| StorageError::database(format!("[PgStore] search failed: {}", e)))?;
 
         let results: Vec<(f64, MemoryItem)> = rows
             .into_iter()
@@ -120,7 +121,7 @@ impl PgStore {
         session_id: Option<&str>,
         importance_threshold: Option<f64>,
         time_range: Option<(i64, i64)>,
-    ) -> Result<Vec<MemoryItem>, String> {
+    ) -> Result<Vec<MemoryItem>, StorageError> {
         let pattern = format!("%{}%", query);
 
         let (start_time, end_time) = match time_range {
@@ -150,7 +151,7 @@ impl PgStore {
             .bind(end_time)
             .fetch_all(&self.db)
             .await
-            .map_err(|e| format!("[PgStore] keyword search failed: {}", e))?;
+            .map_err(|e| StorageError::database(format!("[PgStore] keyword search failed: {}", e)))?;
 
         let results: Vec<MemoryItem> = rows
             .into_iter()
@@ -170,7 +171,7 @@ impl PgStore {
         Ok(results)
     }
 
-    pub async fn get(&self, memory_id: &str) -> Result<Option<MemoryItem>, String> {
+    pub async fn get(&self, memory_id: &str) -> Result<Option<MemoryItem>, StorageError> {
         let row = sqlx::query(r#"
             SELECT
                 memory_id, user_id, memory_type, content, importance,
@@ -181,7 +182,7 @@ impl PgStore {
             .bind(memory_id)
             .fetch_optional(&self.db)
             .await
-            .map_err(|e| format!("[PgStore] get failed: {}", e))?;
+            .map_err(|e| StorageError::database(format!("[PgStore] get failed: {}", e)))?;
 
         Ok(row.map(|r| Self::row_to_memory_item(&r)))
     }
@@ -193,7 +194,7 @@ impl PgStore {
         importance: Option<f64>,
         metadata: Option<&Value>,
         new_embedding: Option<Vector>,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, StorageError> {
         let updated = sqlx::query(r#"
             UPDATE memories
             SET content = COALESCE($2, content),
@@ -209,18 +210,18 @@ impl PgStore {
             .bind(new_embedding)
             .execute(&self.db)
             .await
-            .map_err(|e| format!("[PgStore] update failed: {}", e))?
+            .map_err(|e| StorageError::database(format!("[PgStore] update failed: {}", e)))?
             .rows_affected();
 
         Ok(updated > 0)
     }
 
-    pub async fn delete(&self, memory_id: &str) -> Result<bool, String> {
+    pub async fn delete(&self, memory_id: &str) -> Result<bool, StorageError> {
         let deleted = sqlx::query("DELETE FROM memories WHERE memory_id = $1")
             .bind(memory_id)
             .execute(&self.db)
             .await
-            .map_err(|e| format!("[PgStore] delete failed: {}", e))?
+            .map_err(|e| StorageError::database(format!("[PgStore] delete failed: {}", e)))?
             .rows_affected();
 
         Ok(deleted > 0)
@@ -231,7 +232,7 @@ impl PgStore {
         memory_type: &str,
         user_id: Option<&str>,
         limit: Option<i64>,
-    ) -> Result<Vec<MemoryItem>, String> {
+    ) -> Result<Vec<MemoryItem>, StorageError> {
         let limit = limit.unwrap_or(10_000);
 
         let rows = sqlx::query(r#"
@@ -249,17 +250,17 @@ impl PgStore {
             .bind(limit)
             .fetch_all(&self.db)
             .await
-            .map_err(|e| format!("[PgStore] list failed: {}", e))?;
+            .map_err(|e| StorageError::database(format!("[PgStore] list failed: {}", e)))?;
 
         Ok(rows.iter().map(Self::row_to_memory_item).collect())
     }
 
-    pub async fn clear_by_type(&self, memory_type: &str) -> Result<u64, String> {
+    pub async fn clear_by_type(&self, memory_type: &str) -> Result<u64, StorageError> {
         let deleted = sqlx::query("DELETE FROM memories WHERE memory_type = $1")
             .bind(memory_type)
             .execute(&self.db)
             .await
-            .map_err(|e| format!("[PgStore] clear failed: {}", e))?
+            .map_err(|e| StorageError::database(format!("[PgStore] clear failed: {}", e)))?
             .rows_affected();
 
         Ok(deleted)
@@ -269,7 +270,7 @@ impl PgStore {
         &self,
         memory_type: &str,
         user_id: Option<&str>,
-    ) -> Result<i64, String> {
+    ) -> Result<i64, StorageError> {
         let count: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM memories WHERE memory_type = $1 AND (user_id = $2 OR $2 IS NULL)"
         )
@@ -277,7 +278,7 @@ impl PgStore {
             .bind(user_id)
             .fetch_one(&self.db)
             .await
-            .map_err(|e| format!("[PgStore] count failed: {}", e))?;
+            .map_err(|e| StorageError::database(format!("[PgStore] count failed: {}", e)))?;
 
         Ok(count.0)
     }
@@ -286,7 +287,7 @@ impl PgStore {
         &self,
         memory_type: &str,
         user_id: Option<&str>,
-    ) -> Result<Option<f64>, String> {
+    ) -> Result<Option<f64>, StorageError> {
         let avg: (Option<f64>,) = sqlx::query_as(
             "SELECT AVG(importance) FROM memories WHERE memory_type = $1 AND (user_id = $2 OR $2 IS NULL)"
         )
@@ -294,7 +295,7 @@ impl PgStore {
             .bind(user_id)
             .fetch_one(&self.db)
             .await
-            .map_err(|e| format!("[PgStore] avg importance failed: {}", e))?;
+            .map_err(|e| StorageError::database(format!("[PgStore] avg importance failed: {}", e)))?;
 
         Ok(avg.0)
     }
@@ -303,7 +304,7 @@ impl PgStore {
         &self,
         memory_type: &str,
         user_id: Option<&str>,
-    ) -> Result<Option<f64>, String> {
+    ) -> Result<Option<f64>, StorageError> {
         let span: (Option<f64>,) = sqlx::query_as(
             "SELECT EXTRACT(EPOCH FROM (MAX(to_timestamp(timestamp)) - MIN(to_timestamp(timestamp)))) / 86400.0
              FROM memories
@@ -313,7 +314,7 @@ impl PgStore {
             .bind(user_id)
             .fetch_one(&self.db)
             .await
-            .map_err(|e| format!("[PgStore] time span failed: {}", e))?;
+            .map_err(|e| StorageError::database(format!("[PgStore] time span failed: {}", e)))?;
 
         Ok(span.0)
     }

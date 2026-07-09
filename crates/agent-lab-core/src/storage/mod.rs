@@ -1,9 +1,11 @@
 pub mod embedder;
+pub mod error;
 pub mod graph;
 pub mod neo4j;
 pub mod pg;
 
 pub use embedder::{Embedder, OllamaEmbedder};
+pub use error::StorageError;
 pub use graph::entity_id;
 pub use neo4j::{Entity, EntityInput, Neo4jStore, Relation, RelationInput};
 pub use pg::PgStore;
@@ -41,12 +43,12 @@ impl MemoryStore {
         }
     }
 
-    pub async fn add(&mut self, memory_item: MemoryItem) -> Result<(), String> {
+    pub async fn add(&mut self, memory_item: MemoryItem) -> Result<(), StorageError> {
         let embedding = self
             .embedder
             .encode(&memory_item.content)
             .await
-            .map_err(|e| format!("[MemoryStore] embedding calc failed: {}", e))?;
+            .map_err(|e| StorageError::embedding(format!("[MemoryStore] embedding calc failed: {}", e)))?;
 
         self.pg.add(memory_item, embedding).await?;
         Ok(())
@@ -62,7 +64,7 @@ impl MemoryStore {
         memory_item: MemoryItem,
         entities: Vec<EntityInput>,
         relations: Vec<RelationInput>,
-    ) -> Result<(), String> {
+    ) -> Result<(), StorageError> {
         if entities.is_empty() {
             return self.add(memory_item).await;
         }
@@ -71,7 +73,7 @@ impl MemoryStore {
             .embedder
             .encode(&memory_item.content)
             .await
-            .map_err(|e| format!("[MemoryStore] embedding calc failed: {}", e))?;
+            .map_err(|e| StorageError::embedding(format!("[MemoryStore] embedding calc failed: {}", e)))?;
 
         let memory_id = memory_item.id.clone();
         let user_id = memory_item.user_id.clone();
@@ -172,12 +174,12 @@ impl MemoryStore {
         importance_threshold: Option<f64>,
         time_range: Option<(i64, i64)>,
         limit: usize,
-    ) -> Result<Vec<(f64, MemoryItem)>, String> {
+    ) -> Result<Vec<(f64, MemoryItem)>, StorageError> {
         let embedding = self
             .embedder
             .encode(query)
             .await
-            .map_err(|e| format!("[MemoryStore] embedding calc failed: {}", e))?;
+            .map_err(|e| StorageError::embedding(format!("[MemoryStore] embedding calc failed: {}", e)))?;
         let pg_vector = Vector::from(embedding);
 
         self.pg
@@ -201,7 +203,7 @@ impl MemoryStore {
         session_id: Option<&str>,
         importance_threshold: Option<f64>,
         time_range: Option<(i64, i64)>,
-    ) -> Result<Vec<MemoryItem>, String> {
+    ) -> Result<Vec<MemoryItem>, StorageError> {
         self.pg
             .keyword_search(
                 query,
@@ -214,7 +216,7 @@ impl MemoryStore {
             .await
     }
 
-    pub async fn get(&self, memory_id: &str) -> Result<Option<MemoryItem>, String> {
+    pub async fn get(&self, memory_id: &str) -> Result<Option<MemoryItem>, StorageError> {
         self.pg.get(memory_id).await
     }
 
@@ -224,14 +226,14 @@ impl MemoryStore {
         content: Option<&str>,
         importance: Option<f64>,
         metadata: Option<&Value>,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, StorageError> {
         let new_embedding = match content {
             Some(text) => {
                 let embedding = self
                     .embedder
                     .encode(text)
                     .await
-                    .map_err(|e| format!("[MemoryStore] update embedding failed: {}", e))?;
+                    .map_err(|e| StorageError::embedding(format!("[MemoryStore] update embedding failed: {}", e)))?;
                 Some(Vector::from(embedding))
             }
             None => None,
@@ -242,7 +244,7 @@ impl MemoryStore {
             .await
     }
 
-    pub async fn delete(&self, memory_id: &str) -> Result<bool, String> {
+    pub async fn delete(&self, memory_id: &str) -> Result<bool, StorageError> {
         let pg_ok = self.pg.delete(memory_id).await?;
         let _ = self.neo4j.delete_reference_graph_by_memory(memory_id).await;
         Ok(pg_ok)
@@ -253,11 +255,11 @@ impl MemoryStore {
         memory_type: &str,
         user_id: Option<&str>,
         limit: Option<i64>,
-    ) -> Result<Vec<MemoryItem>, String> {
+    ) -> Result<Vec<MemoryItem>, StorageError> {
         self.pg.list_by_type(memory_type, user_id, limit).await
     }
 
-    pub async fn clear_by_type(&self, memory_type: &str) -> Result<u64, String> {
+    pub async fn clear_by_type(&self, memory_type: &str) -> Result<u64, StorageError> {
         let count = self.pg.clear_by_type(memory_type).await?;
         // PG 清空后，同步清空 Neo4j 中该类型的记忆引用图，避免两侧数据不一致。
         let _ = self
@@ -271,7 +273,7 @@ impl MemoryStore {
         &self,
         memory_type: &str,
         user_id: Option<&str>,
-    ) -> Result<i64, String> {
+    ) -> Result<i64, StorageError> {
         self.pg.count_by_type(memory_type, user_id).await
     }
 
@@ -279,7 +281,7 @@ impl MemoryStore {
         &self,
         memory_type: &str,
         user_id: Option<&str>,
-    ) -> Result<Option<f64>, String> {
+    ) -> Result<Option<f64>, StorageError> {
         self.pg.avg_importance_by_type(memory_type, user_id).await
     }
 
@@ -287,7 +289,7 @@ impl MemoryStore {
         &self,
         memory_type: &str,
         user_id: Option<&str>,
-    ) -> Result<Option<f64>, String> {
+    ) -> Result<Option<f64>, StorageError> {
         self.pg.time_span_days_by_type(memory_type, user_id).await
     }
 
@@ -299,7 +301,7 @@ impl MemoryStore {
         user_id: &str,
         entity_ids: &[String],
         limit: usize,
-    ) -> Result<Vec<(String, i64)>, String> {
+    ) -> Result<Vec<(String, i64)>, StorageError> {
         self.neo4j
             .get_memory_ids_by_entities(user_id, entity_ids, limit)
             .await
@@ -312,7 +314,7 @@ impl MemoryStore {
         entity_ids: &[String],
         depth: i64,
         limit: usize,
-    ) -> Result<Vec<(String, i64)>, String> {
+    ) -> Result<Vec<(String, i64)>, StorageError> {
         self.neo4j
             .get_related_memory_ids_by_entities(user_id, entity_ids, depth, limit)
             .await
@@ -323,13 +325,13 @@ impl MemoryStore {
         memory_id: &str,
         depth: i64,
         limit: usize,
-    ) -> Result<Vec<MemoryItem>, String> {
+    ) -> Result<Vec<MemoryItem>, StorageError> {
         // 先拿到源记忆的 user_id，保证只查询该用户下的引用图。
         let source = self
             .pg
             .get(memory_id)
             .await?
-            .ok_or_else(|| format!("[MemoryStore] source memory {} not found", memory_id))?;
+            .ok_or_else(|| StorageError::NotFound)?;
 
         let related_ids = self
             .neo4j

@@ -1,3 +1,4 @@
+use crate::storage::error::StorageError;
 /// Neo4j 中全局共享的实体引用节点。
 ///
 /// `id` 由业务层根据 name + type 计算出的稳定 hash 生成，不依赖 LLM。
@@ -49,10 +50,10 @@ impl Neo4jStore {
         uri: impl Into<String>,
         user: impl Into<String>,
         password: impl Into<String>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, StorageError> {
         let graph = neo4rs::Graph::new(uri, user, password)
             .await
-            .map_err(|e| format!("[Neo4jStore] connection failed: {}", e))?;
+            .map_err(|e| StorageError::graph(format!("[Neo4jStore] connection failed: {}", e)))?;
 
         // 为 Entity.id 和 Memory 的复合键建立唯一约束，确保 MERGE 的原子性，
         // 避免并发/重复调用时产生重复节点。
@@ -96,7 +97,7 @@ impl Neo4jStore {
         memory_type: impl Into<String>,
         entities: &[Entity],
         relations: &[Relation],
-    ) -> Result<(), String> {
+    ) -> Result<(), StorageError> {
         let memory_id = memory_id.into();
         let user_id = user_id.into();
         let memory_type = memory_type.into();
@@ -114,7 +115,7 @@ impl Neo4jStore {
                 .param("memory_type", memory_type),
             )
             .await
-            .map_err(|e| format!("[Neo4jStore] create memory node failed: {}", e))?;
+            .map_err(|e| StorageError::graph(format!("[Neo4jStore] create memory node failed: {}", e)))?;
 
         for e in entities {
             self.graph
@@ -131,7 +132,7 @@ impl Neo4jStore {
                     .param("type", e.entity_type.clone()),
                 )
                 .await
-                .map_err(|e| format!("[Neo4jStore] merge entity failed: {}", e))?;
+                .map_err(|e| StorageError::graph(format!("[Neo4jStore] merge entity failed: {}", e)))?;
 
             self.graph
                 .run(
@@ -147,7 +148,7 @@ impl Neo4jStore {
                     .param("id", e.id.clone()),
                 )
                 .await
-                .map_err(|e| format!("[Neo4jStore] link entity to memory failed: {}", e))?;
+                .map_err(|e| StorageError::graph(format!("[Neo4jStore] link entity to memory failed: {}", e)))?;
         }
 
         for r in relations {
@@ -170,7 +171,7 @@ impl Neo4jStore {
                     .param("user_id", user_id.clone()),
                 )
                 .await
-                .map_err(|e| format!("[Neo4jStore] add relation failed: {}", e))?;
+                .map_err(|e| StorageError::graph(format!("[Neo4jStore] add relation failed: {}", e)))?;
         }
 
         Ok(())
@@ -186,7 +187,7 @@ impl Neo4jStore {
         user_id: impl Into<String>,
         depth: i64,
         limit: usize,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>, StorageError> {
         let memory_id = memory_id.into();
         let user_id = user_id.into();
 
@@ -214,13 +215,13 @@ impl Neo4jStore {
                     .param("limit", limit as i64),
             )
             .await
-            .map_err(|e| format!("[Neo4jStore] get related memory ids failed: {}", e))?;
+            .map_err(|e| StorageError::graph(format!("[Neo4jStore] get related memory ids failed: {}", e)))?;
 
         let mut results = Vec::new();
         while let Ok(Some(row)) = stream.next().await {
             let id: String = row
                 .get("memory_id")
-                .map_err(|e| format!("[Neo4jStore] parse related memory_id failed: {}", e))?;
+                .map_err(|e| StorageError::graph(format!("[Neo4jStore] parse related memory_id failed: {}", e)))?;
             results.push(id);
         }
 
@@ -236,7 +237,7 @@ impl Neo4jStore {
         user_id: impl Into<String>,
         entity_ids: &[String],
         limit: usize,
-    ) -> Result<Vec<(String, i64)>, String> {
+    ) -> Result<Vec<(String, i64)>, StorageError> {
         let user_id = user_id.into();
 
         let mut stream = self
@@ -256,16 +257,16 @@ impl Neo4jStore {
                 .param("limit", limit as i64),
             )
             .await
-            .map_err(|e| format!("[Neo4jStore] get memory ids by entities failed: {}", e))?;
+            .map_err(|e| StorageError::graph(format!("[Neo4jStore] get memory ids by entities failed: {}", e)))?;
 
         let mut results = Vec::new();
         while let Ok(Some(row)) = stream.next().await {
             let memory_id: String = row
                 .get("memory_id")
-                .map_err(|e| format!("[Neo4jStore] parse memory_id failed: {}", e))?;
+                .map_err(|e| StorageError::graph(format!("[Neo4jStore] parse memory_id failed: {}", e)))?;
             let matched_count: i64 = row
                 .get("matched_count")
-                .map_err(|e| format!("[Neo4jStore] parse matched_count failed: {}", e))?;
+                .map_err(|e| StorageError::graph(format!("[Neo4jStore] parse matched_count failed: {}", e)))?;
             results.push((memory_id, matched_count));
         }
 
@@ -282,7 +283,7 @@ impl Neo4jStore {
         entity_ids: &[String],
         depth: i64,
         limit: usize,
-    ) -> Result<Vec<(String, i64)>, String> {
+    ) -> Result<Vec<(String, i64)>, StorageError> {
         let user_id = user_id.into();
         let depth = depth.max(1);
 
@@ -308,16 +309,16 @@ impl Neo4jStore {
                     .param("limit", limit as i64),
             )
             .await
-            .map_err(|e| format!("[Neo4jStore] get related memory ids by entities failed: {}", e))?;
+            .map_err(|e| StorageError::graph(format!("[Neo4jStore] get related memory ids by entities failed: {}", e)))?;
 
         let mut results = Vec::new();
         while let Ok(Some(row)) = stream.next().await {
             let memory_id: String = row
                 .get("memory_id")
-                .map_err(|e| format!("[Neo4jStore] parse memory_id failed: {}", e))?;
+                .map_err(|e| StorageError::graph(format!("[Neo4jStore] parse memory_id failed: {}", e)))?;
             let related_count: i64 = row
                 .get("related_count")
-                .map_err(|e| format!("[Neo4jStore] parse related_count failed: {}", e))?;
+                .map_err(|e| StorageError::graph(format!("[Neo4jStore] parse related_count failed: {}", e)))?;
             results.push((memory_id, related_count));
         }
 
@@ -329,7 +330,7 @@ impl Neo4jStore {
         &self,
         memory_id: impl Into<String>,
         user_id: impl Into<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), StorageError> {
         self.graph
             .run(
                 neo4rs::query(
@@ -345,7 +346,7 @@ impl Neo4jStore {
                 .param("user_id", user_id.into()),
             )
             .await
-            .map_err(|e| format!("[Neo4jStore] delete reference graph failed: {}", e))?;
+            .map_err(|e| StorageError::graph(format!("[Neo4jStore] delete reference graph failed: {}", e)))?;
 
         Ok(())
     }
@@ -354,7 +355,7 @@ impl Neo4jStore {
     pub async fn delete_reference_graph_by_memory_type(
         &self,
         memory_type: impl Into<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), StorageError> {
         let memory_type = memory_type.into();
 
         // 1) 先删除该类型下所有 memory_id 关联的 RELATED_TO 关系。
@@ -372,7 +373,7 @@ impl Neo4jStore {
                 .param("memory_type", memory_type.clone()),
             )
             .await
-            .map_err(|e| format!("[Neo4jStore] delete RELATED_TO by memory_type failed: {}", e))?;
+            .map_err(|e| StorageError::graph(format!("[Neo4jStore] delete RELATED_TO by memory_type failed: {}", e)))?;
 
         // 2) 删除该类型的所有 Memory 节点（连带 HAS_ENTITY 关系）。
         self.graph
@@ -386,7 +387,7 @@ impl Neo4jStore {
                 .param("memory_type", memory_type),
             )
             .await
-            .map_err(|e| format!("[Neo4jStore] delete Memory by memory_type failed: {}", e))?;
+            .map_err(|e| StorageError::graph(format!("[Neo4jStore] delete Memory by memory_type failed: {}", e)))?;
 
         Ok(())
     }
@@ -395,7 +396,7 @@ impl Neo4jStore {
     pub async fn delete_reference_graph_by_memory(
         &self,
         memory_id: impl Into<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), StorageError> {
         self.graph
             .run(
                 neo4rs::query(
@@ -410,7 +411,7 @@ impl Neo4jStore {
                 .param("memory_id", memory_id.into()),
             )
             .await
-            .map_err(|e| format!("[Neo4jStore] delete reference graph by memory failed: {}", e))?;
+            .map_err(|e| StorageError::graph(format!("[Neo4jStore] delete reference graph by memory failed: {}", e)))?;
 
         Ok(())
     }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::error::AgentLabError;
 use crate::services::rag_service::{RagChunk, RagService};
 
 /// 语义检索：把 query 向量化后在 `rag_chunks` 中搜索最近的 chunk。
@@ -12,7 +13,7 @@ pub async fn search(
     query: &str,
     namespace: Option<&str>,
     limit: usize,
-) -> Result<Vec<(f64, RagChunk)>, String> {
+) -> Result<Vec<(f64, RagChunk)>, AgentLabError> {
     // 1. 收集原始查询与 HyDE 假设文档
     let mut base_queries = vec![query.to_string()];
     if let Some(hyde) = &service.hyde_generator {
