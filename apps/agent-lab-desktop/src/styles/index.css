@@ -1,0 +1,26 @@
+/* 日本简约风格：全局基础样式 */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, "Noto Sans JP", "Hiragino Sans", "Yu Gothic",
+    system-ui, sans-serif;
+  background-color: #f7f5f0;
+  color: #1a1a1a;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background-color: rgba(107, 124, 90, 0.2);
+}

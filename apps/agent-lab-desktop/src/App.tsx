@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import "./App.css";
 
 type AgentStreamEvent =
   | { type: "content"; delta: string }
@@ -56,31 +55,56 @@ function App() {
     console.log("sessionId:", returnedSessionId);
   }
 
-  return (
-    <main className="container">
-      <h1>Agent Lab Desktop</h1>
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      chat();
+    }
+  };
 
-      <div className="row" style={{ marginTop: 24 }}>
-        <input
-          value={chatInput}
-          onChange={(e) => setChatInput(e.currentTarget.value)}
-          placeholder="输入消息..."
-          style={{ minWidth: 240 }}
-        />
-        <button onClick={chat}>发送</button>
+  return (
+    <main className="min-h-full flex flex-col items-center justify-center px-6 py-16 bg-paper">
+      <div className="w-full max-w-2xl">
+        <header className="mb-16 text-center">
+          <h1 className="text-4xl font-light tracking-wider text-ink mb-4">
+            Agent Lab
+          </h1>
+          <p className="text-stone text-sm tracking-wide">
+            与日本简约之美同行的智能助手
+          </p>
+        </header>
+
+        <section className="card-paper p-8 mb-8">
+          <div className="flex items-stretch gap-3">
+            <input
+              className="input-minimal flex-1"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.currentTarget.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="输入消息，按 Enter 发送..."
+            />
+            <button className="btn-moss" onClick={chat}>
+              发送
+            </button>
+          </div>
+        </section>
+
+        <section className="card-paper p-8 min-h-[240px]">
+          <div className="flex items-center justify-between mb-6 pb-4 border-b border-mist">
+            <span className="text-xs uppercase tracking-wider text-stone">
+              对话
+            </span>
+            <span className="text-xs text-stone-light">
+              {sessionId ?? "新会话"}
+            </span>
+          </div>
+
+          <pre className="whitespace-pre-wrap font-sans text-ink-light leading-relaxed">
+            {chatOutput || (
+              <span className="text-stone-light">等待回复…</span>
+            )}
+          </pre>
+        </section>
       </div>
-      <p>sessionId: {sessionId ?? "新会话"}</p>
-      <pre
-        style={{
-          whiteSpace: "pre-wrap",
-          textAlign: "left",
-          maxWidth: 600,
-          border: "1px solid #ccc",
-          padding: 12,
-        }}
-      >
-        {chatOutput || "等待回复..."}
-      </pre>
     </main>
   );
 }
