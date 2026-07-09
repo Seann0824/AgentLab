@@ -80,8 +80,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   deleteSession: async (id) => {
-    const ok = await deleteChatSession(id);
-    if (!ok) return;
+    try {
+      const ok = await deleteChatSession(id);
+      if (!ok) {
+        alert("删除会话失败，请刷新后重试");
+        return;
+      }
+    } catch (err) {
+      alert(`删除会话失败: ${err}`);
+      return;
+    }
 
     set((state) => {
       const remaining = state.sessions.filter((s) => s.id !== id);

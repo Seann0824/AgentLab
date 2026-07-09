@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useChatStore } from "../store/chatStore";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { NewChatButton } from "./NewChatButton";
 import type { SessionSummary } from "../types/chat";
 
@@ -79,7 +80,7 @@ function SessionItem({
                 e.stopPropagation();
                 setIsEditing(true);
               }}
-              className="p-1 text-xs text-stone hover:text-moss"
+              className="p-2 text-xs text-stone hover:text-moss min-w-[28px] min-h-[28px] flex items-center justify-center"
               title="重命名"
             >
               ✎
@@ -89,7 +90,7 @@ function SessionItem({
                 e.stopPropagation();
                 onDelete();
               }}
-              className="p-1 text-xs text-stone hover:text-red-600"
+              className="p-2 text-xs text-stone hover:text-red-600 min-w-[28px] min-h-[28px] flex items-center justify-center"
               title="删除"
             >
               ×
@@ -104,6 +105,7 @@ function SessionItem({
 export function Sidebar() {
   const { sessions, currentSessionId, loadSessions, selectSession, deleteSession, renameSession } =
     useChatStore();
+  const [deletingSession, setDeletingSession] = useState<SessionSummary | null>(null);
 
   useEffect(() => {
     loadSessions();
@@ -122,14 +124,28 @@ export function Sidebar() {
             isActive={session.id === currentSessionId}
             onSelect={() => selectSession(session.id)}
             onRename={(title) => renameSession(session.id, title)}
-            onDelete={() => {
-              if (confirm(`确定删除会话「${session.title}」吗？`)) {
-                deleteSession(session.id);
-              }
-            }}
+            onDelete={() => setDeletingSession(session)}
           />
         ))}
       </div>
+
+      <ConfirmDialog
+        isOpen={deletingSession !== null}
+        title="删除会话"
+        message={
+          deletingSession
+            ? `确定删除会话「${deletingSession.title}」吗？删除后无法恢复。`
+            : ""
+        }
+        confirmText="删除"
+        onConfirm={() => {
+          if (deletingSession) {
+            deleteSession(deletingSession.id);
+          }
+          setDeletingSession(null);
+        }}
+        onCancel={() => setDeletingSession(null)}
+      />
     </aside>
   );
 }
