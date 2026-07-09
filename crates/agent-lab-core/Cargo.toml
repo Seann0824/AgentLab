@@ -3,16 +3,11 @@ name = "agent-lab-core"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "agent-lab"
-path = "src/main.rs"
-
 [dependencies]
 anyhow = "1.0.102"
 async-trait = "0.1.89"
 bytes = "1.11.1"
 chrono = "0.4.45"
-clap = "4.6.1"
 dotenvy = "0.15.7"
 futures-util = "0.3.32"
 jsonschema = "0.46.5"

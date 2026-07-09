@@ -1,6 +1,6 @@
 [alias]
-# 运行交互式 RAG Agent
-lab = "run -p agent-lab-core --bin agent-lab"
+# 运行交互式 RAG Agent 示例
+lab = "run -p agent-lab-core --example rag_agent"
 
 # 运行小说生成示例
 novel = "run -p agent-lab-core --example novel_generation"
