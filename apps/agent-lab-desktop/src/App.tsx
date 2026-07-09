@@ -1,6 +1,7 @@
 import { useState } from "react";
 import reactLogo from "./assets/react.svg";
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { commands } from "./bindings";
 import "./App.css";
 
 interface FileChunk {
@@ -15,24 +16,23 @@ function App() {
 
   async function greet() {
     // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
+    setGreetMsg(await commands.greet(name));
   }
 
   async function getGitignoreFile() {
-    try {
-      let file = await invoke("read_file", {
-        filePath: "/Users/sean/Desktop/repo/agent-lab/.gitignore",
-      });
+    const result = await commands.readFile(
+      "/Users/sean/Desktop/repo/agent-lab/.gitignore"
+    );
 
-      // file 是 Uint8Array / ArrayBuffer
-      console.log("file size:", (file as Uint8Array).length);
-      console.log(
-        "file content:",
-        new TextDecoder().decode(file as Uint8Array)
-      );
-    } catch (error) {
-      console.error("read file failed:", error);
+    if (result.status === "error") {
+      console.error("read file failed:", result.error);
+      return;
     }
+
+    // 返回 number[]，转成 Uint8Array 再解码
+    const data = new Uint8Array(result.data);
+    console.log("file size:", data.length);
+    console.log("file content:", new TextDecoder().decode(data));
   }
 
   async function getGitignoreFileByChannel() {
@@ -65,15 +65,9 @@ function App() {
     console.log("file content:", new TextDecoder().decode(result));
   }
 
-  function login() {
-    const payload = {
-      user: "tauri",
-      password: "tauri",
-    };
-    console.log("login");
-    invoke("login", payload)
-      .then((message) => console.log(message))
-      .catch((error) => console.error(error));
+  async function login() {
+    const result = await commands.login("tauri", "tauri");
+    console.log("login", result);
   }
 
   return (

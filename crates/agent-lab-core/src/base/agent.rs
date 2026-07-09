@@ -45,7 +45,7 @@ impl AgentBase {
 pub trait Agent: Send + Sync {
     fn base(&self) -> &AgentBase;
     fn base_mut(&mut self) -> &mut AgentBase;
-
+    
     async fn run(&mut self, input_text: &str) -> String;
 
     fn add_message(&mut self, message: Message) {

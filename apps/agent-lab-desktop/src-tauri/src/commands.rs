@@ -1,9 +1,11 @@
 #[tauri::command]
+#[specta::specta]
 pub fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn my_custom_command(invoke_message: String) {
     println!(
         "I was invoked from JavaScript, with this message: {}",
@@ -11,14 +13,15 @@ pub fn my_custom_command(invoke_message: String) {
     );
 }
 
-use tauri::ipc::Response;
 #[tauri::command]
-pub fn read_file(file_path: &str) -> Result<Response, String> {
+#[specta::specta]
+pub fn read_file(file_path: &str) -> Result<Vec<u8>, String> {
     let data = std::fs::read(file_path).map_err(|e| format!("read file failed: {}", e))?;
-    Ok(tauri::ipc::Response::new(data))
+    Ok(data)
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn login(user: &str, password: &str) -> Result<String, String> {
     if user == "tauri" && password == "tauri" {
         Ok("logged_in".to_string())
@@ -29,7 +32,7 @@ pub fn login(user: &str, password: &str) -> Result<String, String> {
 
 use tauri::ipc::Channel;
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, serde::Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct FileChunk {
     pub chunk: Vec<u8>,

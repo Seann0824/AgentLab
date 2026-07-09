@@ -1,7 +1,16 @@
-use std::io::{self, Write};
+use crate::{
+    base::{
+        agent::{Agent, AgentBase},
+        config::Config,
+        llm::AgentsLLM,
+        message::Message,
+    },
+    tools::{ToolManager, types::Tool},
+};
 use futures_util::stream::StreamExt;
-use openai_api_rs::v1::chat_completion::{FinishReason, chat_completion_stream::ChatCompletionStreamResponse};
-use crate::{base::{agent::{Agent, AgentBase}, config::Config, llm::AgentsLLM, message::Message}, tools::{ToolManager, types::Tool}};
+use openai_api_rs::v1::chat_completion::{
+    FinishReason, chat_completion_stream::ChatCompletionStreamResponse,
+};
 
 pub struct SimpleAgent {
     enable_tool_calling: bool,
@@ -11,22 +20,18 @@ pub struct SimpleAgent {
 
 impl SimpleAgent {
     pub fn new(
-        name: impl Into<String>, 
+        name: impl Into<String>,
         llm: AgentsLLM,
         system_prompt: impl Into<Option<String>>,
         config: impl Into<Option<Config>>,
         tool_manager: impl Into<Option<ToolManager>>,
-        enable_tool_calling: bool
+        enable_tool_calling: bool,
     ) -> Self {
         let config = config.into().unwrap_or(Config::from_env());
         let system_prompt = system_prompt.into().unwrap_or("".into());
         let tool_manager = tool_manager.into().unwrap_or(ToolManager::new());
-        let agent_base = AgentBase::new(
-            name.into(),
-            llm, 
-            Some(system_prompt.clone()), 
-            Some(config),
-        );
+        let agent_base =
+            AgentBase::new(name.into(), llm, Some(system_prompt.clone()), Some(config));
 
         Self {
             enable_tool_calling,
@@ -43,7 +48,6 @@ impl SimpleAgent {
     pub fn remove_tool(&mut self, tool_name: &String) {
         self.tool_manager.remove_tool(tool_name);
     }
-
 }
 
 #[async_trait::async_trait]
@@ -57,8 +61,6 @@ impl Agent for SimpleAgent {
     }
 
     async fn run(&mut self, input_text: &str) -> String {
-        println!("🤖 {} 正在处理: {input_text}", self.base.name);
-        io::stdout().flush().ok();
         let user_message = Message::user(input_text, None);
         self.add_message(user_message);
         let mut is_continue = true;
@@ -68,33 +70,37 @@ impl Agent for SimpleAgent {
             if !is_continue {
                 break;
             }
-            let history_message = self.base
+            let history_message = self
+                .base
                 .get_history()
                 .into_iter()
                 .map(|message| message.naive_message)
                 .collect();
-            let mut agent_stream = self.base.llm.invoke(
-                history_message, 
-                self.enable_tool_calling.then(|| self.tool_manager.get_tools_scehma()),
-                None
-            ).await;
+            let mut agent_stream = self
+                .base
+                .llm
+                .invoke(
+                    history_message,
+                    self.enable_tool_calling
+                        .then(|| self.tool_manager.get_tools_scehma()),
+                    None,
+                )
+                .await;
             let (mut reason_delta, mut content_delta) = (vec![], vec![]);
             let mut tools_call = None;
 
             while let Some(chunck) = agent_stream.next().await {
                 match chunck {
                     ChatCompletionStreamResponse::Content(delta) => {
-                        print!("{}", delta);
                         content_delta.push(delta);
-
-                    },
+                    }
                     ChatCompletionStreamResponse::Reasoning(delta) => {
                         reason_delta.push(delta);
-                    },
+                    }
                     ChatCompletionStreamResponse::ToolCall(tc) => {
                         tools_call = Some(tc);
-                    },
-                    ChatCompletionStreamResponse::Done(finish_reason)=> {
+                    }
+                    ChatCompletionStreamResponse::Done(finish_reason) => {
                         // 区分调用工具和没有调用工具的信息
                         // 1. 判断当时是否是工具调用
                         let Some(finish_reason) = finish_reason else {
@@ -120,26 +126,33 @@ impl Agent for SimpleAgent {
                                 if !reasoning.is_empty() {
                                     self.add_message(Message::assistant(reasoning, None));
                                 }
-                                self.add_message(Message::assistant_with_tools(content_delta.join(""), tools_call.clone(),None));
+                                self.add_message(Message::assistant_with_tools(
+                                    content_delta.join(""),
+                                    tools_call.clone(),
+                                    None,
+                                ));
                                 // 工具调用开始
                                 let tasks = tools_call
                                     .iter()
                                     .map(|tool_call| self.tool_manager.run(tool_call.clone()))
                                     .collect::<Vec<_>>();
-                                
+
                                 let tools_call_result = futures_util::future::join_all(tasks).await;
-                                
-                                tools_call_result
-                                    .into_iter()
-                                    .for_each(|(tool_call_id, tool_call_result)| {
+
+                                tools_call_result.into_iter().for_each(
+                                    |(tool_call_id, tool_call_result)| {
                                         let tool_call_result = match tool_call_result {
                                             Ok(content) => content,
                                             Err(error_msg) => error_msg,
                                         };
-                                        println!("tool_call_result: {}", tool_call_result);
-                                        self.add_message(Message::tool_response(tool_call_id, tool_call_result, None));
-                                    });
-                            },
+                                        self.add_message(Message::tool_response(
+                                            tool_call_id,
+                                            tool_call_result,
+                                            None,
+                                        ));
+                                    },
+                                );
+                            }
                             _ => {
                                 let content = content_delta.join("");
                                 let reasoning = reason_delta.join("");
@@ -150,13 +163,12 @@ impl Agent for SimpleAgent {
                                 final_response = content;
                                 is_continue = false;
                                 break;
-                            },
+                            }
                         }
-                    },
+                    }
                 }
                 let _ = std::io::Write::flush(&mut std::io::stdout());
             }
-            println!();
         }
 
         final_response

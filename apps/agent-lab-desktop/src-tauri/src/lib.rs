@@ -6,6 +6,25 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // tauri-specta：编译时生成 TypeScript bindings
+    let specta_builder = tauri_specta::Builder::<tauri::Wry>::new()
+        .commands(tauri_specta::collect_commands![
+            commands::greet,
+            commands::my_custom_command,
+            commands::login,
+            commands::read_file,
+        ])
+        .typ::<commands::FileChunk>()
+        .events(tauri_specta::collect_events![]);
+
+    #[cfg(debug_assertions)]
+    specta_builder
+        .export(
+            specta_typescript::Typescript::default(),
+            "../src/bindings.ts",
+        )
+        .expect("failed to export typescript bindings");
+
     // CrabNebula DevTools：只在 debug 构建中启用，用于实时查看日志、command 性能等
     #[cfg(debug_assertions)]
     let devtools = tauri_plugin_devtools::init();
