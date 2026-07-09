@@ -1,12 +1,10 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod commands;
+mod error;
+mod services;
 mod state;
-use state::GlobalState;
-use std::{collections::HashMap, sync::Arc};
-use tauri::Manager;
-use tokio::sync::RwLock;
 
-use crate::state::Sessions;
+use state::AppState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -14,23 +12,20 @@ pub fn run() {
     dotenvy::dotenv().ok();
 
     // tauri-specta：编译时生成 TypeScript bindings
-    let specta_builder = tauri_specta::Builder::<tauri::Wry>::new()
-        .commands(tauri_specta::collect_commands![
-            commands::greet,
-            commands::my_custom_command,
-            commands::login,
-            commands::read_file,
-        ])
-        .typ::<commands::FileChunk>()
-        .events(tauri_specta::collect_events![]);
-
+    // 当前 chat_completion_stream 使用 agent-lab-core 的 AgentStreamEvent，
+    // 该类型尚未 derive specta::Type，因此暂不纳入 specta 收集。
+    // 前端直接通过 invoke 调用本命令。
     #[cfg(debug_assertions)]
-    specta_builder
-        .export(
-            specta_typescript::Typescript::default(),
-            "../src/bindings.ts",
-        )
-        .expect("failed to export typescript bindings");
+    {
+        let specta_builder = tauri_specta::Builder::<tauri::Wry>::new()
+            .events(tauri_specta::collect_events![]);
+        specta_builder
+            .export(
+                specta_typescript::Typescript::default(),
+                "../src/bindings.ts",
+            )
+            .expect("failed to export typescript bindings");
+    }
 
     // CrabNebula DevTools：只在 debug 构建中启用，用于实时查看日志、command 性能等
     #[cfg(debug_assertions)]
@@ -45,11 +40,8 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            let sessions: Sessions = Arc::new(RwLock::new(HashMap::new()));
-            app.manage(GlobalState {
-                name: "test".to_string(),
-                sessions,
-            });
+            app.manage(AppState::new());
+            #[cfg(debug_assertions)]
             {
                 let window = app.get_webview_window("main").unwrap();
                 window.open_devtools();
@@ -58,12 +50,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            commands::greet,
-            commands::my_custom_command,
-            commands::read_file,
-            commands::login,
-            commands::read_file_channel,
-            commands::chat_completion_stream,
+            commands::chat::chat_completion_stream,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
