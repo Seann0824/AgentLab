@@ -1,8 +1,11 @@
 use tokio::sync::mpsc;
 
+use openai_api_rs::v1::chat_completion::{
+    ChatCompletionMessage, Content, MessageRole, ToolCall,
+};
+
 use crate::base::config::Config;
 use crate::base::llm::AgentsLLM;
-use crate::base::message::Message;
 use crate::services::chat_dto::ChatMessage;
 
 pub struct AgentBase {
@@ -10,7 +13,7 @@ pub struct AgentBase {
     pub llm: AgentsLLM,
     pub system_prompt: Option<String>,
     pub config: Config,
-    history: Vec<Message>,
+    history: Vec<ChatCompletionMessage>,
     event_sender: Option<mpsc::Sender<AgentStreamEvent>>,
 }
 
@@ -22,7 +25,7 @@ impl AgentBase {
         config: Option<Config>,
     ) -> Self {
         let history = if system_prompt.as_ref().map(|s| !s.is_empty()).unwrap_or(false) {
-            vec![Message::system(system_prompt.clone().unwrap(), None)]
+            vec![system_message(system_prompt.clone().unwrap())]
         } else {
             vec![]
         };
@@ -36,7 +39,7 @@ impl AgentBase {
         }
     }
 
-    pub fn add_message(&mut self, message: Message) {
+    pub fn add_message(&mut self, message: ChatCompletionMessage) {
         self.history.push(message);
     }
 
@@ -44,18 +47,100 @@ impl AgentBase {
         self.history.clear();
     }
 
-    pub fn get_history(&self) -> Vec<Message> {
+    pub fn get_history(&self) -> Vec<ChatCompletionMessage> {
         self.history.clone()
+    }
+
+    pub fn set_history(&mut self, history: Vec<ChatCompletionMessage>) {
+        self.history = history;
     }
 
     pub fn set_event_sender(&mut self, tx: Option<mpsc::Sender<AgentStreamEvent>>) {
         self.event_sender = tx;
     }
 
+    /// 确保历史记录以 system prompt 开头。
+    /// 如果传入的历史中已包含 system 消息，则不再重复添加。
+    pub fn ensure_system_prompt(&mut self) {
+        if let Some(sp) = &self.system_prompt {
+            if !sp.is_empty() {
+                let has_system = self
+                    .history
+                    .first()
+                    .map(|m| m.role == MessageRole::system)
+                    .unwrap_or(false);
+                if !has_system {
+                    self.history.insert(0, system_message(sp.clone()));
+                }
+            }
+        }
+    }
+
     pub async fn emit(&self, event: AgentStreamEvent) {
         if let Some(tx) = &self.event_sender {
             let _ = tx.send(event).await;
         }
+    }
+}
+
+/// 构造 user 角色的 `ChatCompletionMessage`。
+pub fn user_message(content: impl Into<String>) -> ChatCompletionMessage {
+    ChatCompletionMessage {
+        role: MessageRole::user,
+        content: Content::Text(content.into()),
+        name: None,
+        tool_calls: None,
+        tool_call_id: None,
+    }
+}
+
+/// 构造 assistant 角色的 `ChatCompletionMessage`。
+pub fn assistant_message(content: impl Into<String>) -> ChatCompletionMessage {
+    ChatCompletionMessage {
+        role: MessageRole::assistant,
+        content: Content::Text(content.into()),
+        name: None,
+        tool_calls: None,
+        tool_call_id: None,
+    }
+}
+
+/// 构造带 tool_calls 的 assistant `ChatCompletionMessage`。
+pub fn assistant_message_with_tools(
+    content: impl Into<String>,
+    tool_calls: Vec<ToolCall>,
+) -> ChatCompletionMessage {
+    ChatCompletionMessage {
+        role: MessageRole::assistant,
+        content: Content::Text(content.into()),
+        name: None,
+        tool_calls: Some(tool_calls),
+        tool_call_id: None,
+    }
+}
+
+/// 构造 tool 角色的 `ChatCompletionMessage`。
+pub fn tool_message(
+    tool_call_id: impl Into<String>,
+    content: impl Into<String>,
+) -> ChatCompletionMessage {
+    ChatCompletionMessage {
+        role: MessageRole::tool,
+        content: Content::Text(content.into()),
+        name: None,
+        tool_calls: None,
+        tool_call_id: Some(tool_call_id.into()),
+    }
+}
+
+/// 构造 system 角色的 `ChatCompletionMessage`。
+pub fn system_message(content: impl Into<String>) -> ChatCompletionMessage {
+    ChatCompletionMessage {
+        role: MessageRole::system,
+        content: Content::Text(content.into()),
+        name: None,
+        tool_calls: None,
+        tool_call_id: None,
     }
 }
 
@@ -78,7 +163,7 @@ pub enum AgentStreamEvent {
         arguments: String,
     },
 
-    /// 某个工具调用执行结束并返回结果。
+    /// 某个工具调用结束并返回结果。
     ToolCallEnd {
         tool_call_id: String,
         tool_name: String,
@@ -106,7 +191,7 @@ pub trait Agent: Send + Sync {
 
     async fn run(&mut self, input_text: &str) -> String;
 
-    fn add_message(&mut self, message: Message) {
+    fn add_message(&mut self, message: ChatCompletionMessage) {
         self.base_mut().add_message(message);
     }
 
@@ -114,7 +199,7 @@ pub trait Agent: Send + Sync {
         self.base_mut().clear_history();
     }
 
-    fn get_history(&self) -> Vec<Message> {
+    fn get_history(&self) -> Vec<ChatCompletionMessage> {
         self.base().get_history()
     }
 

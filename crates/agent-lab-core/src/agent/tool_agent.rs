@@ -3,9 +3,10 @@ use std::marker::PhantomData;
 use openai_api_rs::v1::chat_completion::ToolChoiceType;
 use serde::de::DeserializeOwned;
 
-use crate::base::agent::AgentBase;
+use crate::base::agent::{
+    assistant_message_with_tools, system_message, tool_message, user_message, AgentBase,
+};
 use crate::base::llm::AgentsLLM;
-use crate::base::message::Message;
 use crate::tools::ToolManager;
 
 const MAX_RETRIES: usize = 3;
@@ -42,9 +43,8 @@ impl<T: DeserializeOwned> ToolAgent<T> {
     /// 工具失败或结果无法解析时，会把错误信息加入对话历史并重新调用 LLM，最多重试 3 次。
     pub async fn run(&mut self, input: &str) -> Result<T, String> {
         let mut messages = vec![
-            Message::system(self.base.system_prompt.clone().unwrap_or_default(), None)
-                .naive_message,
-            Message::user(input, None).naive_message,
+            system_message(self.base.system_prompt.clone().unwrap_or_default()),
+            user_message(input),
         ];
 
         let tools = self.tool_manager.get_tools_scehma();
@@ -76,9 +76,7 @@ impl<T: DeserializeOwned> ToolAgent<T> {
                 .ok_or_else(|| "[ToolAgent] empty tool calls".to_string())?;
 
             // 把 assistant 的工具调用请求加入历史。
-            messages.push(
-                Message::assistant_with_tools("", vec![first_call.clone()], None).naive_message,
-            );
+            messages.push(assistant_message_with_tools("", vec![first_call.clone()]));
 
             // 真正执行工具。
             let (_, tool_call_id, tool_result) = self.tool_manager.run(first_call).await;
@@ -88,9 +86,7 @@ impl<T: DeserializeOwned> ToolAgent<T> {
             };
 
             // 把工具执行结果加入历史。
-            messages.push(
-                Message::tool_response(tool_call_id, response_text.clone(), None).naive_message,
-            );
+            messages.push(tool_message(tool_call_id, response_text.clone()));
 
             match tool_result {
                 Ok(content) => match serde_json::from_str::<T>(&content) {
@@ -102,10 +98,10 @@ impl<T: DeserializeOwned> ToolAgent<T> {
                                 MAX_RETRIES, e
                             ));
                         }
-                        messages.push(Message::user(
-                                format!("工具返回的结果格式不正确：{}。请重新调用工具并输出合法的 JSON。", e),
-                                None,
-                            ).naive_message);
+                        messages.push(user_message(format!(
+                            "工具返回的结果格式不正确：{}。请重新调用工具并输出合法的 JSON。",
+                            e
+                        )));
                     }
                 },
                 Err(e) => {
@@ -115,10 +111,10 @@ impl<T: DeserializeOwned> ToolAgent<T> {
                             MAX_RETRIES, e
                         ));
                     }
-                    messages.push(
-                        Message::user(format!("工具执行失败：{}。请修正后重新调用工具。", e), None)
-                            .naive_message,
-                    );
+                    messages.push(user_message(format!(
+                        "工具执行失败：{}。请修正后重新调用工具。",
+                        e
+                    )));
                 }
             }
         }

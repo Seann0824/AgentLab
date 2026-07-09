@@ -22,7 +22,7 @@ pub async fn chat_completion_stream(
 pub async fn list_chat_sessions(
     state: State<'_, AppState>,
 ) -> Result<Vec<SessionSummary>, String> {
-    Ok(state.chat_service.list_sessions().await)
+    Ok(state.chat_service.list_sessions().await?)
 }
 
 /// 获取指定会话的历史消息。
@@ -41,7 +41,7 @@ pub async fn get_chat_history(
 /// 创建新会话。
 #[tauri::command]
 pub async fn create_chat_session(state: State<'_, AppState>) -> Result<String, String> {
-    Ok(state.chat_service.create_session().await)
+    Ok(state.chat_service.create_session().await?)
 }
 
 /// 删除会话。

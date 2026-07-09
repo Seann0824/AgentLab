@@ -3,7 +3,9 @@ mod services;
 mod state;
 
 use agent_lab_core::base::llm::AgentsLLM;
-use agent_lab_core::services::ChatService;
+use agent_lab_core::db::get_db_client;
+use agent_lab_core::services::{ChatService, MessageService, SessionService};
+use agent_lab_core::storage::ChatStore;
 use state::AppState;
 use tauri::Manager;
 
@@ -42,8 +44,22 @@ pub fn run() {
     builder
         .setup(|app| {
             let llm = AgentsLLM::from_env().expect("LLM config missing");
+            let database_url =
+                std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
+            let db = tauri::async_runtime::block_on(async {
+                get_db_client(&database_url).await
+            });
+            let chat_store = ChatStore::new(db);
+            let session_service = SessionService::new(chat_store.clone());
+            let message_service = MessageService::new(chat_store);
+
             app.manage(AppState {
-                chat_service: ChatService::new(llm),
+                chat_service: ChatService::new(
+                    llm,
+                    session_service,
+                    message_service,
+                    "default_user",
+                ),
             });
             #[cfg(debug_assertions)]
             {

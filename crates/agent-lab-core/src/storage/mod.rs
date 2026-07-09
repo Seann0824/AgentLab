@@ -1,9 +1,11 @@
+pub mod chat_store;
 pub mod embedder;
 pub mod error;
 pub mod graph;
 pub mod neo4j;
 pub mod pg;
 
+pub use chat_store::{ChatSessionRow, ChatStore};
 pub use embedder::{Embedder, OllamaEmbedder};
 pub use error::StorageError;
 pub use graph::entity_id;

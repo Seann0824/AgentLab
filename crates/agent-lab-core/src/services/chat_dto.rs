@@ -1,9 +1,10 @@
-use openai_api_rs::v1::chat_completion::Content;
+use chrono::Local;
+use openai_api_rs::v1::chat_completion::{
+    ChatCompletionMessage, Content, MessageRole, ToolCall, ToolCallFunction,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::base::message::Message;
-
-/// 面向前端的消息结构。
+/// 面向前端的消息结构，也是应用层 canonical 数据格式。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub id: String,
@@ -32,24 +33,28 @@ pub struct SessionSummary {
 }
 
 impl ChatMessage {
-    /// 把内部 `Message` 转换为面向前端的 `ChatMessage`。
-    /// 只处理 `Content::Text`；其他 content 类型返回空字符串。
-    pub fn from_message(msg: &Message) -> Self {
-        let content = match &msg.naive_message.content {
+    /// 从 `ChatCompletionMessage` 转换为应用层 `ChatMessage`。
+    /// 调用方需要提供业务属性 `id` 和 `timestamp`。
+    pub fn from_chat_completion_message(
+        msg: &ChatCompletionMessage,
+        id: String,
+        timestamp: i64,
+    ) -> Self {
+        let content = match &msg.content {
             Content::Text(text) => text.clone(),
             _ => String::new(),
         };
 
-        let role = match msg.naive_message.role {
-            openai_api_rs::v1::chat_completion::MessageRole::user => "user",
-            openai_api_rs::v1::chat_completion::MessageRole::assistant => "assistant",
-            openai_api_rs::v1::chat_completion::MessageRole::tool => "tool",
-            openai_api_rs::v1::chat_completion::MessageRole::system => "system",
-            openai_api_rs::v1::chat_completion::MessageRole::function => "tool",
+        let role = match msg.role {
+            MessageRole::user => "user",
+            MessageRole::assistant => "assistant",
+            MessageRole::tool => "tool",
+            MessageRole::system => "system",
+            MessageRole::function => "tool",
         }
         .to_string();
 
-        let tool_calls = msg.naive_message.tool_calls.as_ref().map(|calls| {
+        let tool_calls = msg.tool_calls.as_ref().map(|calls| {
             calls
                 .iter()
                 .map(|tc| ToolCallInfo {
@@ -61,13 +66,67 @@ impl ChatMessage {
         });
 
         Self {
-            id: msg.id.clone(),
+            id,
             role,
             content,
-            timestamp: msg.timestamp.timestamp(),
-            tool_call_id: msg.naive_message.tool_call_id.clone(),
+            timestamp,
+            tool_call_id: msg.tool_call_id.clone(),
             tool_calls,
-            metadata: msg.metadata.clone(),
+            metadata: None,
+        }
+    }
+
+    /// 从应用层 `ChatMessage` 转换为 `ChatCompletionMessage`，用于调 LLM。
+    pub fn to_chat_completion_message(&self) -> ChatCompletionMessage {
+        let role = match self.role.as_str() {
+            "user" => MessageRole::user,
+            "assistant" => MessageRole::assistant,
+            "tool" => MessageRole::tool,
+            "system" => MessageRole::system,
+            _ => MessageRole::user,
+        };
+
+        let tool_calls = self.tool_calls.as_ref().map(|calls| {
+            calls
+                .iter()
+                .map(|tc| ToolCall {
+                    id: tc.id.clone(),
+                    r#type: "function".to_string(),
+                    function: ToolCallFunction {
+                        name: Some(tc.name.clone()),
+                        arguments: Some(tc.arguments.clone()),
+                    },
+                })
+                .collect()
+        });
+
+        ChatCompletionMessage {
+            role,
+            content: Content::Text(self.content.clone()),
+            name: None,
+            tool_calls,
+            tool_call_id: self.tool_call_id.clone(),
+        }
+    }
+
+    /// 便捷方法：从 `ChatCompletionMessage` 转换，并使用当前时间戳。
+    pub fn from_chat_completion_message_now(
+        msg: &ChatCompletionMessage,
+        id: String,
+    ) -> Self {
+        Self::from_chat_completion_message(msg, id, Local::now().timestamp())
+    }
+
+    /// 便捷方法：生成一条新的 user `ChatMessage`。
+    pub fn new_user(id: String, content: String) -> Self {
+        Self {
+            id,
+            role: "user".to_string(),
+            content,
+            timestamp: Local::now().timestamp(),
+            tool_call_id: None,
+            tool_calls: None,
+            metadata: None,
         }
     }
 }

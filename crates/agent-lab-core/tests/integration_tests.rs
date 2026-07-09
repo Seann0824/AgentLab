@@ -1,3 +1,7 @@
+mod storage {
+    mod chat_store_test;
+}
+
 mod tools {
     mod memory {
         mod episodic_memory_test;

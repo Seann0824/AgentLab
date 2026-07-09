@@ -56,3 +56,33 @@ CREATE INDEX IF NOT EXISTS idx_rag_chunks_source
 CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding
     ON rag_chunks
     USING hnsw (embedding vector_cosine_ops);
+
+-- 会话表
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'default_user',
+    title TEXT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    metadata JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_updated
+    ON chat_sessions(user_id, updated_at DESC);
+
+-- 消息表
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    timestamp BIGINT NOT NULL,
+    tool_call_id TEXT,
+    tool_calls JSONB,
+    metadata JSONB,
+    seq INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session_seq
+    ON chat_messages(session_id, seq);

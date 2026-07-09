@@ -2,138 +2,99 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Local;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
-use crate::agent::simple_agent::AgentBuilder;
-use crate::agent::Agent;
+use crate::agent::simple_agent::{AgentBuilder, SimpleAgent};
 use crate::base::agent::{Agent as AgentTrait, AgentStreamEvent};
+use openai_api_rs::v1::chat_completion::ChatCompletionMessage;
 use crate::base::config::Config;
 use crate::base::llm::AgentsLLM;
 use crate::error::AgentLabError;
 use crate::services::chat_dto::{ChatMessage, SessionSummary};
+use crate::services::{MessageService, SessionService};
 
 pub type SessionId = String;
 
-/// 会话元数据。
-#[derive(Clone)]
-struct SessionMeta {
-    created_at: i64,
-    title: Option<String>,
-}
-
-/// 会话存储：session_id -> (Agent 实例, 元数据)。
-pub(crate) type Sessions = Arc<RwLock<HashMap<SessionId, (Arc<Mutex<Agent>>, SessionMeta)>>>;
-
 /// 聊天业务服务：管理会话生命周期与 Agent 运行。
+///
+/// 所有会话与消息状态均持久化到 PostgreSQL；本服务本身不持有内存历史，
+/// 每次发送消息时从 DB 加载历史、新建 Agent、运行、并通过事件回写新消息。
 pub struct ChatService {
-    sessions: Sessions,
+    sessions: SessionService,
+    messages: MessageService,
     llm: AgentsLLM,
+    user_id: String,
+    /// 按 session 串行化发送，防止同一会话并发产生交错消息。
+    send_locks: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
 }
 
 impl ChatService {
-    pub fn new(llm: AgentsLLM) -> Self {
+    pub fn new(
+        llm: AgentsLLM,
+        sessions: SessionService,
+        messages: MessageService,
+        user_id: impl Into<String>,
+    ) -> Self {
         Self {
-            sessions: Arc::new(RwLock::new(HashMap::new())),
+            sessions,
+            messages,
             llm,
+            user_id: user_id.into(),
+            send_locks: Mutex::new(HashMap::new()),
         }
     }
 
-    pub(crate) fn with_sessions(sessions: Sessions, llm: AgentsLLM) -> Self {
-        Self { sessions, llm }
-    }
-
-    fn build_agent(&self) -> Agent {
+    fn build_agent(llm: AgentsLLM) -> SimpleAgent {
         AgentBuilder::new()
             .name("chat agent")
-            .llm(self.llm.clone())
+            .llm(llm)
             .config(Config::default())
             .build()
     }
 
     /// 创建新会话并返回 session_id。
-    pub async fn create_session(&self) -> String {
+    pub async fn create_session(&self) -> Result<String, AgentLabError> {
         let session_id = Uuid::new_v4().to_string();
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(
-            session_id.clone(),
-            (
-                Arc::new(Mutex::new(self.build_agent())),
-                SessionMeta {
-                    created_at: Local::now().timestamp(),
-                    title: None,
-                },
-            ),
-        );
-        session_id
+        self.sessions.create(&self.user_id, &session_id).await?;
+        Ok(session_id)
     }
 
-    /// 获取已有会话，或在 session_id 为空时创建新会话。
-    pub async fn get_or_create_session(
+    /// 获取已有会话，或在 session_id 为空/不存在时创建新会话。
+    async fn get_or_create_session(
         &self,
         session_id: Option<String>,
-    ) -> Result<(String, Arc<Mutex<Agent>>), AgentLabError> {
-        let session_id = session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
-
-        let mut sessions = self.sessions.write().await;
-        let (agent, _meta) = sessions
-            .entry(session_id.clone())
-            .or_insert_with(|| {
-                (
-                    Arc::new(Mutex::new(self.build_agent())),
-                    SessionMeta {
-                        created_at: Local::now().timestamp(),
-                        title: None,
-                    },
-                )
-            })
-            .clone();
-
-        Ok((session_id, agent))
+    ) -> Result<String, AgentLabError> {
+        if let Some(id) = session_id {
+            if self.sessions.get(&id).await?.is_some() {
+                return Ok(id);
+            }
+        }
+        self.create_session().await
     }
 
     /// 列出所有会话摘要。
-    pub async fn list_sessions(&self) -> Vec<SessionSummary> {
-        let sessions = self.sessions.read().await;
-        let mut summaries = Vec::with_capacity(sessions.len());
+    pub async fn list_sessions(&self) -> Result<Vec<SessionSummary>, AgentLabError> {
+        let mut summaries = self.sessions.list(&self.user_id).await?;
 
-        for (id, (agent, meta)) in sessions.iter() {
-            let history = agent.lock().await.base().get_history();
-            let title = meta.title.clone().unwrap_or_else(|| {
-                history
-                    .iter()
-                    .find(|m| {
-                        matches!(
-                            m.naive_message.role,
-                            openai_api_rs::v1::chat_completion::MessageRole::user
-                        )
-                    })
-                    .map(|m| {
-                        let content = match &m.naive_message.content {
-                            openai_api_rs::v1::chat_completion::Content::Text(t) => t.clone(),
-                            _ => String::new(),
-                        };
-                        if content.chars().count() > 20 {
+        // 对没有标题的会话，用第一条用户消息作为标题。
+        for summary in &mut summaries {
+            if summary.title == "新会话" {
+                if let Ok(messages) = self.messages.history(&summary.id).await {
+                    if let Some(first_user) = messages.iter().find(|m| m.role == "user") {
+                        let content = &first_user.content;
+                        summary.title = if content.chars().count() > 20 {
                             format!("{}...", content.chars().take(20).collect::<String>())
                         } else {
-                            content
-                        }
-                    })
-                    .unwrap_or_else(|| "新会话".to_string())
-            });
-            let updated_at = history
-                .last()
-                .map(|m| m.timestamp.timestamp())
-                .unwrap_or(meta.created_at);
-            summaries.push(SessionSummary {
-                id: id.clone(),
-                title,
-                updated_at,
-            });
+                            content.clone()
+                        };
+                    }
+                }
+            }
         }
 
         summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        summaries
+        Ok(summaries)
     }
 
     /// 获取指定会话的历史消息。
@@ -141,23 +102,12 @@ impl ChatService {
         &self,
         session_id: &str,
     ) -> Result<Vec<ChatMessage>, AgentLabError> {
-        let sessions = self.sessions.read().await;
-        let (agent, _meta) = sessions
-            .get(session_id)
-            .ok_or_else(|| AgentLabError::InvalidArgument(format!("会话 {} 不存在", session_id)))?;
-        let history = agent.lock().await.base().get_history();
-        let messages: Vec<ChatMessage> = history
-            .iter()
-            .filter(|m| !matches!(m.naive_message.role, openai_api_rs::v1::chat_completion::MessageRole::system))
-            .map(ChatMessage::from_message)
-            .collect();
-        Ok(messages)
+        Ok(self.messages.history(session_id).await?)
     }
 
     /// 删除会话。
     pub async fn delete_session(&self, session_id: &str) -> Result<bool, AgentLabError> {
-        let mut sessions = self.sessions.write().await;
-        Ok(sessions.remove(session_id).is_some())
+        Ok(self.sessions.delete(session_id).await?)
     }
 
     /// 重命名会话。
@@ -166,38 +116,107 @@ impl ChatService {
         session_id: &str,
         title: &str,
     ) -> Result<bool, AgentLabError> {
-        let mut sessions = self.sessions.write().await;
-        let Some((_, meta)) = sessions.get_mut(session_id) else {
-            return Ok(false);
-        };
-        meta.title = Some(title.to_string());
-        Ok(true)
+        Ok(self.sessions.rename(session_id, title).await?)
     }
 
     /// 在指定会话中运行 Agent，并将流式事件桥接到内部 channel。
+    ///
+    /// 流程：
+    /// 1. 从 DB 加载历史；
+    /// 2. 新建 Agent 并注入历史；
+    /// 3. Agent 运行期间产生的事件会同时转发给调用方并持久化到 DB。
     pub async fn send_message(
         &self,
         session_id: Option<String>,
         message: String,
         channel: mpsc::Sender<AgentStreamEvent>,
     ) -> Result<String, AgentLabError> {
-        let (session_id, agent) = self.get_or_create_session(session_id).await?;
+        let session_id = self.get_or_create_session(session_id).await?;
+        let history = self.messages.history(&session_id).await?;
 
-        // 桥接：内部 tokio channel -> 调用方 channel
-        let (tx, mut rx) = mpsc::channel::<AgentStreamEvent>(64);
+        // 获取该 session 的串行化锁。
+        let lock = {
+            let mut locks = self.send_locks.lock().await;
+            locks
+                .entry(session_id.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+
+        let sessions = self.sessions.clone();
+        let messages = self.messages.clone();
+        let llm = self.llm.clone();
+        let session_id_for_task = session_id.clone();
+
         tokio::spawn(async move {
+            // 锁在发送/事件处理期间一直持有，任务结束自动释放。
+            let _guard = lock.lock().await;
+
+            // 1. 新建 Agent 并还原历史。
+            let mut agent = Self::build_agent(llm);
+            let history_cc: Vec<ChatCompletionMessage> = history
+                .iter()
+                .map(ChatMessage::to_chat_completion_message)
+                .collect();
+            agent.base_mut().set_history(history_cc);
+            agent.base_mut().ensure_system_prompt();
+
+            // 2. 建立内部事件 channel。
+            let (tx, mut rx) = mpsc::channel::<AgentStreamEvent>(64);
+            agent.base_mut().set_event_sender(Some(tx));
+
+            // 3. 运行 Agent。
+            tokio::spawn(async move {
+                let _ = agent.run(&message).await;
+            });
+
+            // 4. 监听事件：转发 + 持久化。
+            let mut pending_reason: Option<String> = None;
             while let Some(event) = rx.recv().await {
+                let event_for_persist = event.clone();
+
+                // 转发给调用方。
                 if channel.send(event).await.is_err() {
                     break;
                 }
-            }
-        });
 
-        // 运行 Agent
-        tokio::spawn(async move {
-            let mut guard = agent.lock().await;
-            guard.base_mut().set_event_sender(Some(tx));
-            let _ = guard.run(&message).await;
+                // 持久化新消息。
+                match event_for_persist {
+                    AgentStreamEvent::UserMessage { message: msg } => {
+                        let _ = messages.add(&session_id_for_task, &msg).await;
+                        let _ = sessions.touch(&session_id_for_task).await;
+                    }
+                    AgentStreamEvent::AssistantDone { message: mut msg } => {
+                        if let Some(reason) = pending_reason.take() {
+                            msg.metadata = Some(serde_json::json!({ "reason": reason }));
+                        }
+                        let _ = messages.add(&session_id_for_task, &msg).await;
+                        let _ = sessions.touch(&session_id_for_task).await;
+                    }
+                    AgentStreamEvent::ToolCallEnd {
+                        tool_call_id,
+                        result,
+                        is_error,
+                        ..
+                    } => {
+                        let tool_msg = ChatMessage {
+                            id: Uuid::new_v4().to_string(),
+                            role: "tool".to_string(),
+                            content: result,
+                            timestamp: Local::now().timestamp(),
+                            tool_call_id: Some(tool_call_id),
+                            tool_calls: None,
+                            metadata: Some(serde_json::json!({ "is_error": is_error })),
+                        };
+                        let _ = messages.add(&session_id_for_task, &tool_msg).await;
+                        let _ = sessions.touch(&session_id_for_task).await;
+                    }
+                    AgentStreamEvent::ReasonDone { reason } => {
+                        pending_reason = Some(reason);
+                    }
+                    _ => {}
+                }
+            }
         });
 
         Ok(session_id)
