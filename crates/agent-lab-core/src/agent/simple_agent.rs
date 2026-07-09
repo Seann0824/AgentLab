@@ -178,18 +178,15 @@ impl Agent for SimpleAgent {
                 )
                 .await;
             let (mut reason_delta, mut content_delta) = (vec![], vec![]);
-            let mut current_assistant_message_id: Option<String> = None;
+            let current_assistant_message_id = uuid::Uuid::new_v4().to_string();
             let mut tools_call = None;
 
             while let Some(chunck) = agent_stream.next().await {
                 match chunck {
                     ChatCompletionStreamResponse::Content(delta) => {
-                        if current_assistant_message_id.is_none() {
-                            current_assistant_message_id = Some(uuid::Uuid::new_v4().to_string());
-                        }
                         self.base
                             .emit(AgentStreamEvent::AssistantDelta {
-                                message_id: current_assistant_message_id.clone().unwrap(),
+                                message_id: current_assistant_message_id.clone(),
                                 delta: delta.clone(),
                             })
                             .await;
@@ -198,6 +195,7 @@ impl Agent for SimpleAgent {
                     ChatCompletionStreamResponse::Reasoning(delta) => {
                         self.base
                             .emit(AgentStreamEvent::ReasonDelta {
+                                message_id: current_assistant_message_id.clone(),
                                 delta: delta.clone(),
                             })
                             .await;
@@ -211,9 +209,7 @@ impl Agent for SimpleAgent {
                             panic!("end failed");
                         };
 
-                        let assistant_id = current_assistant_message_id
-                            .clone()
-                            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                        let assistant_id = current_assistant_message_id.clone();
 
                         match finish_reason {
                             FinishReason::tool_calls | FinishReason::function_call => {
@@ -239,19 +235,12 @@ impl Agent for SimpleAgent {
                                 }
 
                                 // 部分模型/提供商不接受 content 和 tool_calls 同时为空的 assistant 消息。
-                                // 如果 reasoning 内容为空，则不加入历史，避免后续请求被 API 拒绝。
+                                // 如果 reasoning 内容不为空，加入内部历史（不单独 emit AssistantDone），
+                                // 而是作为 metadata 附加到本次 tool_calls 的 assistant 消息上。
                                 let reasoning = reason_delta.join("");
                                 if !reasoning.is_empty() {
                                     let reasoning_msg = assistant_message(reasoning.clone());
                                     self.add_message(reasoning_msg);
-                                    self.base
-                                        .emit(AgentStreamEvent::AssistantDone {
-                                            message: ChatMessage::from_chat_completion_message_now(
-                                                &assistant_message(reasoning),
-                                                assistant_id.clone(),
-                                            ),
-                                        })
-                                        .await;
                                 }
 
                                 let assistant_tool_msg = assistant_message_with_tools(
@@ -259,12 +248,18 @@ impl Agent for SimpleAgent {
                                     tools_call.clone(),
                                 );
                                 self.add_message(assistant_tool_msg.clone());
+                                let mut assistant_chat_message =
+                                    ChatMessage::from_chat_completion_message_now(
+                                        &assistant_tool_msg,
+                                        assistant_id,
+                                    );
+                                if !reasoning.is_empty() {
+                                    assistant_chat_message.metadata =
+                                        Some(serde_json::json!({ "reason": reasoning }));
+                                }
                                 self.base
                                     .emit(AgentStreamEvent::AssistantDone {
-                                        message: ChatMessage::from_chat_completion_message_now(
-                                            &assistant_tool_msg,
-                                            assistant_id,
-                                        ),
+                                        message: assistant_chat_message,
                                     })
                                     .await;
 
@@ -325,29 +320,26 @@ impl Agent for SimpleAgent {
                                             reason: reasoning.clone(),
                                         })
                                         .await;
-                                }
-
-                                if !reasoning.is_empty() {
+                                    // reasoning 加入内部历史，但不单独 emit AssistantDone，
+                                    // 而是作为 metadata 附加到最终 assistant 消息上。
                                     let reasoning_msg = assistant_message(reasoning.clone());
                                     self.add_message(reasoning_msg);
-                                    self.base
-                                        .emit(AgentStreamEvent::AssistantDone {
-                                            message: ChatMessage::from_chat_completion_message_now(
-                                                &assistant_message(reasoning),
-                                                assistant_id.clone(),
-                                            ),
-                                        })
-                                        .await;
                                 }
 
                                 let final_msg = assistant_message(content.clone());
                                 self.add_message(final_msg);
+                                let mut final_chat_message =
+                                    ChatMessage::from_chat_completion_message_now(
+                                        &assistant_message(content.clone()),
+                                        assistant_id,
+                                    );
+                                if !reasoning.is_empty() {
+                                    final_chat_message.metadata =
+                                        Some(serde_json::json!({ "reason": reasoning }));
+                                }
                                 self.base
                                     .emit(AgentStreamEvent::AssistantDone {
-                                        message: ChatMessage::from_chat_completion_message_now(
-                                            &assistant_message(content.clone()),
-                                            assistant_id,
-                                        ),
+                                        message: final_chat_message,
                                     })
                                     .await;
 

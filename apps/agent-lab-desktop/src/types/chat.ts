@@ -38,5 +38,5 @@ export type AgentStreamEvent =
       is_error: boolean;
     }
   | { type: "tool_call_delta"; tool_call_id: string; delta: string }
-  | { type: "reason_delta"; delta: string }
+  | { type: "reason_delta"; message_id: string; delta: string }
   | { type: "reason_done"; reason: string };

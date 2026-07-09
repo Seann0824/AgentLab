@@ -166,9 +166,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break;
       }
 
-      case "assistant_delta": {
+      case "reason_delta": {
         set((state) => {
-          const targetId = state.streamingMessageId ?? event.message_id;
+          const targetId = event.message_id;
           const exists = state.messages.some((m) => m.id === targetId);
 
           if (!exists) {
@@ -177,9 +177,60 @@ export const useChatStore = create<ChatState>((set, get) => ({
               role: "assistant",
               content: event.delta,
               timestamp: Math.floor(Date.now() / 1000),
+              metadata: { isReasoning: true },
             };
             return {
               messages: [...state.messages, newMessage],
+              streamingMessageId: targetId,
+            };
+          }
+
+          return {
+            messages: state.messages.map((m) =>
+              m.id === targetId ? { ...m, content: m.content + event.delta } : m,
+            ),
+            streamingMessageId: targetId,
+          };
+        });
+        break;
+      }
+
+      case "assistant_delta": {
+        set((state) => {
+          const targetId = event.message_id;
+          const existing = state.messages.find((m) => m.id === targetId);
+
+          if (!existing) {
+            const newMessage: ChatMessage = {
+              id: targetId,
+              role: "assistant",
+              content: event.delta,
+              timestamp: Math.floor(Date.now() / 1000),
+            };
+            return {
+              messages: [...state.messages, newMessage],
+              streamingMessageId: targetId,
+            };
+          }
+
+          // 如果前一段是 reasoning，把 reasoning 内容移到 metadata.reason，
+          // 然后开始写入正式回答内容。
+          if (existing.metadata?.isReasoning) {
+            const reasoningContent = existing.content;
+            return {
+              messages: state.messages.map((m) =>
+                m.id === targetId
+                  ? {
+                      ...m,
+                      content: event.delta,
+                      metadata: {
+                        ...m.metadata,
+                        reason: reasoningContent,
+                        isReasoning: false,
+                      },
+                    }
+                  : m,
+              ),
               streamingMessageId: targetId,
             };
           }
@@ -199,9 +250,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const idx = state.messages.findIndex((m) => m.id === event.message.id);
           if (idx >= 0) {
             const next = [...state.messages];
-            next[idx] = event.message;
+            const existing = next[idx];
+            // 合并后端 metadata 与前端流式过程中积累的 metadata（主要是 reason）。
+            next[idx] = {
+              ...event.message,
+              metadata: {
+                ...(existing.metadata ?? {}),
+                ...(event.message.metadata ?? {}),
+                isReasoning: false,
+              },
+            };
             return { messages: next, streamingMessageId: null };
           }
+
+          // 兜底：id 不匹配时直接追加（正常不应发生）。
           return {
             messages: [...state.messages, event.message],
             streamingMessageId: null,
@@ -264,9 +326,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break;
       }
 
-      case "reason_delta":
       case "reason_done": {
-        // reasoning 内容暂不存入 messages，未来可扩展
+        // reasoning 内容已通过 reason_delta 流式累积到消息 content 中，
+        // 这里不需要额外更新；metadata.reason 会在 assistant_delta 切换时写入。
         break;
       }
     }

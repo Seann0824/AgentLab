@@ -38,7 +38,7 @@ export function ChatInput() {
           disabled={isStreaming || !content.trim()}
           className="btn-moss px-6 py-3 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {isStreaming ? "生成中" : "发送"}
+          {isStreaming ? "思考中" : "发送"}
         </button>
       </div>
     </div>

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ChatMessage } from "../types/chat";
 
 interface MessageItemProps {
@@ -15,10 +16,39 @@ function UserMessage({ content }: { content: string }) {
 }
 
 function AssistantMessage({ message }: { message: ChatMessage }) {
+  const [isReasonExpanded, setIsReasonExpanded] = useState(false);
+  const reason = message.metadata?.reason as string | undefined;
+  const isReasoning = message.metadata?.isReasoning as boolean | undefined;
+
   return (
     <div className="flex justify-start mb-6">
       <div className="max-w-[90%] px-5 py-3 bg-paper-dark rounded-2xl rounded-tl-sm text-ink-light text-sm leading-relaxed shadow-sm">
-        {message.content ? (
+        {(reason || isReasoning) && (
+          <div className="mb-3 pb-3 border-b border-mist">
+            <button
+              onClick={() => setIsReasonExpanded((v) => !v)}
+              className="flex items-center gap-1 text-xs text-stone hover:text-ink-light transition-colors"
+            >
+              <span
+                className={`transform transition-transform ${
+                  isReasonExpanded ? "rotate-90" : ""
+                }`}
+              >
+                {isReasonExpanded || isReasoning ? "▼" : "▶"}
+              </span>
+              思考过程
+              {isReasoning && (
+                <span className="ml-1 w-1 h-1 bg-stone rounded-full animate-pulse" />
+              )}
+            </button>
+            {(isReasonExpanded || isReasoning) && (
+              <div className="mt-2 text-stone text-xs leading-relaxed whitespace-pre-wrap">
+                {isReasoning ? message.content : reason}
+              </div>
+            )}
+          </div>
+        )}
+        {isReasoning ? null : message.content ? (
           <div className="whitespace-pre-wrap">{message.content}</div>
         ) : message.tool_calls && message.tool_calls.length > 0 ? (
           <div className="text-stone italic">正在决定下一步…</div>

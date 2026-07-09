@@ -171,7 +171,6 @@ impl ChatService {
             });
 
             // 4. 监听事件：转发 + 持久化。
-            let mut pending_reason: Option<String> = None;
             while let Some(event) = rx.recv().await {
                 let event_for_persist = event.clone();
 
@@ -186,10 +185,7 @@ impl ChatService {
                         let _ = messages.add(&session_id_for_task, &msg).await;
                         let _ = sessions.touch(&session_id_for_task).await;
                     }
-                    AgentStreamEvent::AssistantDone { message: mut msg } => {
-                        if let Some(reason) = pending_reason.take() {
-                            msg.metadata = Some(serde_json::json!({ "reason": reason }));
-                        }
+                    AgentStreamEvent::AssistantDone { message: msg } => {
                         let _ = messages.add(&session_id_for_task, &msg).await;
                         let _ = sessions.touch(&session_id_for_task).await;
                     }
@@ -210,9 +206,6 @@ impl ChatService {
                         };
                         let _ = messages.add(&session_id_for_task, &tool_msg).await;
                         let _ = sessions.touch(&session_id_for_task).await;
-                    }
-                    AgentStreamEvent::ReasonDone { reason } => {
-                        pending_reason = Some(reason);
                     }
                     _ => {}
                 }

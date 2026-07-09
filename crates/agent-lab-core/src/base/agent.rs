@@ -178,7 +178,7 @@ pub enum AgentStreamEvent {
     },
 
     /// reasoning 增量。
-    ReasonDelta { delta: String },
+    ReasonDelta { message_id: String, delta: String },
 
     /// reasoning 完成。
     ReasonDone { reason: String },
