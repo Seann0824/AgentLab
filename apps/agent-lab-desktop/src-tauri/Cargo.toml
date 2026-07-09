@@ -29,6 +29,7 @@ agent-lab-core = { path = "../../../crates/agent-lab-core" }
 specta = "2.0.0-rc.25"
 specta-typescript = "0.0.12"
 uuid = { version = "1.23.4", features = ["v4", "serde"] }
+dotenvy = "0.15"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

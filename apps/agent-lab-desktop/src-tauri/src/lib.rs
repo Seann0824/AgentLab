@@ -10,6 +10,9 @@ use crate::state::Sessions;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 从当前目录向上查找并加载 .env
+    dotenvy::dotenv().ok();
+
     // tauri-specta：编译时生成 TypeScript bindings
     let specta_builder = tauri_specta::Builder::<tauri::Wry>::new()
         .commands(tauri_specta::collect_commands![

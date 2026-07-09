@@ -20,10 +20,11 @@ impl AgentBase {
         system_prompt: Option<String>,
         config: Option<Config>,
     ) -> Self {
-        let history = vec![Message::system(
-            system_prompt.clone().unwrap_or("".into()),
-            None,
-        )];
+        let history = if system_prompt.as_ref().map(|s| !s.is_empty()).unwrap_or(false) {
+            vec![Message::system(system_prompt.clone().unwrap(), None)]
+        } else {
+            vec![]
+        };
         Self {
             name: name.into(),
             llm,
@@ -58,6 +59,7 @@ impl AgentBase {
 }
 
 #[derive(Clone, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentStreamEvent {
     Content {
         delta: String,

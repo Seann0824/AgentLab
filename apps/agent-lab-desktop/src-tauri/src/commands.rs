@@ -34,7 +34,11 @@ use std::sync::Arc;
 
 use agent_lab_core::{
     agent::simple_agent::AgentBuilder,
-    base::{agent::Agent, agent::AgentStreamEvent, llm::AgentsLLM},
+    base::{
+        agent::{Agent, AgentStreamEvent},
+        config::Config,
+        llm::AgentsLLM,
+    },
 };
 use tauri::{ipc::Channel, State};
 use tokio::sync::Mutex;
@@ -121,7 +125,11 @@ pub async fn chat_completion_stream(
                     .model(std::env::var("MODEL").unwrap())
                     .provider(std::env::var("PROVIDER").unwrap_or_else(|_| "Custom".into()))
                     .build();
-                let agent = AgentBuilder::new().name("test agent").llm(llm).build();
+                let agent = AgentBuilder::new()
+                    .name("test agent")
+                    .llm(llm)
+                    .config(Config::default())
+                    .build();
 
                 Arc::new(Mutex::new(agent))
             })
