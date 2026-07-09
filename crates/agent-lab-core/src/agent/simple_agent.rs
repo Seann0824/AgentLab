@@ -5,6 +5,7 @@ use crate::{
         llm::AgentsLLM,
         message::Message,
     },
+    services::chat_dto::ChatMessage,
     tools::{ToolManager, types::Tool},
 };
 use futures_util::stream::StreamExt;
@@ -146,7 +147,13 @@ impl Agent for SimpleAgent {
 
     async fn run(&mut self, input_text: &str) -> String {
         let user_message = Message::user(input_text, None);
-        self.add_message(user_message);
+        self.add_message(user_message.clone());
+        self.base
+            .emit(AgentStreamEvent::UserMessage {
+                message: ChatMessage::from_message(&user_message),
+            })
+            .await;
+
         let mut is_continue = true;
         let mut final_response = String::new();
 
@@ -171,13 +178,18 @@ impl Agent for SimpleAgent {
                 )
                 .await;
             let (mut reason_delta, mut content_delta) = (vec![], vec![]);
+            let mut current_assistant_message_id: Option<String> = None;
             let mut tools_call = None;
 
             while let Some(chunck) = agent_stream.next().await {
                 match chunck {
                     ChatCompletionStreamResponse::Content(delta) => {
+                        if current_assistant_message_id.is_none() {
+                            current_assistant_message_id = Some(uuid::Uuid::new_v4().to_string());
+                        }
                         self.base
-                            .emit(AgentStreamEvent::Content {
+                            .emit(AgentStreamEvent::AssistantDelta {
+                                message_id: current_assistant_message_id.clone().unwrap(),
                                 delta: delta.clone(),
                             })
                             .await;
@@ -185,26 +197,16 @@ impl Agent for SimpleAgent {
                     }
                     ChatCompletionStreamResponse::Reasoning(delta) => {
                         self.base
-                            .emit(AgentStreamEvent::Reason {
+                            .emit(AgentStreamEvent::ReasonDelta {
                                 delta: delta.clone(),
                             })
                             .await;
                         reason_delta.push(delta);
                     }
                     ChatCompletionStreamResponse::ToolCall(tc) => {
-                        for tc in tc.clone().into_iter() {
-                            self.base
-                                .emit(AgentStreamEvent::ToolCall {
-                                    tool_name: tc.function.name.unwrap_or("内部工具".to_string()),
-                                    tool_call_id: tc.id,
-                                })
-                                .await;
-                        }
                         tools_call = Some(tc);
                     }
                     ChatCompletionStreamResponse::Done(finish_reason) => {
-                        // 区分调用工具和没有调用工具的信息
-                        // 1. 判断当时是否是工具调用
                         let Some(finish_reason) = finish_reason else {
                             panic!("end failed");
                         };
@@ -216,24 +218,59 @@ impl Agent for SimpleAgent {
                                 if tools_call.is_empty() {
                                     let content = content_delta.join("");
                                     if !content.is_empty() {
-                                        self.add_message(Message::assistant(content.clone(), None));
+                                        let msg = Message::assistant(content.clone(), None);
+                                        self.add_message(msg.clone());
+                                        self.base
+                                            .emit(AgentStreamEvent::AssistantDone {
+                                                message: ChatMessage::from_message(&msg),
+                                            })
+                                            .await;
                                         final_response = content;
                                     }
                                     is_continue = false;
                                     break;
                                 }
+
                                 // 部分模型/提供商不接受 content 和 tool_calls 同时为空的 assistant 消息。
                                 // 如果 reasoning 内容为空，则不加入历史，避免后续请求被 API 拒绝。
                                 let reasoning = reason_delta.join("");
                                 if !reasoning.is_empty() {
-                                    self.add_message(Message::assistant(reasoning, None));
+                                    let reasoning_msg = Message::assistant(reasoning, None);
+                                    self.add_message(reasoning_msg.clone());
+                                    self.base
+                                        .emit(AgentStreamEvent::AssistantDone {
+                                            message: ChatMessage::from_message(&reasoning_msg),
+                                        })
+                                        .await;
                                 }
-                                self.add_message(Message::assistant_with_tools(
+
+                                let assistant_tool_msg = Message::assistant_with_tools(
                                     content_delta.join(""),
                                     tools_call.clone(),
                                     None,
-                                ));
-                                // 工具调用开始
+                                );
+                                self.add_message(assistant_tool_msg.clone());
+                                self.base
+                                    .emit(AgentStreamEvent::AssistantDone {
+                                        message: ChatMessage::from_message(&assistant_tool_msg),
+                                    })
+                                    .await;
+
+                                // 对每个 tool_call 发送开始事件，然后并发执行。
+                                for tc in &tools_call {
+                                    self.base
+                                        .emit(AgentStreamEvent::ToolCallStart {
+                                            tool_call_id: tc.id.clone(),
+                                            tool_name: tc
+                                                .function
+                                                .name
+                                                .clone()
+                                                .unwrap_or_else(|| "内部工具".to_string()),
+                                            arguments: tc.function.arguments.clone().unwrap_or_default(),
+                                        })
+                                        .await;
+                                }
+
                                 let tasks = tools_call
                                     .iter()
                                     .map(|tool_call| self.tool_manager.run(tool_call.clone()))
@@ -245,7 +282,7 @@ impl Agent for SimpleAgent {
                                     tools_call_result.into_iter()
                                 {
                                     let mut is_error = false;
-                                    let tool_call_result = match tool_call_result {
+                                    let tool_call_result_content = match tool_call_result {
                                         Ok(content) => content,
                                         Err(error_msg) => {
                                             is_error = true;
@@ -254,19 +291,20 @@ impl Agent for SimpleAgent {
                                     };
 
                                     self.base
-                                        .emit(AgentStreamEvent::ToolCallResult {
-                                            is_error,
-                                            tool_name: tool_name.clone(),
+                                        .emit(AgentStreamEvent::ToolCallEnd {
                                             tool_call_id: tool_call_id.clone(),
-                                            tool_call_result: tool_call_result.clone(),
+                                            tool_name: tool_name.clone(),
+                                            result: tool_call_result_content.clone(),
+                                            is_error,
                                         })
                                         .await;
 
-                                    self.add_message(Message::tool_response(
+                                    let tool_msg = Message::tool_response(
                                         tool_call_id,
-                                        tool_call_result,
+                                        tool_call_result_content,
                                         None,
-                                    ));
+                                    );
+                                    self.add_message(tool_msg);
                                 }
                             }
                             _ => {
@@ -280,18 +318,24 @@ impl Agent for SimpleAgent {
                                         .await;
                                 }
 
-                                if !content.is_empty() {
+                                if !reasoning.is_empty() {
+                                    let reasoning_msg = Message::assistant(reasoning, None);
+                                    self.add_message(reasoning_msg.clone());
                                     self.base
-                                        .emit(AgentStreamEvent::ContentDone {
-                                            content: content.clone(),
+                                        .emit(AgentStreamEvent::AssistantDone {
+                                            message: ChatMessage::from_message(&reasoning_msg),
                                         })
                                         .await;
                                 }
 
-                                if !reasoning.is_empty() {
-                                    self.add_message(Message::assistant(reasoning, None));
-                                }
-                                self.add_message(Message::assistant(content.clone(), None));
+                                let final_msg = Message::assistant(content.clone(), None);
+                                self.add_message(final_msg.clone());
+                                self.base
+                                    .emit(AgentStreamEvent::AssistantDone {
+                                        message: ChatMessage::from_message(&final_msg),
+                                    })
+                                    .await;
+
                                 final_response = content;
                                 is_continue = false;
                                 break;

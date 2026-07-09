@@ -8,6 +8,8 @@ use openai_api_rs::v1::chat_completion::chat_completion_stream::{
 };
 use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Tool, ToolChoiceType};
 
+use crate::error::AgentLabError;
+
 pub struct AgentsLLM {
     pub model: String,
     pub provider: String,
@@ -59,6 +61,30 @@ impl AgentsLLM {
 
     pub fn builder() -> AgentsLLMBuilder {
         AgentsLLMBuilder::new()
+    }
+
+    /// 从环境变量构造 LLM 客户端。
+    ///
+    /// 读取：
+    /// - `API_KEY`（必填）
+    /// - `BASE_URL`（必填）
+    /// - `MODEL`（必填）
+    /// - `PROVIDER`（可选，默认 `Custom`）
+    pub fn from_env() -> Result<Self, AgentLabError> {
+        let api_key = std::env::var("API_KEY")
+            .map_err(|_| AgentLabError::EnvVarMissing { name: "API_KEY" })?;
+        let base_url = std::env::var("BASE_URL")
+            .map_err(|_| AgentLabError::EnvVarMissing { name: "BASE_URL" })?;
+        let model = std::env::var("MODEL")
+            .map_err(|_| AgentLabError::EnvVarMissing { name: "MODEL" })?;
+        let provider = std::env::var("PROVIDER").unwrap_or_else(|_| "Custom".into());
+
+        Ok(Self::builder()
+            .api_key(api_key)
+            .base_url(base_url)
+            .model(model)
+            .provider(provider)
+            .build())
     }
 
     pub async fn invoke(

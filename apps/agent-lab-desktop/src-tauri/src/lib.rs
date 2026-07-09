@@ -7,21 +7,6 @@ use agent_lab_core::services::ChatService;
 use state::AppState;
 use tauri::Manager;
 
-fn build_llm_from_env() -> Result<AgentsLLM, String> {
-    let api_key = std::env::var("API_KEY").map_err(|_| "missing environment variable: API_KEY")?;
-    let base_url =
-        std::env::var("BASE_URL").map_err(|_| "missing environment variable: BASE_URL")?;
-    let model = std::env::var("MODEL").map_err(|_| "missing environment variable: MODEL")?;
-    let provider = std::env::var("PROVIDER").unwrap_or_else(|_| "Custom".into());
-
-    Ok(AgentsLLM::builder()
-        .api_key(api_key)
-        .base_url(base_url)
-        .model(model)
-        .provider(provider)
-        .build())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 从当前目录向上查找并加载 .env
@@ -33,8 +18,8 @@ pub fn run() {
     // 前端直接通过 invoke 调用本命令。
     #[cfg(debug_assertions)]
     {
-        let specta_builder = tauri_specta::Builder::<tauri::Wry>::new()
-            .events(tauri_specta::collect_events![]);
+        let specta_builder =
+            tauri_specta::Builder::<tauri::Wry>::new().events(tauri_specta::collect_events![]);
         specta_builder
             .export(
                 specta_typescript::Typescript::default(),
@@ -56,7 +41,7 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            let llm = build_llm_from_env().expect("LLM config missing");
+            let llm = AgentsLLM::from_env().expect("LLM config missing");
             app.manage(AppState {
                 chat_service: ChatService::new(llm),
             });
@@ -70,6 +55,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::chat::chat_completion_stream,
+            commands::chat::list_chat_sessions,
+            commands::chat::get_chat_history,
+            commands::chat::create_chat_session,
+            commands::chat::delete_chat_session,
+            commands::chat::rename_chat_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

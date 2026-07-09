@@ -4,6 +4,7 @@ use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Content, Message
 
 #[derive(Clone)]
 pub struct Message {
+    pub id: String,
     pub naive_message: ChatCompletionMessage,
     pub timestamp: DateTime<Local>,
     pub metadata: Option<Value>,
@@ -23,10 +24,15 @@ impl Message {
             .unwrap_or_else(Local::now)
     }
 
+    fn new_id() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+
     // 各个构造器：参数改为 impl Into<Option<Value>>
     pub fn user(content: impl Into<String>, kwargs: impl Into<Option<Value>>) -> Self {
         let kwargs = kwargs.into();
         Self {
+            id: Self::new_id(),
             naive_message: ChatCompletionMessage {
                 role: MessageRole::user,
                 content: Content::Text(content.into()),
@@ -42,6 +48,7 @@ impl Message {
     pub fn assistant(content: impl Into<String>, kwargs: impl Into<Option<Value>>) -> Self {
         let kwargs = kwargs.into();
         Self {
+            id: Self::new_id(),
             naive_message: ChatCompletionMessage {
                 role: MessageRole::assistant,
                 content: Content::Text(content.into()),
@@ -61,6 +68,7 @@ impl Message {
     ) -> Self {
         let kwargs = kwargs.into();
         Self {
+            id: Self::new_id(),
             naive_message: ChatCompletionMessage {
                 role: MessageRole::assistant,
                 content: Content::Text(content.into()),
@@ -80,6 +88,7 @@ impl Message {
     ) -> Self {
         let kwargs = kwargs.into();
         Self {
+            id: Self::new_id(),
             naive_message: ChatCompletionMessage {
                 role: MessageRole::tool,
                 content: Content::Text(content.into()),
@@ -95,6 +104,7 @@ impl Message {
     pub fn system(content: impl Into<String>, kwargs: impl Into<Option<Value>>) -> Self {
         let kwargs = kwargs.into();
         Self {
+            id: Self::new_id(),
             naive_message: ChatCompletionMessage {
                 role: MessageRole::system,
                 content: Content::Text(content.into()),

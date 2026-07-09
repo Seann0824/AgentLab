@@ -3,6 +3,7 @@ use tokio::sync::mpsc;
 use crate::base::config::Config;
 use crate::base::llm::AgentsLLM;
 use crate::base::message::Message;
+use crate::services::chat_dto::ChatMessage;
 
 pub struct AgentBase {
     pub name: String,
@@ -61,28 +62,41 @@ impl AgentBase {
 #[derive(Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentStreamEvent {
-    Content {
-        delta: String,
-    },
-    Reason {
-        delta: String,
-    },
-    ContentDone {
-        content: String,
-    },
-    ReasonDone {
-        reason: String,
-    },
-    ToolCall {
-        tool_name: String,
+    /// 用户消息已加入历史。
+    UserMessage { message: ChatMessage },
+
+    /// assistant 流式内容增量。
+    AssistantDelta { message_id: String, delta: String },
+
+    /// assistant 消息生成完毕（可能携带 tool_calls）。
+    AssistantDone { message: ChatMessage },
+
+    /// 某个工具调用开始执行。
+    ToolCallStart {
         tool_call_id: String,
+        tool_name: String,
+        arguments: String,
     },
-    ToolCallResult {
+
+    /// 某个工具调用执行结束并返回结果。
+    ToolCallEnd {
+        tool_call_id: String,
+        tool_name: String,
+        result: String,
         is_error: bool,
-        tool_name: String,
-        tool_call_id: String,
-        tool_call_result: String,
     },
+
+    /// 工具结果流式增量（预留）。
+    ToolCallDelta {
+        tool_call_id: String,
+        delta: String,
+    },
+
+    /// reasoning 增量。
+    ReasonDelta { delta: String },
+
+    /// reasoning 完成。
+    ReasonDone { reason: String },
 }
 
 #[async_trait::async_trait]

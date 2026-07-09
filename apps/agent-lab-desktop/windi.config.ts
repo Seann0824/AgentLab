@@ -10,6 +10,7 @@ export default defineConfig({
         paper: {
           DEFAULT: "#f7f5f0",
           deep: "#efece4",
+          dark: "#f0ede7",
         },
         // 墨黑 -> 主文字
         ink: {
@@ -56,6 +57,9 @@ export default defineConfig({
         md: "4px",
         lg: "6px",
       },
+      borderWidth: {
+        3: "3px",
+      },
       boxShadow: {
         soft: "0 1px 2px rgba(26, 26, 26, 0.04)",
         card: "0 2px 8px rgba(26, 26, 26, 0.05)",
@@ -76,7 +80,6 @@ export default defineConfig({
       "px-6 py-2 bg-moss text-paper rounded-sm transition-colors duration-200 hover:bg-moss-dark focus:outline-none focus:ring-2 focus:ring-moss/30",
     "input-minimal":
       "px-4 py-2 bg-paper border border-mist rounded-sm text-ink placeholder-stone-light focus:outline-none focus:border-stone transition-colors duration-200",
-    "card-paper":
-      "bg-paper-deep border border-mist rounded-sm shadow-soft",
+    "card-paper": "bg-paper-deep border border-mist rounded-sm shadow-soft",
   },
 });

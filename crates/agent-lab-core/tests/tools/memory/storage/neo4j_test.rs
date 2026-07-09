@@ -1,4 +1,4 @@
-use agent_lab_core::storage::{entity_id, Entity, Neo4jStore, Relation};
+use agent_lab_core::storage::{Entity, Neo4jStore, Relation, entity_id};
 
 /// 这个测试验证 Neo4j 在“只存引用、全文在 PG”模式下的基本可用性：
 ///

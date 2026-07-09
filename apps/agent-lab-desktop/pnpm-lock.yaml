@@ -20,6 +20,9 @@ importers:
       react-dom:
         specifier: ^19.1.0
         version: 19.2.7(react@19.2.7)
+      zustand:
+        specifier: ^5.0.14
+        version: 5.0.14(@types/react@19.2.17)(react@19.2.7)
     devDependencies:
       '@tauri-apps/cli':
         specifier: ^2
@@ -555,6 +558,24 @@ packages:
     engines: {node: '>= 12'}
     hasBin: true
 
+  zustand@5.0.14:
+    resolution: {integrity: sha512-/8tAspM5LMPr28b3fwLYrtdj77ECpfZviaP75CMTnwO8ISyaE4GDIG/9rDDYq/cH9D2Xw2A2RXglLInmVBQB/g==}
+    engines: {node: '>=12.20.0'}
+    peerDependencies:
+      '@types/react': '>=18.0.0'
+      immer: '>=9.0.6'
+      react: '>=18.0.0'
+      use-sync-external-store: '>=1.2.0'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      immer:
+        optional: true
+      react:
+        optional: true
+      use-sync-external-store:
+        optional: true
+
 snapshots:
 
   '@antfu/utils@0.7.10': {}
@@ -943,3 +964,8 @@ snapshots:
       jiti: 1.21.7
 
   windicss@3.5.6: {}
+
+  zustand@5.0.14(@types/react@19.2.17)(react@19.2.7):
+    optionalDependencies:
+      '@types/react': 19.2.17
+      react: 19.2.7
