@@ -12,6 +12,7 @@ use crate::base::llm::AgentsLLM;
 use crate::error::AgentLabError;
 use crate::services::chat_dto::{ChatMessage, SessionSummary};
 use crate::services::{MessageService, SessionService};
+use crate::tools::time_tool::TimeTool;
 use crate::tools::web_search::WebSearch;
 use openai_api_rs::v1::chat_completion::ChatCompletionMessage;
 
@@ -47,6 +48,7 @@ impl ChatService {
     }
 
     fn build_agent(llm: AgentsLLM) -> SimpleAgent {
+        let time_tool = Box::new(TimeTool::new());
         let search_tool = Box::new(WebSearch::serpapi(
             std::env::var("SERPAPI_API_KEY").expect("SERPAPI_API_KEY missing"),
         ));
@@ -54,6 +56,7 @@ impl ChatService {
             .name("chat agent")
             .llm(llm)
             .config(Config::default())
+            .tool(time_tool)
             .tool(search_tool)
             .enable_tool_calling(true)
             .build()
