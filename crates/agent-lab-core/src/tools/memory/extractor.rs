@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::agent::tool_agent::ToolAgent;
 use crate::base::llm::AgentsLLM;
 use crate::tools::ToolManager;
-use crate::tools::memory::storage::neo4j::{EntityInput, RelationInput};
+use crate::storage::neo4j::{EntityInput, RelationInput};
 use crate::tools::types::Tool;
 
 /// 内部子 agent：专门负责从记忆内容里抽取实体和关系。

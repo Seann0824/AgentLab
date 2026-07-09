@@ -1,27 +1,30 @@
+use chrono::Local;
 use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::base::llm::AgentsLLM;
 use crate::db::get_db_client;
+use crate::storage::{MemoryStore, Neo4jStore, OllamaEmbedder, PgStore};
 use crate::tools::memory::base::Memory as MemoryTrait;
 use crate::tools::memory::base::{MemoryConfig, MemoryItem, RetrieveRequest};
 use crate::tools::memory::episodic_memory::EpisodicMemory;
 use crate::tools::memory::extractor::EntityExtractorAgent;
 use crate::tools::memory::perceptual_memory::PerceptualMemory;
 use crate::tools::memory::semantic_memory::SemanticMemory;
-use crate::tools::memory::storage::{MemoryStore, Neo4jStore, OllamaEmbedder, PgStore};
 use crate::tools::memory::working_memory::WorkingMemory;
 
-pub struct MemoryManager {
+/// 记忆业务服务：面向应用层提供记忆 CRUD、搜索、统计、整合等能力。
+pub struct MemoryService {
     #[allow(dead_code)]
     config: MemoryConfig,
     user_id: String,
     store: MemoryStore,
     memory_types: HashMap<String, Box<dyn MemoryTrait>>,
     extractor: EntityExtractorAgent,
+    current_session_id: Option<String>,
 }
 
-impl MemoryManager {
+impl MemoryService {
     pub async fn new(
         config: Option<MemoryConfig>,
         user_id: Option<String>,
@@ -51,7 +54,7 @@ impl MemoryManager {
             neo4j_password.into(),
         )
         .await
-        .expect("[MemoryManager] neo4j connection failed");
+        .expect("[MemoryService] neo4j connection failed");
 
         let embedder = OllamaEmbedder::new(None, None);
         let store = MemoryStore::new(config.clone(), pg_store, neo4j_store, Arc::new(embedder));
@@ -95,17 +98,28 @@ impl MemoryManager {
             store,
             memory_types,
             extractor,
+            current_session_id: None,
         }
     }
 
+    /// 添加一条记忆。
+    /// 若未提供 session_id，会自动分配当前会话 id 并写入 metadata。
     pub async fn add_memory(
         &mut self,
         content: String,
         memory_type: String,
         importance: f32,
-        metadata: Value,
-        auto_classify: bool,
+        metadata: Option<Value>,
     ) -> Result<String, String> {
+        if self.current_session_id.is_none() {
+            self.current_session_id =
+                Some(format!("session_{}", Local::now().format("%Y%m%d_%H%M%S")));
+        }
+
+        let mut metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
+        metadata["session_id"] = Value::from(self.current_session_id.clone());
+        metadata["timestamp"] = Value::from(Local::now().to_string());
+
         let memory_item = MemoryItem::new(
             self.user_id.clone(),
             memory_type.clone(),
@@ -115,24 +129,17 @@ impl MemoryManager {
         );
         let memory_id = memory_item.id.clone();
 
-        let target_type = if auto_classify {
-            // 简单自动分类：后续可扩展为根据内容选择最合适的记忆类型
-            memory_type.clone()
-        } else {
-            memory_type.clone()
+        let Some(memory_store) = self.memory_types.get_mut(&memory_type) else {
+            return Err(format!("记忆类型 {} 不存在", memory_type));
         };
 
-        let Some(memory_store) = self.memory_types.get_mut(&target_type) else {
-            return Err(format!("记忆类型 {} 不存在", target_type));
-        };
-
-        if target_type == "semantic" {
+        if memory_type == "semantic" {
             // 语义记忆自己负责实体抽取、metadata 标记和 Neo4j 引用图写入。
             memory_store.add(memory_item).await;
             return Ok(memory_id);
         }
 
-        // 其他类型：由 MemoryManager 统一抽取实体/关系，抽成功且非空则写 Neo4j 引用图。
+        // 其他类型：统一抽取实体/关系，抽成功且非空则写 Neo4j 引用图。
         match self.extractor.extract(&content).await {
             Ok((entities, relations)) if !entities.is_empty() => {
                 self.store
@@ -144,7 +151,7 @@ impl MemoryManager {
             }
             Err(e) => {
                 tracing::warn!(
-                    "[MemoryManager] entity extraction failed: {}, fallback to pg only",
+                    "[MemoryService] entity extraction failed: {}, fallback to pg only",
                     e
                 );
                 self.store.add(memory_item).await?;
@@ -154,11 +161,11 @@ impl MemoryManager {
         Ok(memory_id)
     }
 
-    pub async fn retrieve_memories(
+    pub async fn search_memories(
         &mut self,
         query: &str,
         limit: usize,
-        memory_types: &Vec<String>,
+        memory_types: &[String],
         min_importance: f32,
     ) -> Result<Vec<MemoryItem>, String> {
         let query_owned = query.to_string();
@@ -167,7 +174,7 @@ impl MemoryManager {
         let types_to_search: Vec<String> = if memory_types.is_empty() {
             self.memory_types.keys().cloned().collect()
         } else {
-            memory_types.clone()
+            memory_types.to_vec()
         };
 
         for memory_type in &types_to_search {
@@ -211,8 +218,8 @@ impl MemoryManager {
 
     pub async fn consolidate_memories(
         &mut self,
-        _from_type: &String,
-        _to_type: &String,
+        _from_type: &str,
+        _to_type: &str,
         _importance_threshold: f32,
     ) -> Result<usize, String> {
         // TODO: 实现真正的记忆整合（如 working → episodic 的聚合/摘要）
@@ -226,7 +233,6 @@ impl MemoryManager {
         importance: Option<f32>,
         metadata: Option<Value>,
     ) -> Result<bool, String> {
-        // store.update 通过 memory_id 直接更新 PG 中的行，对全部记忆类型通用。
         self.store
             .update(
                 memory_id,
@@ -293,7 +299,7 @@ impl MemoryManager {
         });
 
         serde_json::to_string_pretty(&stats)
-            .map_err(|e| format!("[MemoryManager] serialize stats failed: {}", e))
+            .map_err(|e| format!("[MemoryService] serialize stats failed: {}", e))
     }
 
     pub async fn clear_all(&mut self, memory_type: Option<&str>) -> Result<u64, String> {

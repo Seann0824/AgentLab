@@ -4,15 +4,15 @@ use pgvector::Vector;
 use sqlx::{PgPool, Row};
 
 use crate::base::llm::AgentsLLM;
-use crate::tools::memory::storage::embedder::Embedder;
-use crate::tools::memory::storage::OllamaEmbedder;
-use crate::tools::rag::chunking::Paragraph;
+use crate::storage::embedder::Embedder;
+use crate::storage::OllamaEmbedder;
+use crate::tools::rag::chunking::{self, Paragraph};
 use crate::tools::rag::hyde::HydeAgent;
 use crate::tools::rag::markdown::preprocess_markdown_for_embedding;
 use crate::tools::rag::query_expansion::QueryExpansionAgent;
+use crate::tools::rag::retrieval;
 
 /// RAG 全局资料库中的一条 chunk 记录。
-/// 与 memory 的 `memories` 表解耦，字段更精简，面向文档检索场景。
 #[derive(Clone, serde::Serialize, Debug, PartialEq)]
 pub struct RagChunk {
     pub id: String,
@@ -27,20 +27,16 @@ pub struct RagChunk {
     pub metadata: serde_json::Value,
 }
 
-/// RAG 索引器：负责把分块后的文本生成 embedding 并写入独立的 `rag_chunks` 表。
-///
-/// 与 memory 体系解耦：`rag_chunks` 是全局资料库，字段精简，
-/// namespace 仅用于多资料库隔离，不对应具体用户。
-#[derive(Clone)]
-pub struct RagIndex {
-    pub(crate) db: PgPool,
-    pub(crate) embedder: Arc<dyn Embedder + Send + Sync>,
-    pub(crate) dimension: usize,
+/// RAG 业务服务：负责文档索引与语义检索。
+pub struct RagService {
+    db: PgPool,
+    embedder: Arc<dyn Embedder + Send + Sync>,
+    dimension: usize,
     pub(crate) query_expander: Option<Arc<tokio::sync::Mutex<QueryExpansionAgent>>>,
     pub(crate) hyde_generator: Option<Arc<tokio::sync::Mutex<HydeAgent>>>,
 }
 
-impl RagIndex {
+impl RagService {
     pub fn new(db: PgPool, embedder: Arc<dyn Embedder + Send + Sync>, dimension: usize) -> Self {
         Self {
             db,
@@ -51,9 +47,7 @@ impl RagIndex {
         }
     }
 
-    /// 使用默认的 Ollama embedder 创建索引器，并启用 MQE + HyDE。
-    /// 默认维度 768，与 `init_pg.sql` 中的 rag_chunks.embedding VECTOR(768) 对应。
-    /// `llm` 用于驱动查询扩展与 HyDE 子 agent。
+    /// 使用默认的 Ollama embedder 创建服务，并启用 MQE + HyDE。
     pub fn with_default_embedder(db: PgPool, llm: AgentsLLM) -> Self {
         let embedder = Arc::new(OllamaEmbedder::new(None, None));
         let query_expander = Some(Arc::new(tokio::sync::Mutex::new(
@@ -69,23 +63,41 @@ impl RagIndex {
         }
     }
 
-    /// 是否启用 MQE 查询扩展。
-    pub fn with_query_expansion(mut self, agent: QueryExpansionAgent) -> Self {
-        self.query_expander = Some(Arc::new(tokio::sync::Mutex::new(agent)));
-        self
+    /// 读取 Markdown 文件并索引到指定 namespace。
+    pub async fn index_document(
+        &self,
+        file_path: &str,
+        namespace: &str,
+        chunk_tokens: usize,
+        overlap_tokens: usize,
+    ) -> Result<usize, String> {
+        let text = std::fs::read_to_string(file_path)
+            .map_err(|e| format!("failed to read {}: {}", file_path, e))?;
+        if text.is_empty() {
+            return Err("file is empty or could not be read".to_string());
+        }
+
+        let paragraphs = chunking::split_paragraphs_with_headings(text);
+        let chunks = chunking::chunk_paragraphs(paragraphs, chunk_tokens, overlap_tokens);
+        let count = chunks.len();
+
+        self.clear_namespace(namespace).await?;
+        self.index_chunks(chunks, file_path, namespace, 8).await?;
+
+        Ok(count)
     }
 
-    /// 是否启用 HyDE 假设文档嵌入。
-    pub fn with_hyde(mut self, agent: HydeAgent) -> Self {
-        self.hyde_generator = Some(Arc::new(tokio::sync::Mutex::new(agent)));
-        self
+    /// 语义检索：支持 HyDE + MQE 增强。
+    pub async fn search(
+        &self,
+        query: &str,
+        namespace: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(f64, RagChunk)>, String> {
+        retrieval::search(self, query, namespace, limit).await
     }
 
     /// 将 RAG chunk 预处理后生成 embedding，批量写入 `rag_chunks`。
-    ///
-    /// - `source`: 来源文档标识（如文件路径）
-    /// - `namespace`: RAG 命名空间，用于多资料库隔离
-    /// - `batch_size`: 每批写入的 chunk 数量
     pub async fn index_chunks(
         &self,
         chunks: Vec<Paragraph>,
@@ -112,7 +124,7 @@ impl RagIndex {
                 .embedder
                 .encode(&text)
                 .await
-                .map_err(|e| format!("[RagIndex] embedding failed: {}", e))?;
+                .map_err(|e| format!("[RagService] embedding failed: {}", e))?;
             self.normalize_embedding(&mut embedding);
 
             batch.push(RagChunk {
@@ -143,6 +155,18 @@ impl RagIndex {
         Ok(())
     }
 
+    /// 清空某个 namespace 下的所有 chunk。
+    pub async fn clear_namespace(&self, namespace: &str) -> Result<u64, String> {
+        let deleted = sqlx::query("DELETE FROM rag_chunks WHERE namespace = $1")
+            .bind(namespace)
+            .execute(&self.db)
+            .await
+            .map_err(|e| format!("[RagService] clear namespace failed: {}", e))?
+            .rows_affected();
+        Ok(deleted)
+    }
+
+    /// 单查询向量检索，供 retrieval 模块调用。
     pub(crate) async fn search_single(
         &self,
         query: &str,
@@ -153,7 +177,7 @@ impl RagIndex {
             .embedder
             .encode(query)
             .await
-            .map_err(|e| format!("[RagIndex] query embedding failed: {}", e))?;
+            .map_err(|e| format!("[RagService] query embedding failed: {}", e))?;
         self.normalize_embedding(&mut embedding);
         let pg_vector = Vector::from(embedding);
 
@@ -174,7 +198,7 @@ impl RagIndex {
         .bind(limit as i64)
         .fetch_all(&self.db)
         .await
-        .map_err(|e| format!("[RagIndex] search failed: {}", e))?;
+        .map_err(|e| format!("[RagService] search failed: {}", e))?;
 
         let results = rows
             .into_iter()
@@ -212,23 +236,12 @@ impl RagIndex {
         }
     }
 
-    /// 清空某个 namespace 下的所有 chunk，便于重新索引同一资料库。
-    pub async fn clear_namespace(&self, namespace: &str) -> Result<u64, String> {
-        let deleted = sqlx::query("DELETE FROM rag_chunks WHERE namespace = $1")
-            .bind(namespace)
-            .execute(&self.db)
-            .await
-            .map_err(|e| format!("[RagIndex] clear namespace failed: {}", e))?
-            .rows_affected();
-        Ok(deleted)
-    }
-
     async fn insert_batch(&self, batch: &[RagChunk]) -> Result<(), String> {
         let mut tx = self
             .db
             .begin()
             .await
-            .map_err(|e| format!("[RagIndex] transaction begin failed: {}", e))?;
+            .map_err(|e| format!("[RagService] transaction begin failed: {}", e))?;
 
         for chunk in batch {
             let pg_vector = Vector::from(chunk.embedding.clone());
@@ -252,12 +265,12 @@ impl RagIndex {
             .bind(&chunk.metadata)
             .execute(&mut *tx)
             .await
-            .map_err(|e| format!("[RagIndex] insert failed: {}", e))?;
+            .map_err(|e| format!("[RagService] insert failed: {}", e))?;
         }
 
         tx.commit()
             .await
-            .map_err(|e| format!("[RagIndex] transaction commit failed: {}", e))?;
+            .map_err(|e| format!("[RagService] transaction commit failed: {}", e))?;
 
         Ok(())
     }

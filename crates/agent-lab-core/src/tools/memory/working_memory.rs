@@ -4,7 +4,7 @@ use scirs2_text::vectorize::{TfidfVectorizer, Vectorizer};
 use crate::tools::memory;
 
 use super::base::{Memory, MemoryConfig, MemoryItem, RetrieveRequest};
-use super::storage::MemoryStore;
+use crate::storage::MemoryStore;
 
 pub struct WorkingMemory {
     config: MemoryConfig,

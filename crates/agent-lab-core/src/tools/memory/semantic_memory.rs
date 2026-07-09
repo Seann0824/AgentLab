@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::base::{Memory, MemoryConfig, MemoryItem, RetrieveRequest};
 use super::extractor::EntityExtractorAgent;
-use super::storage::{MemoryStore, entity_id};
+use crate::storage::{entity_id, MemoryStore};
 
 /// 语义记忆实现。
 ///

@@ -1,7 +1,9 @@
 pub mod types;
 // pub mod base_shell;
 pub mod memory;
+pub mod memory_tool;
 pub mod rag;
+pub mod rag_tool;
 pub mod web_search;
 
 use crate::tools::types::Tool;

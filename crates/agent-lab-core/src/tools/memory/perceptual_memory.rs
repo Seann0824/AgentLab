@@ -1,5 +1,5 @@
 use super::base::{Memory, MemoryConfig, MemoryItem, RetrieveRequest};
-use super::storage::MemoryStore;
+use crate::storage::MemoryStore;
 
 pub struct PerceptualMemory {
     store: MemoryStore,

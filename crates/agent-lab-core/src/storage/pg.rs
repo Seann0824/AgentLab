@@ -338,7 +338,7 @@ mod tests {
     use std::sync::Arc;
     use super::*;
     use crate::db::get_db_client;
-    use crate::tools::memory::storage::embedder::Embedder;
+    use crate::storage::embedder::Embedder;
 
     struct MockEmbedder;
 

@@ -1,10 +1,26 @@
 mod commands;
-mod error;
 mod services;
 mod state;
 
+use agent_lab_core::base::llm::AgentsLLM;
+use agent_lab_core::services::ChatService;
 use state::AppState;
 use tauri::Manager;
+
+fn build_llm_from_env() -> Result<AgentsLLM, String> {
+    let api_key = std::env::var("API_KEY").map_err(|_| "missing environment variable: API_KEY")?;
+    let base_url =
+        std::env::var("BASE_URL").map_err(|_| "missing environment variable: BASE_URL")?;
+    let model = std::env::var("MODEL").map_err(|_| "missing environment variable: MODEL")?;
+    let provider = std::env::var("PROVIDER").unwrap_or_else(|_| "Custom".into());
+
+    Ok(AgentsLLM::builder()
+        .api_key(api_key)
+        .base_url(base_url)
+        .model(model)
+        .provider(provider)
+        .build())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -40,7 +56,10 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            app.manage(AppState::new());
+            let llm = build_llm_from_env().expect("LLM config missing");
+            app.manage(AppState {
+                chat_service: ChatService::new(llm),
+            });
             #[cfg(debug_assertions)]
             {
                 let window = app.get_webview_window("main").unwrap();

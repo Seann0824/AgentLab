@@ -1,7 +1,7 @@
 use agent_lab_core::base::agent::AgentStreamEvent;
 use tauri::{ipc::Channel, State};
 
-use crate::services::ChatService;
+use crate::services::chat;
 use crate::state::AppState;
 
 /// 流式聊天命令。
@@ -13,17 +13,5 @@ pub async fn chat_completion_stream(
     session_id: Option<String>,
     message: String,
 ) -> Result<String, String> {
-    let chat_service = ChatService::new(state.sessions.clone());
-
-    let (session_id, agent) = chat_service
-        .get_or_create_session(session_id)
-        .await
-        .map_err(String::from)?;
-
-    chat_service
-        .run_agent(agent, message, channel)
-        .await
-        .map_err(String::from)?;
-
-    Ok(session_id)
+    chat::chat_completion_stream(&state.chat_service, channel, session_id, message).await
 }

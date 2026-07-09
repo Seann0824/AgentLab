@@ -3,19 +3,18 @@ pub mod graph;
 pub mod neo4j;
 pub mod pg;
 
-pub use embedder::OllamaEmbedder;
+pub use embedder::{Embedder, OllamaEmbedder};
 pub use graph::entity_id;
-pub use neo4j::{Entity, Neo4jStore, Relation};
+pub use neo4j::{Entity, EntityInput, Neo4jStore, Relation, RelationInput};
 pub use pg::PgStore;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+
 use pgvector::Vector;
 use serde_json::Value;
 
 use crate::tools::memory::base::{MemoryConfig, MemoryItem};
-use crate::tools::memory::storage::embedder::Embedder;
-use crate::tools::memory::storage::neo4j::{EntityInput, RelationInput};
 
 /// 组合存储：PG 负责向量/结构化检索，Neo4j 负责图关系，Embedder 负责向量化。
 #[derive(Clone)]
@@ -43,7 +42,8 @@ impl MemoryStore {
     }
 
     pub async fn add(&mut self, memory_item: MemoryItem) -> Result<(), String> {
-        let embedding = self.embedder
+        let embedding = self
+            .embedder
             .encode(&memory_item.content)
             .await
             .map_err(|e| format!("[MemoryStore] embedding calc failed: {}", e))?;
@@ -67,7 +67,8 @@ impl MemoryStore {
             return self.add(memory_item).await;
         }
 
-        let embedding = self.embedder
+        let embedding = self
+            .embedder
             .encode(&memory_item.content)
             .await
             .map_err(|e| format!("[MemoryStore] embedding calc failed: {}", e))?;
@@ -172,21 +173,24 @@ impl MemoryStore {
         time_range: Option<(i64, i64)>,
         limit: usize,
     ) -> Result<Vec<(f64, MemoryItem)>, String> {
-        let embedding = self.embedder
+        let embedding = self
+            .embedder
             .encode(query)
             .await
             .map_err(|e| format!("[MemoryStore] embedding calc failed: {}", e))?;
         let pg_vector = Vector::from(embedding);
 
-        self.pg.search_similar(
-            pg_vector,
-            memory_type,
-            user_id,
-            session_id,
-            importance_threshold,
-            time_range,
-            limit,
-        ).await
+        self.pg
+            .search_similar(
+                pg_vector,
+                memory_type,
+                user_id,
+                session_id,
+                importance_threshold,
+                time_range,
+                limit,
+            )
+            .await
     }
 
     pub async fn keyword_search(
@@ -198,14 +202,16 @@ impl MemoryStore {
         importance_threshold: Option<f64>,
         time_range: Option<(i64, i64)>,
     ) -> Result<Vec<MemoryItem>, String> {
-        self.pg.keyword_search(
-            query,
-            memory_type,
-            user_id,
-            session_id,
-            importance_threshold,
-            time_range,
-        ).await
+        self.pg
+            .keyword_search(
+                query,
+                memory_type,
+                user_id,
+                session_id,
+                importance_threshold,
+                time_range,
+            )
+            .await
     }
 
     pub async fn get(&self, memory_id: &str) -> Result<Option<MemoryItem>, String> {
@@ -221,7 +227,8 @@ impl MemoryStore {
     ) -> Result<bool, String> {
         let new_embedding = match content {
             Some(text) => {
-                let embedding = self.embedder
+                let embedding = self
+                    .embedder
                     .encode(text)
                     .await
                     .map_err(|e| format!("[MemoryStore] update embedding failed: {}", e))?;
@@ -230,7 +237,9 @@ impl MemoryStore {
             None => None,
         };
 
-        self.pg.update(memory_id, content, importance, metadata, new_embedding).await
+        self.pg
+            .update(memory_id, content, importance, metadata, new_embedding)
+            .await
     }
 
     pub async fn delete(&self, memory_id: &str) -> Result<bool, String> {
@@ -336,4 +345,3 @@ impl MemoryStore {
         Ok(items)
     }
 }
-

@@ -3,67 +3,37 @@ use std::collections::HashMap;
 use sqlx::PgPool;
 
 use crate::base::llm::AgentsLLM;
+use crate::services::rag_service::RagService;
 use crate::tools::rag::chunking::{self, Paragraph};
-use crate::tools::rag::index::RagIndex;
-use crate::tools::rag::markdown::preprocess_markdown_for_embedding;
-use crate::tools::rag::retrieval;
 use crate::tools::types::Tool;
 
+/// RAG 资料库 Tool：面向 LLM 提供文档索引与语义检索能力。
 pub struct RagTool {
-    index: Option<RagIndex>,
+    service: Option<RagService>,
 }
 
 impl RagTool {
-    /// 创建一个不带索引器的 RagTool，仅用于分块、预处理和 token 估算等本地操作。
+    /// 创建一个不带索引器的 RagTool，仅用于本地文本处理操作。
     pub fn new() -> Self {
-        Self { index: None }
+        Self { service: None }
     }
 
-    /// 使用已有的 RagIndex 创建 RagTool。
-    pub fn with_index(index: RagIndex) -> Self {
-        Self { index: Some(index) }
+    /// 使用已有的 RagService 创建 RagTool。
+    pub fn with_service(service: RagService) -> Self {
+        Self {
+            service: Some(service),
+        }
     }
 
     /// 便捷方法：用默认 Ollama embedder + PG 连接创建 RagTool。
-    /// `llm` 用于驱动查询扩展与 HyDE 子 agent。
     pub fn with_default_embedder(db: PgPool, llm: AgentsLLM) -> Self {
-        Self::with_index(RagIndex::with_default_embedder(db, llm))
+        Self::with_service(RagService::with_default_embedder(db, llm))
     }
 
-    fn index(&self) -> Result<&RagIndex, String> {
-        self.index
+    fn service(&self) -> Result<&RagService, String> {
+        self.service
             .as_ref()
             .ok_or_else(|| "RagTool 未初始化索引器".to_string())
-    }
-
-    /// 把本地 Markdown 文件索引到 `rag_chunks`。
-    pub async fn index_file(
-        &self,
-        path: &str,
-        namespace: &str,
-        chunk_tokens: usize,
-        overlap_tokens: usize,
-    ) -> Result<usize, String> {
-        let text = self.get_markdown_content(path)?;
-        if text.is_empty() {
-            return Err("file is empty or could not be read".to_string());
-        }
-
-        let paragraphs = chunking::split_paragraphs_with_headings(text);
-        let chunks = chunking::chunk_paragraphs(paragraphs, chunk_tokens, overlap_tokens);
-        let count = chunks.len();
-
-        let index = self.index()?;
-        index
-            .clear_namespace(namespace)
-            .await
-            .map_err(|e| format!("clear namespace failed: {}", e))?;
-        index
-            .index_chunks(chunks, path, namespace, 8)
-            .await
-            .map_err(|e| format!("index chunks failed: {}", e))?;
-
-        Ok(count)
     }
 
     /// 读取 Markdown 文件内容。
@@ -89,7 +59,14 @@ impl RagTool {
     }
 
     pub fn preprocess_markdown_for_embedding(&self, content: &str) -> String {
+        use crate::tools::rag::markdown::preprocess_markdown_for_embedding;
         preprocess_markdown_for_embedding(content)
+    }
+}
+
+impl Default for RagTool {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -146,8 +123,7 @@ impl Tool for RagTool {
                     return Err("add_document 操作需要 file_path 参数".to_string());
                 }
 
-                // 内部固定参数：整个 RAG 视为统一数据库
-                let count = self.index_file(&path, "default", 512, 64).await?;
+                let count = self.service()?.index_document(&path, "default", 512, 64).await?;
                 Ok(format!("索引完成，共 {} 个 chunk", count))
             }
             "search" => {
@@ -156,9 +132,7 @@ impl Tool for RagTool {
                     return Err("search 操作需要 query 参数".to_string());
                 }
 
-                let index = self.index()?;
-                // 不限制 namespace，在整个 RAG 数据库里按向量语义相似度排序
-                let results = retrieval::search(index, &query, None, 5).await?;
+                let results = self.service()?.search(&query, None, 5).await?;
 
                 let formatted: Vec<String> = results
                     .iter()

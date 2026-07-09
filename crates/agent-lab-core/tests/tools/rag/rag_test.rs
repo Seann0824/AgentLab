@@ -1,4 +1,5 @@
-use agent_lab_core::tools::rag::{Paragraph, RagTool};
+use agent_lab_core::tools::rag::Paragraph;
+use agent_lab_core::tools::rag_tool::RagTool;
 
 fn tool() -> RagTool {
     RagTool::new()
@@ -363,7 +364,7 @@ fn test_preprocess_emphasis_order() {
 }
 
 use agent_lab_core::base::llm::AgentsLLM;
-use agent_lab_core::tools::rag::RagIndex;
+use agent_lab_core::services::rag_service::RagService;
 use sqlx::PgPool;
 
 #[tokio::test]
@@ -382,7 +383,7 @@ async fn test_rag_index_empty_chunks() {
         .base_url("http://localhost")
         .model("dummy")
         .build();
-    let index = RagIndex::with_default_embedder(db, llm);
-    let result = index.index_chunks(vec![], "test.md", "default", 64).await;
+    let service = RagService::with_default_embedder(db, llm);
+    let result = service.index_chunks(vec![], "test.md", "default", 64).await;
     assert!(result.is_ok());
 }

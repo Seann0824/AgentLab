@@ -2,7 +2,7 @@ use chrono::Local;
 use serde_json::Value;
 
 use super::base::{Memory, MemoryConfig, MemoryItem, RetrieveRequest};
-use super::storage::MemoryStore;
+use crate::storage::MemoryStore;
 
 pub struct EpisodicMemory {
     store: MemoryStore,

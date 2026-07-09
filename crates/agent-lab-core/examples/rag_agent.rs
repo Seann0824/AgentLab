@@ -2,7 +2,7 @@ use agent_lab_core::{
     agent::Agent,
     base::{agent::Agent as _, config::Config, llm::AgentsLLM},
     db::get_db_client,
-    tools::rag::RagTool,
+    tools::rag_tool::RagTool,
 };
 
 #[tokio::main]

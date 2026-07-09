@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::tools::rag::index::{RagChunk, RagIndex};
+use crate::services::rag_service::{RagChunk, RagService};
 
 /// 语义检索：把 query 向量化后在 `rag_chunks` 中搜索最近的 chunk。
 ///
@@ -8,14 +8,14 @@ use crate::tools::rag::index::{RagChunk, RagIndex};
 /// 分别检索后合并、去重、按最佳相似度重排，提升召回率。
 /// HyDE 会同时生成假设文档并加入检索集合。
 pub async fn search(
-    index: &RagIndex,
+    service: &RagService,
     query: &str,
     namespace: Option<&str>,
     limit: usize,
 ) -> Result<Vec<(f64, RagChunk)>, String> {
     // 1. 收集原始查询与 HyDE 假设文档
     let mut base_queries = vec![query.to_string()];
-    if let Some(hyde) = &index.hyde_generator {
+    if let Some(hyde) = &service.hyde_generator {
         let mut guard = hyde.lock().await;
         match guard.generate(query).await {
             Ok(doc) => {
@@ -36,7 +36,7 @@ pub async fn search(
 
     // 2. 用 MQE 对每个 base query 做扩展
     let mut expanded_queries: Vec<String> = Vec::new();
-    match &index.query_expander {
+    match &service.query_expander {
         Some(expander) => {
             let mut guard = expander.lock().await;
             for base in base_queries {
@@ -62,7 +62,7 @@ pub async fn search(
     // 3. 对每个查询分别检索
     let mut all_results: Vec<(f64, RagChunk)> = Vec::new();
     for q in expanded_queries {
-        let results = index.search_single(&q, namespace, limit).await?;
+        let results = service.search_single(&q, namespace, limit).await?;
         all_results.extend(results);
     }
 
