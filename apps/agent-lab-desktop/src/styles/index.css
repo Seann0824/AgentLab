@@ -24,3 +24,28 @@ body {
 ::selection {
   background-color: rgba(107, 124, 90, 0.2);
 }
+
+/* contenteditable 输入框的 placeholder */
+[contenteditable]:empty::before {
+  content: attr(data-placeholder);
+  color: #9ca3af;
+  pointer-events: none;
+}
+
+/* namespace tag 样式 */
+.namespace-tag {
+  display: inline-block;
+  background-color: #6b7c5a;
+  color: #ffffff;
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin: 0 2px;
+  font-size: 0.875rem;
+  line-height: 1.25;
+  user-select: none;
+  vertical-align: middle;
+}
+
+.namespace-tag + br {
+  display: none;
+}

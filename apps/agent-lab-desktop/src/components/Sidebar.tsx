@@ -102,7 +102,11 @@ function SessionItem({
   );
 }
 
-export function Sidebar() {
+interface SidebarProps {
+  onOpenSettings: () => void;
+}
+
+export function Sidebar({ onOpenSettings }: SidebarProps) {
   const { sessions, currentSessionId, loadSessions, selectSession, deleteSession, renameSession } =
     useChatStore();
   const [deletingSession, setDeletingSession] = useState<SessionSummary | null>(null);
@@ -127,6 +131,15 @@ export function Sidebar() {
             onDelete={() => setDeletingSession(session)}
           />
         ))}
+      </div>
+
+      <div className="p-4 border-t border-mist">
+        <button
+          onClick={onOpenSettings}
+          className="w-full text-left text-sm text-stone hover:text-ink transition-colors"
+        >
+          设置
+        </button>
       </div>
 
       <ConfirmDialog

@@ -14,6 +14,8 @@ jsonschema = "0.46.5"
 openai-api-rs = { path = "../openai-api-rs" }
 regex = "1.12.4"
 reqwest = { version = "0.13.4", features = ["json", "stream"] }
+sha2 = "0.10"
+hex = "0.4"
 scirs2-text = "0.6.0"
 sqlx = { version = "0.9.0", features = ["postgres", "runtime-tokio", "tls-native-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }

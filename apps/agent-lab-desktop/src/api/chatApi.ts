@@ -1,5 +1,30 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { AgentStreamEvent, ChatMessage, SessionSummary } from "../types/chat";
+import type {
+  AgentStreamEvent,
+  ChatMessage,
+  IndexDocumentResult,
+  SessionSummary,
+} from "../types/chat";
+
+export async function listNamespaces(): Promise<string[]> {
+  return invoke<string[]>("list_namespaces");
+}
+
+export async function indexDocumentContent(
+  namespace: string,
+  content: string,
+  source: string,
+): Promise<IndexDocumentResult> {
+  return invoke<IndexDocumentResult>("index_document_content", {
+    namespace,
+    content,
+    source,
+  });
+}
+
+export async function deleteNamespace(namespace: string): Promise<boolean> {
+  return invoke<boolean>("delete_namespace", { namespace });
+}
 
 export async function listChatSessions(): Promise<SessionSummary[]> {
   return invoke<SessionSummary[]>("list_chat_sessions");

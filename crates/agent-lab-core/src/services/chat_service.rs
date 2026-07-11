@@ -11,7 +11,8 @@ use crate::base::config::Config;
 use crate::base::llm::AgentsLLM;
 use crate::error::AgentLabError;
 use crate::services::chat_dto::{ChatMessage, SessionSummary};
-use crate::services::{MessageService, SessionService};
+use crate::services::{MessageService, RagService, SessionService};
+use crate::tools::rag_tool::RagTool;
 use crate::tools::time_tool::TimeTool;
 use crate::tools::web_search::WebSearch;
 use openai_api_rs::v1::chat_completion::ChatCompletionMessage;
@@ -27,6 +28,7 @@ pub struct ChatService {
     messages: MessageService,
     llm: AgentsLLM,
     user_id: String,
+    rag_service: Option<RagService>,
     /// 按 session 串行化发送，防止同一会话并发产生交错消息。
     send_locks: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
 }
@@ -43,23 +45,68 @@ impl ChatService {
             messages,
             llm,
             user_id: user_id.into(),
+            rag_service: None,
             send_locks: Mutex::new(HashMap::new()),
         }
     }
 
-    fn build_agent(llm: AgentsLLM) -> SimpleAgent {
+    /// 注入 RAG 服务；注入后 Agent 才能使用 rag 工具。
+    pub fn with_rag_service(mut self, rag_service: RagService) -> Self {
+        self.rag_service = Some(rag_service);
+        self
+    }
+
+    fn build_agent(
+        &self,
+        llm: AgentsLLM,
+        system_prompt: Option<String>,
+        default_namespace: Option<String>,
+    ) -> SimpleAgent {
         let time_tool = Box::new(TimeTool::new());
         let search_tool = Box::new(WebSearch::serpapi(
             std::env::var("SERPAPI_API_KEY").expect("SERPAPI_API_KEY missing"),
         ));
-        AgentBuilder::new()
+
+        let mut builder = AgentBuilder::new()
             .name("chat agent")
             .llm(llm)
             .config(Config::default())
+            .system_prompt(system_prompt)
             .tool(time_tool)
             .tool(search_tool)
-            .enable_tool_calling(true)
-            .build()
+            .enable_tool_calling(true);
+
+        if let Some(rag_service) = &self.rag_service {
+            let rag_tool = Box::new(
+                RagTool::with_service(rag_service.clone())
+                    .with_default_namespace(default_namespace),
+            );
+            builder = builder.tool(rag_tool);
+        }
+
+        builder.build()
+    }
+
+    /// 构建包含知识库感知的 system prompt。
+    fn build_knowledge_prompt(available_namespaces: &[String]) -> Option<String> {
+        if available_namespaces.is_empty() {
+            return None;
+        }
+
+        let namespaces_list = available_namespaces
+            .iter()
+            .map(|ns| format!("- {}", ns))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Some(format!(
+            "你有权访问以下知识库 namespace：\n{}\n\
+             当用户问题与某个知识库相关时，请使用 rag 工具的 search action，并在参数中指定要检索的 namespace。\
+             如果用户消息中提到某个 namespace（如 @[namespace]），请优先在该 namespace 下检索。\
+             如果问题可能涉及多个知识库，请选择最合适的 namespace 进行检索。\
+             如果问题与知识库无关，直接回答即可。",
+            namespaces_list
+        ))
     }
 
     /// 创建新会话并返回 session_id。
@@ -132,8 +179,12 @@ impl ChatService {
     ///
     /// 流程：
     /// 1. 从 DB 加载历史；
-    /// 2. 新建 Agent 并注入历史；
-    /// 3. Agent 运行期间产生的事件会同时转发给调用方并持久化到 DB。
+    /// 2. 查询所有可用知识库 namespace 并写入 system_prompt；
+    /// 3. 新建 Agent 并注入历史；
+    /// 4. Agent 运行期间产生的事件会同时转发给调用方并持久化到 DB。
+    ///
+    /// 注意：用户消息中的 `@[namespace]` 仅作为普通 prompt 文本，
+    /// 不在这里做特殊提取；AI 会根据 system_prompt 中的知识库列表自主调用 rag 工具。
     pub async fn send_message(
         &self,
         session_id: Option<String>,
@@ -142,6 +193,14 @@ impl ChatService {
     ) -> Result<String, AgentLabError> {
         let session_id = self.get_or_create_session(session_id).await?;
         let history = self.messages.history(&session_id).await?;
+
+        // 查询可用 namespace 列表，构建知识库感知的 system prompt。
+        let available_namespaces = if let Some(rag) = &self.rag_service {
+            rag.list_namespaces().await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let system_prompt = Self::build_knowledge_prompt(&available_namespaces);
 
         // 获取该 session 的串行化锁。
         let lock = {
@@ -157,24 +216,24 @@ impl ChatService {
         let llm = self.llm.clone();
         let session_id_for_task = session_id.clone();
 
+        // 在闭包外构建 Agent，避免在 async move 中捕获 self。
+        let mut agent = self.build_agent(llm.clone(), system_prompt, None);
+        let history_cc: Vec<ChatCompletionMessage> = history
+            .iter()
+            .map(ChatMessage::to_chat_completion_message)
+            .collect();
+        agent.base_mut().set_history(history_cc);
+        agent.base_mut().ensure_system_prompt();
+
         tokio::spawn(async move {
             // 锁在发送/事件处理期间一直持有，任务结束自动释放。
             let _guard = lock.lock().await;
 
-            // 1. 新建 Agent 并还原历史。
-            let mut agent = Self::build_agent(llm);
-            let history_cc: Vec<ChatCompletionMessage> = history
-                .iter()
-                .map(ChatMessage::to_chat_completion_message)
-                .collect();
-            agent.base_mut().set_history(history_cc);
-            agent.base_mut().ensure_system_prompt();
-
-            // 2. 建立内部事件 channel。
+            // 1. 建立内部事件 channel。
             let (tx, mut rx) = mpsc::channel::<AgentStreamEvent>(64);
             agent.base_mut().set_event_sender(Some(tx));
 
-            // 3. 运行 Agent。
+            // 2. 运行 Agent。
             tokio::spawn(async move {
                 let _ = agent.run(&message).await;
             });
@@ -224,3 +283,4 @@ impl ChatService {
         Ok(session_id)
     }
 }
+

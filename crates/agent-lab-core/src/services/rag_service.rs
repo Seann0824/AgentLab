@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use pgvector::Vector;
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 
 use crate::base::llm::AgentsLLM;
@@ -13,6 +14,13 @@ use crate::tools::rag::hyde::HydeAgent;
 use crate::tools::rag::markdown::preprocess_markdown_for_embedding;
 use crate::tools::rag::query_expansion::QueryExpansionAgent;
 use crate::tools::rag::retrieval;
+
+/// 文档索引结果。
+#[derive(Clone, serde::Serialize, Debug, PartialEq)]
+pub struct IndexDocumentResult {
+    pub chunks: usize,
+    pub already_exists: bool,
+}
 
 /// RAG 全局资料库中的一条 chunk 记录。
 #[derive(Clone, serde::Serialize, Debug, PartialEq)]
@@ -36,6 +44,18 @@ pub struct RagService {
     dimension: usize,
     pub(crate) query_expander: Option<Arc<tokio::sync::Mutex<QueryExpansionAgent>>>,
     pub(crate) hyde_generator: Option<Arc<tokio::sync::Mutex<HydeAgent>>>,
+}
+
+impl Clone for RagService {
+    fn clone(&self) -> Self {
+        Self {
+            db: self.db.clone(),
+            embedder: Arc::clone(&self.embedder),
+            dimension: self.dimension,
+            query_expander: self.query_expander.clone(),
+            hyde_generator: self.hyde_generator.clone(),
+        }
+    }
 }
 
 impl RagService {
@@ -66,29 +86,104 @@ impl RagService {
     }
 
     /// 读取 Markdown 文件并索引到指定 namespace。
+    ///
+    /// 同一 namespace 下，若文件 hash 与已索引文档相同则跳过；
+    /// 若 hash 不同则清空原 namespace 后重建索引。
     pub async fn index_document(
         &self,
         file_path: &str,
         namespace: &str,
         chunk_tokens: usize,
         overlap_tokens: usize,
-    ) -> Result<usize, AgentLabError> {
+    ) -> Result<IndexDocumentResult, AgentLabError> {
         let text = std::fs::read_to_string(file_path)
             .map_err(|e| ServiceError::external(format!("failed to read {}: {}", file_path, e)))?;
-        if text.is_empty() {
+        self.index_document_content(&text, file_path, namespace, chunk_tokens, overlap_tokens)
+            .await
+    }
+
+    /// 将 Markdown 内容索引到指定 namespace。
+    ///
+    /// 同一 namespace 下，若内容 hash 与已索引文档相同则跳过；
+    /// 若 hash 不同则清空原 namespace 后重建索引。
+    pub async fn index_document_content(
+        &self,
+        content: &str,
+        source: &str,
+        namespace: &str,
+        chunk_tokens: usize,
+        overlap_tokens: usize,
+    ) -> Result<IndexDocumentResult, AgentLabError> {
+        if content.is_empty() {
             return Err(ServiceError::invalid_argument(
-                "file is empty or could not be read",
+                "content is empty",
             ))?;
         }
 
-        let paragraphs = chunking::split_paragraphs_with_headings(text);
+        let content_hash = compute_content_hash(content);
+
+        let mut tx = self
+            .db
+            .begin()
+            .await
+            .map_err(|e| ServiceError::external(format!("[RagService] transaction begin failed: {}", e)))?;
+
+        let existing_hash: Option<String> = sqlx::query_scalar(
+            "SELECT content_hash FROM rag_documents WHERE namespace = $1"
+        )
+        .bind(namespace)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| ServiceError::external(format!("[RagService] query document hash failed: {}", e)))?;
+
+        if existing_hash.as_deref() == Some(content_hash.as_str()) {
+            tx.commit()
+                .await
+                .map_err(|e| ServiceError::external(format!("[RagService] transaction commit failed: {}", e)))?;
+            return Ok(IndexDocumentResult {
+                chunks: 0,
+                already_exists: true,
+            });
+        }
+
+        // hash 不同或不存在：清空原数据并重建索引
+        sqlx::query("DELETE FROM rag_chunks WHERE namespace = $1")
+            .bind(namespace)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ServiceError::external(format!("[RagService] clear chunks failed: {}", e)))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO rag_documents (namespace, source, content_hash)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (namespace) DO UPDATE SET
+                source = EXCLUDED.source,
+                content_hash = EXCLUDED.content_hash,
+                created_at = NOW()
+            "#
+        )
+        .bind(namespace)
+        .bind(source)
+        .bind(&content_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ServiceError::external(format!("[RagService] upsert document record failed: {}", e)))?;
+
+        let paragraphs = chunking::split_paragraphs_with_headings(content.to_string());
         let chunks = chunking::chunk_paragraphs(paragraphs, chunk_tokens, overlap_tokens);
         let count = chunks.len();
 
-        self.clear_namespace(namespace).await?;
-        self.index_chunks(chunks, file_path, namespace, 8).await?;
+        self.index_chunks_in_tx(chunks, source, namespace, 8, &mut tx).await?;
 
-        Ok(count)
+        tx.commit()
+            .await
+            .map_err(|e| ServiceError::external(format!("[RagService] transaction commit failed: {}", e)))?;
+
+        Ok(IndexDocumentResult {
+            chunks: count,
+            already_exists: false,
+        })
     }
 
     /// 语义检索：支持 HyDE + MQE 增强。
@@ -108,6 +203,28 @@ impl RagService {
         source: &str,
         namespace: &str,
         batch_size: usize,
+    ) -> Result<(), AgentLabError> {
+        let mut tx = self
+            .db
+            .begin()
+            .await
+            .map_err(|e| ServiceError::external(format!("[RagService] transaction begin failed: {}", e)))?;
+        self.index_chunks_in_tx(chunks, source, namespace, batch_size, &mut tx)
+            .await?;
+        tx.commit()
+            .await
+            .map_err(|e| ServiceError::external(format!("[RagService] transaction commit failed: {}", e)))?;
+        Ok(())
+    }
+
+    /// 在已有事务中将 RAG chunk 预处理后生成 embedding，批量写入 `rag_chunks`。
+    async fn index_chunks_in_tx(
+        &self,
+        chunks: Vec<Paragraph>,
+        source: &str,
+        namespace: &str,
+        batch_size: usize,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<(), AgentLabError> {
         if chunks.is_empty() {
             return Ok(());
@@ -147,13 +264,13 @@ impl RagService {
             });
 
             if batch.len() >= batch_size {
-                self.insert_batch(&batch).await?;
+                self.insert_batch_in_tx(&batch, tx).await?;
                 batch.clear();
             }
         }
 
         if !batch.is_empty() {
-            self.insert_batch(&batch).await?;
+            self.insert_batch_in_tx(&batch, tx).await?;
         }
 
         Ok(())
@@ -168,6 +285,45 @@ impl RagService {
             .map_err(|e| ServiceError::external(format!("[RagService] clear namespace failed: {}", e)))?
             .rows_affected();
         Ok(deleted)
+    }
+
+    /// 列出所有已索引的 namespace。
+    pub async fn list_namespaces(&self) -> Result<Vec<String>, AgentLabError> {
+        let namespaces: Vec<String> = sqlx::query_scalar(
+            "SELECT namespace FROM rag_documents ORDER BY namespace"
+        )
+        .fetch_all(&self.db)
+        .await
+        .map_err(|e| ServiceError::external(format!("[RagService] list namespaces failed: {}", e)))?;
+        Ok(namespaces)
+    }
+
+    /// 删除某个 namespace 及其所有 chunk。
+    pub async fn delete_namespace(&self, namespace: &str) -> Result<u64, AgentLabError> {
+        let mut tx = self
+            .db
+            .begin()
+            .await
+            .map_err(|e| ServiceError::external(format!("[RagService] transaction begin failed: {}", e)))?;
+
+        let chunks_deleted = sqlx::query("DELETE FROM rag_chunks WHERE namespace = $1")
+            .bind(namespace)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ServiceError::external(format!("[RagService] delete chunks failed: {}", e)))?
+            .rows_affected();
+
+        let _ = sqlx::query("DELETE FROM rag_documents WHERE namespace = $1")
+            .bind(namespace)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ServiceError::external(format!("[RagService] delete document record failed: {}", e)))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| ServiceError::external(format!("[RagService] transaction commit failed: {}", e)))?;
+
+        Ok(chunks_deleted)
     }
 
     /// 单查询向量检索，供 retrieval 模块调用。
@@ -240,13 +396,11 @@ impl RagService {
         }
     }
 
-    async fn insert_batch(&self, batch: &[RagChunk]) -> Result<(), AgentLabError> {
-        let mut tx = self
-            .db
-            .begin()
-            .await
-            .map_err(|e| ServiceError::external(format!("[RagService] transaction begin failed: {}", e)))?;
-
+    async fn insert_batch_in_tx(
+        &self,
+        batch: &[RagChunk],
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), AgentLabError> {
         for chunk in batch {
             let pg_vector = Vector::from(chunk.embedding.clone());
             sqlx::query(
@@ -267,15 +421,17 @@ impl RagService {
             .bind(chunk.end as i64)
             .bind(chunk.chunk_index as i32)
             .bind(&chunk.metadata)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(|e| ServiceError::external(format!("[RagService] insert failed: {}", e)))?;
         }
 
-        tx.commit()
-            .await
-            .map_err(|e| ServiceError::external(format!("[RagService] transaction commit failed: {}", e)))?;
-
         Ok(())
     }
+}
+
+fn compute_content_hash(text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    hex::encode(hasher.finalize())
 }

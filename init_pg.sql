@@ -57,6 +57,17 @@ CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding
     ON rag_chunks
     USING hnsw (embedding vector_cosine_ops);
 
+-- 文档-namespace 映射表：一个 namespace 对应一个文档，用于去重与替换
+CREATE TABLE IF NOT EXISTS rag_documents (
+    namespace TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_documents_hash
+    ON rag_documents(namespace, content_hash);
+
 -- 会话表
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id TEXT PRIMARY KEY,

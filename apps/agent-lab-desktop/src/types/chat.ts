@@ -20,6 +20,11 @@ export interface SessionSummary {
   updated_at: number;
 }
 
+export interface IndexDocumentResult {
+  chunks: number;
+  already_exists: boolean;
+}
+
 export type AgentStreamEvent =
   | { type: "user_message"; message: ChatMessage }
   | { type: "assistant_delta"; message_id: string; delta: string }

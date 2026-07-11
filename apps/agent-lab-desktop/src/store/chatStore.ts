@@ -3,11 +3,19 @@ import {
   chatCompletionStream,
   createChatSession,
   deleteChatSession,
+  deleteNamespace,
   getChatHistory,
+  indexDocumentContent,
   listChatSessions,
+  listNamespaces,
   renameChatSession,
 } from "../api/chatApi";
-import type { AgentStreamEvent, ChatMessage, SessionSummary } from "../types/chat";
+import type {
+  AgentStreamEvent,
+  ChatMessage,
+  IndexDocumentResult,
+  SessionSummary,
+} from "../types/chat";
 
 interface ChatState {
   sessions: SessionSummary[];
@@ -15,6 +23,7 @@ interface ChatState {
   messages: ChatMessage[];
   isStreaming: boolean;
   streamingMessageId: string | null;
+  namespaces: string[];
 
   // actions
   loadSessions: () => Promise<void>;
@@ -24,6 +33,9 @@ interface ChatState {
   renameSession: (id: string, title: string) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   handleStreamEvent: (event: AgentStreamEvent) => void;
+  loadNamespaces: () => Promise<void>;
+  indexDocument: (namespace: string, content: string, source: string) => Promise<IndexDocumentResult>;
+  deleteNamespace: (namespace: string) => Promise<boolean>;
 }
 
 function formatTitle(content: string): string {
@@ -47,6 +59,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isStreaming: false,
   streamingMessageId: null,
+  namespaces: [],
 
   loadSessions: async () => {
     const sessions = await listChatSessions();
@@ -340,5 +353,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
         break;
       }
     }
+  },
+
+  loadNamespaces: async () => {
+    const namespaces = await listNamespaces();
+    set({ namespaces });
+  },
+
+  indexDocument: async (namespace, content, source) => {
+    const result = await indexDocumentContent(namespace, content, source);
+    if (!result.already_exists) {
+      await get().loadNamespaces();
+    }
+    return result;
+  },
+
+  deleteNamespace: async (namespace) => {
+    const ok = await deleteNamespace(namespace);
+    if (ok) {
+      await get().loadNamespaces();
+    }
+    return ok;
   },
 }));

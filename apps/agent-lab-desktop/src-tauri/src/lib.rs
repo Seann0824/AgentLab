@@ -4,7 +4,7 @@ mod state;
 
 use agent_lab_core::base::llm::AgentsLLM;
 use agent_lab_core::db::get_db_client;
-use agent_lab_core::services::{ChatService, MessageService, SessionService};
+use agent_lab_core::services::{ChatService, MessageService, RagService, SessionService};
 use agent_lab_core::storage::ChatStore;
 use state::AppState;
 use tauri::Manager;
@@ -49,9 +49,10 @@ pub fn run() {
             let db = tauri::async_runtime::block_on(async {
                 get_db_client(&database_url).await
             });
-            let chat_store = ChatStore::new(db);
+            let chat_store = ChatStore::new(db.clone());
             let session_service = SessionService::new(chat_store.clone());
             let message_service = MessageService::new(chat_store);
+            let rag_service = RagService::with_default_embedder(db, llm.clone());
 
             app.manage(AppState {
                 chat_service: ChatService::new(
@@ -59,7 +60,9 @@ pub fn run() {
                     session_service,
                     message_service,
                     "default_user",
-                ),
+                )
+                .with_rag_service(rag_service.clone()),
+                rag_service,
             });
             #[cfg(debug_assertions)]
             {
@@ -76,6 +79,9 @@ pub fn run() {
             commands::chat::create_chat_session,
             commands::chat::delete_chat_session,
             commands::chat::rename_chat_session,
+            commands::rag::index_document_content,
+            commands::rag::list_namespaces,
+            commands::rag::delete_namespace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
