@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
 import { useChatStore } from "../store/chatStore";
 import type { ChatMessage } from "../types/chat";
 import { UserMessage, AssistantMessage } from "./MessageItem";
+import { ScrollContainer } from "./ScrollContainer";
 
 interface MessageGroup {
   type: "user" | "assistant";
@@ -33,13 +33,8 @@ export function MessageList() {
   const messages = useChatStore((s) => s.messages);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const streamingMessageId = useChatStore((s) => s.streamingMessageId);
-  const bottomRef = useRef<HTMLDivElement>(null);
 
   const grouped = groupMessages(messages);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isStreaming, streamingMessageId]);
 
   if (messages.length === 0 && !isStreaming) {
     return (
@@ -50,7 +45,7 @@ export function MessageList() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-8">
+    <ScrollContainer className="flex-1 px-6 py-8">
       {grouped.map((group) =>
         group.type === "user" ? (
           <UserMessage key={group.message.id} content={group.message.content} />
@@ -72,7 +67,6 @@ export function MessageList() {
           </div>
         </div>
       )}
-      <div ref={bottomRef} />
-    </div>
+    </ScrollContainer>
   );
 }
