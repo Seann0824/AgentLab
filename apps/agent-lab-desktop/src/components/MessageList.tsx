@@ -86,7 +86,7 @@ export function MessageList() {
     const el = scrollRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    isAtBottomRef.current = distanceFromBottom < 32; // 32px 容差
+    isAtBottomRef.current = distanceFromBottom < 35; // 35px 容差
   };
 
   if (messages.length === 0 && !isStreaming) {
