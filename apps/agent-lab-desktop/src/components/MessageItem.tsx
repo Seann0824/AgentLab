@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ChatMessage } from "../types/chat";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -22,15 +23,15 @@ interface AssistantMessageProps {
 
 export function AssistantMessage({ message, toolMessages = [] }: AssistantMessageProps) {
   const [isReasonExpanded, setIsReasonExpanded] = useState(false);
+  const [isToolsExpanded, setIsToolsExpanded] = useState(false);
   const reason = message.metadata?.reason as string | undefined;
   const isReasoning = message.metadata?.isReasoning as boolean | undefined;
   const hasContent = message.content.trim().length > 0;
   const hasToolCalls = toolMessages.length > 0;
-  const showToolCallsInContent = !hasContent && hasToolCalls && !isReasoning;
 
   return (
     <div className="flex justify-start mb-6">
-      <div className="max-w-[90%] px-5 py-3 bg-paper-dark rounded-2xl rounded-tl-sm text-ink-light text-sm leading-relaxed shadow-sm">
+      <div className="w-[90%] px-5 py-3 bg-paper-dark rounded-2xl rounded-tl-sm text-ink-light text-sm leading-relaxed shadow-sm">
         {(reason || isReasoning) && (
           <div className="mb-3 pb-3 border-b border-mist">
             <button
@@ -57,18 +58,34 @@ export function AssistantMessage({ message, toolMessages = [] }: AssistantMessag
           </div>
         )}
         {isReasoning ? null : hasContent ? (
-          <div className="whitespace-pre-wrap">{message.content}</div>
-        ) : showToolCallsInContent ? (
-          <div className="text-stone">
-            <div className="mb-2 text-xs">已决定调用工具：</div>
-            <div className="space-y-1">
-              {toolMessages.map((tm) => (
-                <ToolCallItem key={tm.tool_call_id ?? tm.id} message={tm} />
-              ))}
-            </div>
-          </div>
+          <MarkdownRenderer content={message.content} />
         ) : (
           <div className="text-stone italic">思考中…</div>
+        )}
+
+        {!isReasoning && hasToolCalls && (
+          <div className="mt-3 pt-3 border-t border-mist">
+            <button
+              onClick={() => setIsToolsExpanded((v) => !v)}
+              className="flex items-center gap-1 text-xs text-stone hover:text-ink-light transition-colors"
+            >
+              <span
+                className={`inline-block transform transition-transform ${
+                  isToolsExpanded ? "rotate-90" : ""
+                }`}
+              >
+                ▶
+              </span>
+              查看工具调用 ({toolMessages.length})
+            </button>
+            {isToolsExpanded && (
+              <div className="mt-2 space-y-1">
+                {toolMessages.map((tm) => (
+                  <ToolCallItem key={tm.tool_call_id ?? tm.id} message={tm} />
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>

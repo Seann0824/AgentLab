@@ -1,7 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { useChatStore } from "../store/chatStore";
+import { ScrollContainer } from "./ScrollContainer";
+import { prepareRichInline, measureRichInlineStats } from "@chenglou/pretext/rich-inline";
 
 const TAG_CLASS = "namespace-tag";
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function createTagHtml(namespace: string): string {
+  return `<span class="${TAG_CLASS}" contenteditable="false" data-namespace="${escapeHtml(
+    namespace,
+  )}">@[${escapeHtml(namespace)}]</span>`;
+}
+
+function getPlainText(element: HTMLDivElement): string {
+  return element.innerText || "";
+}
 
 function findTriggerInfo(
   text: string,
@@ -16,28 +36,11 @@ function findTriggerInfo(
   if (query.includes(" ") || query.includes("\n")) return null;
 
   const charBeforeTrigger = triggerIndex > 0 ? textBeforeCursor[triggerIndex - 1] : null;
-  if (
-    charBeforeTrigger !== null &&
-    charBeforeTrigger !== " " &&
-    charBeforeTrigger !== "\n"
-  ) {
+  if (charBeforeTrigger !== null && charBeforeTrigger !== " " && charBeforeTrigger !== "\n") {
     return null;
   }
 
   return { anchor: triggerIndex, query };
-}
-
-function createNamespaceTag(namespace: string): HTMLSpanElement {
-  const span = document.createElement("span");
-  span.className = TAG_CLASS;
-  span.contentEditable = "false";
-  span.dataset.namespace = namespace;
-  span.textContent = `@[${namespace}]`;
-  return span;
-}
-
-function getPlainText(element: HTMLDivElement): string {
-  return element.innerText || "";
 }
 
 function getCaretOffset(editor: HTMLDivElement): number {
@@ -50,39 +53,35 @@ function getCaretOffset(editor: HTMLDivElement): number {
   return preCaretRange.toString().length;
 }
 
-function setCaretAfter(node: Node) {
-  const selection = window.getSelection();
-  if (!selection) return;
-  const range = document.createRange();
-  range.setStartAfter(node);
-  range.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(range);
-}
-
 function insertTag(editor: HTMLDivElement, namespace: string, anchor: number) {
   const text = getPlainText(editor);
-  const triggerInfo = findTriggerInfo(text, anchor + 1, "$");
-  if (!triggerInfo) return;
+  const info = findTriggerInfo(text, anchor + 1, "$");
+  if (!info) return;
 
-  const { anchor: triggerIndex, query } = triggerInfo;
+  const { anchor: triggerIndex, query } = info;
   const beforeText = text.slice(0, triggerIndex);
   const afterText = text.slice(triggerIndex + 1 + query.length);
 
-  editor.innerHTML = "";
+  const beforeHtml = escapeHtml(beforeText).replace(/\n/g, "<br>");
+  const afterHtml = escapeHtml(afterText ? ` ${afterText}` : "").replace(/\n/g, "<br>");
 
-  if (beforeText) {
-    editor.appendChild(document.createTextNode(beforeText));
+  editor.innerHTML = `${beforeHtml}${createTagHtml(namespace)}${afterHtml}`;
+
+  // 光标放到 tag 后面
+  const tag = editor.querySelector(`.${TAG_CLASS}[data-namespace="${CSS.escape(namespace)}"]`);
+  if (tag) {
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.setStartAfter(tag);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
   }
-
-  const tag = createNamespaceTag(namespace);
-  editor.appendChild(tag);
-  editor.appendChild(document.createTextNode(` ${afterText}`));
-
-  setCaretAfter(tag);
 }
 
-function deleteTagAtBoundary(): boolean {
+function deleteTagAtBoundary(editor: HTMLDivElement): boolean {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0) return false;
 
@@ -92,28 +91,103 @@ function deleteTagAtBoundary(): boolean {
   const node = range.startContainer;
   const offset = range.startOffset;
 
-  // Backspace 紧贴 tag 后面：删除整个 tag
-  if (
-    offset > 0 &&
-    node.childNodes[offset - 1] instanceof HTMLSpanElement
-  ) {
-    const tag = node.childNodes[offset - 1] as HTMLSpanElement;
-    if (tag.classList.contains(TAG_CLASS)) {
-      tag.remove();
+  // 情况 1：光标在容器节点中，offset 指向 tag 之后
+  if (node === editor && offset > 0) {
+    const child = node.childNodes[offset - 1];
+    if (child instanceof HTMLSpanElement && child.classList.contains(TAG_CLASS)) {
+      child.remove();
       return true;
     }
   }
 
-  // 光标在文本节点末尾，下一个是 tag
+  // 情况 2：光标在文本节点开头，前一个兄弟是 tag
+  if (node.nodeType === Node.TEXT_NODE && offset === 0) {
+    const prev = node.previousSibling;
+    if (prev instanceof HTMLSpanElement && prev.classList.contains(TAG_CLASS)) {
+      prev.remove();
+      return true;
+    }
+  }
+
+  // 情况 3：光标在 tag 后面的文本节点中任意位置，前一个兄弟是 tag
   if (node.nodeType === Node.TEXT_NODE) {
-    const next = node.nextSibling;
-    if (next instanceof HTMLSpanElement && next.classList.contains(TAG_CLASS)) {
-      next.remove();
+    const prev = node.previousSibling;
+    if (prev instanceof HTMLSpanElement && prev.classList.contains(TAG_CLASS) && offset === 0) {
+      prev.remove();
       return true;
     }
   }
 
   return false;
+}
+
+type InlineItem =
+  | { type: "text"; text: string }
+  | { type: "tag"; namespace: string };
+
+function parseItemsFromHtml(container: HTMLDivElement): InlineItem[] {
+  const items: InlineItem[] = [];
+  let currentText = "";
+
+  function flushText() {
+    if (currentText) {
+      items.push({ type: "text", text: currentText });
+      currentText = "";
+    }
+  }
+
+  function walk(node: Node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      currentText += node.textContent ?? "";
+      return;
+    }
+
+    if (node instanceof HTMLBRElement) {
+      currentText += "\n";
+      return;
+    }
+
+    if (node instanceof HTMLSpanElement && node.classList.contains(TAG_CLASS)) {
+      flushText();
+      const ns = node.dataset.namespace ?? node.textContent?.slice(2, -1) ?? "";
+      if (ns) items.push({ type: "tag", namespace: ns });
+      return;
+    }
+
+    if (node instanceof HTMLElement) {
+      for (const child of node.childNodes) {
+        walk(child);
+      }
+    }
+  }
+
+  for (const child of container.childNodes) {
+    walk(child);
+  }
+  flushText();
+  return items;
+}
+
+function serializeItems(items: InlineItem[]): string {
+  return items
+    .map((item) => (item.type === "text" ? item.text : `@[${item.namespace}]`))
+    .join("");
+}
+
+function measureItemsHeight(items: InlineItem[], width: number): number {
+  const richItems = items.map((item) =>
+    item.type === "text"
+      ? { text: item.text, font: "400 14px Inter, sans-serif" }
+      : {
+          text: `@[${item.namespace}]`,
+          font: "500 12px Inter, sans-serif",
+          break: "never" as const,
+          extraWidth: 24,
+        },
+  );
+  const prepared = prepareRichInline(richItems);
+  const { lineCount } = measureRichInlineStats(prepared, Math.max(1, width));
+  return lineCount * 22 + 24; // 24 = vertical padding
 }
 
 export function ChatInput() {
@@ -122,6 +196,9 @@ export function ChatInput() {
   const [menuQuery, setMenuQuery] = useState("");
   const [menuIndex, setMenuIndex] = useState(0);
   const [menuAnchor, setMenuAnchor] = useState(0);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const [inputVersion, setInputVersion] = useState(0);
+  const [isComposing, setIsComposing] = useState(false);
 
   const isStreaming = useChatStore((s) => s.isStreaming);
   const sendMessage = useChatStore((s) => s.sendMessage);
@@ -132,23 +209,23 @@ export function ChatInput() {
     loadNamespaces();
   }, [loadNamespaces]);
 
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    const updateWidth = () => setContainerWidth(editor.clientWidth);
+    updateWidth();
+
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(editor);
+    return () => observer.disconnect();
+  }, []);
+
   const filteredNamespaces = namespaces
     .filter((ns) => ns.toLowerCase().includes(menuQuery.toLowerCase()))
     .slice(0, 8);
 
-  const handleSend = async () => {
-    const editor = editorRef.current;
-    if (!editor || isStreaming) return;
-
-    const text = getPlainText(editor).trim();
-    if (!text) return;
-
-    editor.innerHTML = "";
-    setShowMenu(false);
-    await sendMessage(text);
-  };
-
-  const updateMenuFromCursor = () => {
+  const updateMenu = useCallback(() => {
     const editor = editorRef.current;
     if (!editor) return;
 
@@ -165,25 +242,38 @@ export function ChatInput() {
     setMenuQuery(info.query);
     setMenuIndex(0);
     setShowMenu(true);
-  };
+  }, []);
 
   const insertNamespace = (namespace: string) => {
     const editor = editorRef.current;
     if (!editor) return;
 
     insertTag(editor, namespace, menuAnchor);
+    setInputVersion((v) => v + 1);
     setShowMenu(false);
     setMenuQuery("");
     editor.focus();
+    updateMenu();
+  };
+
+  const handleSend = async () => {
+    const editor = editorRef.current;
+    if (!editor || isStreaming) return;
+
+    const items = parseItemsFromHtml(editor);
+    const text = serializeItems(items).trim();
+    if (!text) return;
+
+    editor.innerHTML = "";
+    setShowMenu(false);
+    await sendMessage(text);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (showMenu) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setMenuIndex((i) =>
-          Math.min(i + 1, Math.max(filteredNamespaces.length - 1, 0)),
-        );
+        setMenuIndex((i) => Math.min(i + 1, Math.max(filteredNamespaces.length - 1, 0)));
         return;
       }
       if (e.key === "ArrowUp") {
@@ -204,25 +294,29 @@ export function ChatInput() {
       }
     }
 
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !isComposing) {
       e.preventDefault();
       handleSend();
       return;
     }
 
-    if ((e.key === "Backspace" || e.key === "Delete") && !e.shiftKey) {
-      if (deleteTagAtBoundary()) {
+    if (e.key === "Backspace" && !e.shiftKey) {
+      const editor = editorRef.current;
+      if (editor && deleteTagAtBoundary(editor)) {
         e.preventDefault();
+        setInputVersion((v) => v + 1);
+        updateMenu();
       }
     }
   };
 
   const handleInput = () => {
-    updateMenuFromCursor();
+    setInputVersion((v) => v + 1);
+    updateMenu();
   };
 
   const handleSelect = () => {
-    updateMenuFromCursor();
+    updateMenu();
   };
 
   const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
@@ -231,11 +325,22 @@ export function ChatInput() {
     document.execCommand("insertText", false, text);
   };
 
+  const items = useMemo(() => {
+    const editor = editorRef.current;
+    if (!editor) return [{ type: "text" as const, text: "" }];
+    return parseItemsFromHtml(editor);
+  }, [inputVersion, containerWidth]);
+
+  const computedHeight = useMemo(
+    () => measureItemsHeight(items, containerWidth),
+    [items, containerWidth],
+  );
+
   return (
     <div className="px-6 py-4 border-t border-mist bg-paper relative">
       {showMenu && filteredNamespaces.length > 0 && (
         <div className="absolute left-6 right-6 bottom-full mb-2 max-w-4xl mx-auto">
-          <div className="bg-paper-dark border border-mist rounded-lg shadow-lg py-1 max-h-48 overflow-y-auto">
+          <ScrollContainer className="bg-paper-dark border border-mist rounded-lg shadow-lg py-1 max-h-48">
             {filteredNamespaces.map((ns, idx) => (
               <button
                 key={ns}
@@ -250,7 +355,7 @@ export function ChatInput() {
                 {ns}
               </button>
             ))}
-          </div>
+          </ScrollContainer>
         </div>
       )}
 
@@ -264,10 +369,16 @@ export function ChatInput() {
           onKeyDown={handleKeyDown}
           onSelect={handleSelect}
           onPaste={handlePaste}
+          onCompositionStart={() => setIsComposing(true)}
+          onCompositionEnd={() => setIsComposing(false)}
           suppressContentEditableWarning
           data-placeholder="输入消息，Shift + Enter 换行，$ 选择知识库…"
-          className="input-minimal flex-1 max-h-40 overflow-y-auto resize-none py-3 px-4 text-ink whitespace-pre-wrap"
-          style={{ minHeight: "48px", outline: "none" }}
+          className="input-minimal custom-scrollbar flex-1 max-h-40 overflow-y-auto resize-none py-3 px-4 text-ink whitespace-pre-wrap"
+          style={{
+            minHeight: "48px",
+            outline: "none",
+            height: `${Math.min(Math.max(computedHeight, 48), 160)}px`,
+          }}
         />
         <button
           onClick={handleSend}

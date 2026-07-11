@@ -49,3 +49,36 @@ body {
 .namespace-tag + br {
   display: none;
 }
+
+/* 自定义滚动条：和风 minimalist，细窄、半透明、悬停显色。
+   通过 ScrollContainer 组件作用域使用，避免全局污染。 */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(140, 140, 140, 0.35) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(140, 140, 140, 0.35);
+  border-radius: 100px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(140, 140, 140, 0.55);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:active {
+  background-color: rgba(107, 124, 90, 0.5);
+}
+
+.custom-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}

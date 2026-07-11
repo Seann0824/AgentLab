@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useChatStore } from "../store/chatStore";
+import { ScrollContainer } from "./ScrollContainer";
 
 export function SettingsPanel() {
   const [namespace, setNamespace] = useState("");
@@ -84,7 +85,7 @@ export function SettingsPanel() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-8 bg-paper">
+    <ScrollContainer className="flex-1 p-8 bg-paper">
       <div className="max-w-2xl mx-auto">
         <h1 className="text-xl font-medium text-ink mb-6">知识库设置</h1>
 
@@ -158,6 +159,6 @@ export function SettingsPanel() {
           )}
         </section>
       </div>
-    </div>
+    </ScrollContainer>
   );
 }

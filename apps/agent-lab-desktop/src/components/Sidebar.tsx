@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useChatStore } from "../store/chatStore";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { NewChatButton } from "./NewChatButton";
+import { ScrollContainer } from "./ScrollContainer";
 import type { SessionSummary } from "../types/chat";
 
 function formatTime(ts: number): string {
@@ -120,7 +121,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
       <div className="p-4 border-b border-mist">
         <NewChatButton />
       </div>
-      <div className="flex-1 overflow-y-auto py-2">
+      <ScrollContainer className="flex-1 py-2">
         {sessions.map((session) => (
           <SessionItem
             key={session.id}
@@ -131,7 +132,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
             onDelete={() => setDeletingSession(session)}
           />
         ))}
-      </div>
+      </ScrollContainer>
 
       <div className="p-4 border-t border-mist">
         <button
