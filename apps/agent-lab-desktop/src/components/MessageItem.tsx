@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { ChatMessage } from "../types/chat";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
@@ -6,7 +6,7 @@ interface MessageItemProps {
   message: ChatMessage;
 }
 
-export function UserMessage({ content }: { content: string }) {
+export const UserMessage = memo(function UserMessage({ content }: { content: string }) {
   return (
     <div className="flex justify-end mb-6">
       <div className="max-w-[80%] px-5 py-3 bg-white rounded-2xl rounded-tr-sm text-ink text-sm leading-relaxed shadow-sm">
@@ -14,14 +14,14 @@ export function UserMessage({ content }: { content: string }) {
       </div>
     </div>
   );
-}
+});
 
 interface AssistantMessageProps {
   message: ChatMessage;
   toolMessages?: ChatMessage[];
 }
 
-export function AssistantMessage({ message, toolMessages = [] }: AssistantMessageProps) {
+function AssistantMessageRaw({ message, toolMessages = [] }: AssistantMessageProps) {
   const [isReasonExpanded, setIsReasonExpanded] = useState(false);
   const [isToolsExpanded, setIsToolsExpanded] = useState(false);
   const reason = message.metadata?.reason as string | undefined;
@@ -92,7 +92,7 @@ export function AssistantMessage({ message, toolMessages = [] }: AssistantMessag
   );
 }
 
-function ToolCallItem({ message }: { message: ChatMessage }) {
+const ToolCallItem = memo(function ToolCallItem({ message }: { message: ChatMessage }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const status = message.metadata?.status as string | undefined;
   const toolName = (message.metadata?.tool_name as string) ?? "工具";
@@ -144,7 +144,20 @@ function ToolCallItem({ message }: { message: ChatMessage }) {
       )}
     </div>
   );
+});
+
+function assistantMessageEqual(
+  prev: AssistantMessageProps,
+  next: AssistantMessageProps,
+): boolean {
+  if (prev.message !== next.message) return false;
+  const prevTools = prev.toolMessages ?? [];
+  const nextTools = next.toolMessages ?? [];
+  if (prevTools.length !== nextTools.length) return false;
+  return prevTools.every((tm, i) => tm === nextTools[i]);
 }
+
+export const AssistantMessage = memo(AssistantMessageRaw, assistantMessageEqual);
 
 export function MessageItem({ message }: MessageItemProps) {
   switch (message.role) {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useChatStore } from "../store/chatStore";
 import { ScrollContainer } from "./ScrollContainer";
 import { prepareRichInline, measureRichInlineStats } from "@chenglou/pretext/rich-inline";
@@ -196,11 +196,16 @@ export function ChatInput() {
   const [menuQuery, setMenuQuery] = useState("");
   const [menuIndex, setMenuIndex] = useState(0);
   const [menuAnchor, setMenuAnchor] = useState(0);
-  const [containerWidth, setContainerWidth] = useState(0);
-  const [inputVersion, setInputVersion] = useState(0);
   const [isComposing, setIsComposing] = useState(false);
+  const [computedHeight, setComputedHeight] = useState(48);
+  const measureRafRef = useRef<number | null>(null);
 
-  const isStreaming = useChatStore((s) => s.isStreaming);
+  const currentSessionId = useChatStore((s) => s.currentSessionId);
+  const isStreaming = useChatStore((s) =>
+    currentSessionId
+      ? (s.streamingBySession[currentSessionId]?.isStreaming ?? false)
+      : false,
+  );
   const sendMessage = useChatStore((s) => s.sendMessage);
   const namespaces = useChatStore((s) => s.namespaces);
   const loadNamespaces = useChatStore((s) => s.loadNamespaces);
@@ -213,12 +218,17 @@ export function ChatInput() {
     const editor = editorRef.current;
     if (!editor) return;
 
-    const updateWidth = () => setContainerWidth(editor.clientWidth);
-    updateWidth();
+    // 初始化时测量一次高度，并在宽度变化时通过 rAF 批量重测。
+    scheduleMeasureHeight();
 
-    const observer = new ResizeObserver(updateWidth);
+    const observer = new ResizeObserver(() => scheduleMeasureHeight());
     observer.observe(editor);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (measureRafRef.current !== null) {
+        cancelAnimationFrame(measureRafRef.current);
+      }
+    };
   }, []);
 
   const filteredNamespaces = namespaces
@@ -244,16 +254,30 @@ export function ChatInput() {
     setShowMenu(true);
   }, []);
 
+  // 用 requestAnimationFrame 批量处理高度测量：连续输入事件会被合并到下一帧统一计算，
+  // 避免 pretext 的文本测量阻塞每一帧。
+  const scheduleMeasureHeight = useCallback(() => {
+    if (measureRafRef.current !== null) return;
+    measureRafRef.current = requestAnimationFrame(() => {
+      measureRafRef.current = null;
+      const editor = editorRef.current;
+      if (!editor) return;
+      const items = parseItemsFromHtml(editor);
+      const height = measureItemsHeight(items, editor.clientWidth);
+      setComputedHeight((prev) => (prev === height ? prev : height));
+    });
+  }, []);
+
   const insertNamespace = (namespace: string) => {
     const editor = editorRef.current;
     if (!editor) return;
 
     insertTag(editor, namespace, menuAnchor);
-    setInputVersion((v) => v + 1);
     setShowMenu(false);
     setMenuQuery("");
     editor.focus();
     updateMenu();
+    scheduleMeasureHeight();
   };
 
   const handleSend = async () => {
@@ -266,6 +290,7 @@ export function ChatInput() {
 
     editor.innerHTML = "";
     setShowMenu(false);
+    setComputedHeight(48);
     await sendMessage(text);
   };
 
@@ -304,15 +329,15 @@ export function ChatInput() {
       const editor = editorRef.current;
       if (editor && deleteTagAtBoundary(editor)) {
         e.preventDefault();
-        setInputVersion((v) => v + 1);
         updateMenu();
+        scheduleMeasureHeight();
       }
     }
   };
 
   const handleInput = () => {
-    setInputVersion((v) => v + 1);
     updateMenu();
+    scheduleMeasureHeight();
   };
 
   const handleSelect = () => {
@@ -323,18 +348,8 @@ export function ChatInput() {
     e.preventDefault();
     const text = e.clipboardData.getData("text/plain");
     document.execCommand("insertText", false, text);
+    scheduleMeasureHeight();
   };
-
-  const items = useMemo(() => {
-    const editor = editorRef.current;
-    if (!editor) return [{ type: "text" as const, text: "" }];
-    return parseItemsFromHtml(editor);
-  }, [inputVersion, containerWidth]);
-
-  const computedHeight = useMemo(
-    () => measureItemsHeight(items, containerWidth),
-    [items, containerWidth],
-  );
 
   return (
     <div className="px-6 py-4 border-t border-mist bg-paper relative">

@@ -5,6 +5,11 @@ import { ConfirmDialog } from "./ConfirmDialog";
 export function ChatHeader() {
   const { sessions, currentSessionId, renameSession, deleteSession } = useChatStore();
   const currentSession = sessions.find((s) => s.id === currentSessionId);
+  const isStreaming = useChatStore((s) =>
+    currentSessionId
+      ? (s.streamingBySession[currentSessionId]?.isStreaming ?? false)
+      : false,
+  );
 
   const [isEditing, setIsEditing] = useState(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
@@ -47,9 +52,12 @@ export function ChatHeader() {
               setTitle(currentSession.title);
               setIsEditing(true);
             }}
-            className="text-base font-medium text-ink cursor-pointer hover:text-moss transition-colors"
+            className="text-base font-medium text-ink cursor-pointer hover:text-moss transition-colors flex items-center gap-2"
           >
             {currentSession.title}
+            {isStreaming && (
+              <span className="w-1.5 h-1.5 rounded-full bg-moss animate-pulse" />
+            )}
           </h2>
         )}
 

@@ -21,6 +21,8 @@ function formatTime(ts: number): string {
 interface SessionItemProps {
   session: SessionSummary;
   isActive: boolean;
+  isStreaming: boolean;
+  unreadCount: number;
   onSelect: () => void;
   onRename: (title: string) => void;
   onDelete: () => void;
@@ -29,6 +31,8 @@ interface SessionItemProps {
 function SessionItem({
   session,
   isActive,
+  isStreaming,
+  unreadCount,
   onSelect,
   onRename,
   onDelete,
@@ -75,27 +79,42 @@ function SessionItem({
             {session.title}
           </div>
           <div className="text-xs text-stone mt-1">{formatTime(session.updated_at)}</div>
-          <div className="absolute right-2 top-2 hidden group-hover:flex gap-1">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsEditing(true);
-              }}
-              className="p-2 text-xs text-stone hover:text-moss min-w-[28px] min-h-[28px] flex items-center justify-center"
-              title="重命名"
-            >
-              ✎
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete();
-              }}
-              className="p-2 text-xs text-stone hover:text-red-600 min-w-[28px] min-h-[28px] flex items-center justify-center"
-              title="删除"
-            >
-              ×
-            </button>
+          <div className="absolute right-2 top-2 flex items-center gap-1">
+            <div className="hidden group-hover:flex gap-1">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsEditing(true);
+                }}
+                className="p-2 text-xs text-stone hover:text-moss min-w-[28px] min-h-[28px] flex items-center justify-center"
+                title="重命名"
+              >
+                ✎
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete();
+                }}
+                className="p-2 text-xs text-stone hover:text-red-600 min-w-[28px] min-h-[28px] flex items-center justify-center"
+                title="删除"
+              >
+                ×
+              </button>
+            </div>
+            <div className="flex items-center justify-center min-w-[28px] min-h-[28px] group-hover:hidden">
+              {isStreaming && (
+                <span
+                  className="w-2 h-2 rounded-full bg-moss animate-pulse"
+                  title="思考中…"
+                />
+              )}
+              {!isStreaming && unreadCount > 0 && (
+                <span className="min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-medium">
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </span>
+              )}
+            </div>
           </div>
         </>
       )}
@@ -108,8 +127,16 @@ interface SidebarProps {
 }
 
 export function Sidebar({ onOpenSettings }: SidebarProps) {
-  const { sessions, currentSessionId, loadSessions, selectSession, deleteSession, renameSession } =
-    useChatStore();
+  const {
+    sessions,
+    currentSessionId,
+    streamingBySession,
+    unreadBySession,
+    loadSessions,
+    selectSession,
+    deleteSession,
+    renameSession,
+  } = useChatStore();
   const [deletingSession, setDeletingSession] = useState<SessionSummary | null>(null);
 
   useEffect(() => {
@@ -127,6 +154,8 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
             key={session.id}
             session={session}
             isActive={session.id === currentSessionId}
+            isStreaming={streamingBySession[session.id]?.isStreaming ?? false}
+            unreadCount={unreadBySession[session.id] ?? 0}
             onSelect={() => selectSession(session.id)}
             onRename={(title) => renameSession(session.id, title)}
             onDelete={() => setDeletingSession(session)}

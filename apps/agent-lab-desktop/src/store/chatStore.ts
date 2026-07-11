@@ -17,12 +17,17 @@ import type {
   SessionSummary,
 } from "../types/chat";
 
+interface StreamingState {
+  isStreaming: boolean;
+  streamingMessageId: string | null;
+}
+
 interface ChatState {
   sessions: SessionSummary[];
   currentSessionId: string | null;
-  messages: ChatMessage[];
-  isStreaming: boolean;
-  streamingMessageId: string | null;
+  messagesBySession: Record<string, ChatMessage[]>;
+  streamingBySession: Record<string, StreamingState>;
+  unreadBySession: Record<string, number>;
   namespaces: string[];
 
   // actions
@@ -32,10 +37,15 @@ interface ChatState {
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
-  handleStreamEvent: (event: AgentStreamEvent) => void;
+  handleStreamEvent: (event: AgentStreamEvent, sessionId: string) => void;
   loadNamespaces: () => Promise<void>;
   indexDocument: (namespace: string, content: string, source: string) => Promise<IndexDocumentResult>;
   deleteNamespace: (namespace: string) => Promise<boolean>;
+
+  // 按 session 读取的便捷 getter
+  getSessionMessages: (sessionId: string) => ChatMessage[];
+  getSessionStreamingState: (sessionId: string) => StreamingState;
+  getSessionUnreadCount: (sessionId: string) => number;
 }
 
 function formatTitle(content: string): string {
@@ -53,13 +63,120 @@ function updateSessionTitle(
   return sessions.map((s) => (s.id === sessionId ? { ...s, title } : s));
 }
 
+function getStreamingState(
+  state: Pick<ChatState, "streamingBySession">,
+  sessionId: string,
+): StreamingState {
+  return state.streamingBySession[sessionId] ?? { isStreaming: false, streamingMessageId: null };
+}
+
+function getMessages(
+  state: Pick<ChatState, "messagesBySession">,
+  sessionId: string,
+): ChatMessage[] {
+  return state.messagesBySession[sessionId] ?? [];
+}
+
+function appendUserMessage(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
+  return [...messages, message];
+}
+
+function appendOrUpdateReasonDelta(
+  messages: ChatMessage[],
+  messageId: string,
+  delta: string,
+): ChatMessage[] {
+  const idx = messages.findIndex((m) => m.id === messageId);
+  if (idx === -1) {
+    const newMessage: ChatMessage = {
+      id: messageId,
+      role: "assistant",
+      content: delta,
+      timestamp: Math.floor(Date.now() / 1000),
+      metadata: { isReasoning: true },
+    };
+    return [...messages, newMessage];
+  }
+
+  const next = [...messages];
+  next[idx] = { ...next[idx], content: next[idx].content + delta };
+  return next;
+}
+
+function appendOrUpdateAssistantDelta(
+  messages: ChatMessage[],
+  messageId: string,
+  delta: string,
+): ChatMessage[] {
+  const idx = messages.findIndex((m) => m.id === messageId);
+
+  if (idx === -1) {
+    const newMessage: ChatMessage = {
+      id: messageId,
+      role: "assistant",
+      content: delta,
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+    return [...messages, newMessage];
+  }
+
+  const existing = messages[idx];
+  const next = [...messages];
+
+  // 如果前一段是 reasoning，把 reasoning 内容移到 metadata.reason，
+  // 然后开始写入正式回答内容。
+  if (existing.metadata?.isReasoning) {
+    next[idx] = {
+      ...existing,
+      content: delta,
+      metadata: {
+        ...existing.metadata,
+        reason: existing.content,
+        isReasoning: false,
+      },
+    };
+  } else {
+    next[idx] = { ...existing, content: existing.content + delta };
+  }
+
+  return next;
+}
+
+function finalizeAssistantMessage(
+  messages: ChatMessage[],
+  message: ChatMessage,
+): ChatMessage[] {
+  const idx = messages.findIndex((m) => m.id === message.id);
+  if (idx >= 0) {
+    const next = [...messages];
+    const existing = next[idx];
+    // 合并后端 metadata 与前端流式过程中积累的 metadata（主要是 reason）。
+    next[idx] = {
+      ...message,
+      metadata: {
+        ...(existing.metadata ?? {}),
+        ...(message.metadata ?? {}),
+        isReasoning: false,
+      },
+    };
+    return next;
+  }
+
+  // 兜底：id 不匹配时直接追加（正常不应发生）。
+  return [...messages, message];
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   currentSessionId: null,
-  messages: [],
-  isStreaming: false,
-  streamingMessageId: null,
+  messagesBySession: {},
+  streamingBySession: {},
+  unreadBySession: {},
   namespaces: [],
+
+  getSessionMessages: (sessionId) => getMessages(get(), sessionId),
+  getSessionStreamingState: (sessionId) => getStreamingState(get(), sessionId),
+  getSessionUnreadCount: (sessionId) => get().unreadBySession[sessionId] ?? 0,
 
   loadSessions: async () => {
     const sessions = await listChatSessions();
@@ -67,13 +184,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   selectSession: async (id) => {
-    const messages = await getChatHistory(id);
-    set({
-      currentSessionId: id,
-      messages,
-      isStreaming: false,
-      streamingMessageId: null,
-    });
+    const cached = get().messagesBySession[id];
+    if (!cached || cached.length === 0) {
+      const messages = await getChatHistory(id);
+      set((state) => ({
+        currentSessionId: id,
+        messagesBySession: { ...state.messagesBySession, [id]: messages },
+        unreadBySession: { ...state.unreadBySession, [id]: 0 },
+      }));
+    } else {
+      set((state) => ({
+        currentSessionId: id,
+        unreadBySession: { ...state.unreadBySession, [id]: 0 },
+      }));
+    }
   },
 
   createSession: async () => {
@@ -86,9 +210,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => ({
       sessions: [newSession, ...state.sessions],
       currentSessionId: id,
-      messages: [],
-      isStreaming: false,
-      streamingMessageId: null,
+      messagesBySession: { ...state.messagesBySession, [id]: [] },
+      streamingBySession: {
+        ...state.streamingBySession,
+        [id]: { isStreaming: false, streamingMessageId: null },
+      },
+      unreadBySession: { ...state.unreadBySession, [id]: 0 },
     }));
   },
 
@@ -107,14 +234,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => {
       const remaining = state.sessions.filter((s) => s.id !== id);
       let nextSessionId = state.currentSessionId;
-      let nextMessages: ChatMessage[] = state.messages;
 
       if (state.currentSessionId === id) {
         nextSessionId = remaining[0]?.id ?? null;
-        nextMessages = [];
       }
 
-      return { sessions: remaining, currentSessionId: nextSessionId, messages: nextMessages };
+      const { [id]: _removedMessages, ...restMessages } = state.messagesBySession;
+      const { [id]: _removedStreaming, ...restStreaming } = state.streamingBySession;
+      const { [id]: _removedUnread, ...restUnread } = state.unreadBySession;
+
+      return {
+        sessions: remaining,
+        currentSessionId: nextSessionId,
+        messagesBySession: restMessages,
+        streamingBySession: restStreaming,
+        unreadBySession: restUnread,
+      };
     });
 
     const { currentSessionId } = get();
@@ -134,83 +269,78 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (content) => {
-    const { currentSessionId } = get();
-    set({ isStreaming: true, streamingMessageId: null });
-
-    const returnedSessionId = await chatCompletionStream(
-      currentSessionId,
-      content,
-      (event) => {
-        get().handleStreamEvent(event);
-      },
-    );
-
-    // 如果之前没有会话，后端会新建一个；需要同步到前端状态。
-    if (!currentSessionId && returnedSessionId) {
-      set((state) => {
-        const exists = state.sessions.some((s) => s.id === returnedSessionId);
-        const sessions = exists
-          ? state.sessions
-          : [
-              {
-                id: returnedSessionId,
-                title: formatTitle(content),
-                updated_at: Math.floor(Date.now() / 1000),
-              },
-              ...state.sessions,
-            ];
-        return {
-          currentSessionId: returnedSessionId,
-          sessions,
-        };
-      });
+    let targetSessionId = get().currentSessionId;
+    if (!targetSessionId) {
+      await get().createSession();
+      targetSessionId = get().currentSessionId;
+      if (!targetSessionId) return;
     }
 
-    set({ isStreaming: false, streamingMessageId: null });
+    set((state) => ({
+      streamingBySession: {
+        ...state.streamingBySession,
+        [targetSessionId]: { isStreaming: true, streamingMessageId: null },
+      },
+    }));
+
+    try {
+      await chatCompletionStream(
+        targetSessionId,
+        content,
+        (event) => {
+          get().handleStreamEvent(event, targetSessionId);
+        },
+      );
+    } finally {
+      set((state) => ({
+        streamingBySession: {
+          ...state.streamingBySession,
+          [targetSessionId]: { isStreaming: false, streamingMessageId: null },
+        },
+      }));
+      // 刷新会话列表，使后台完成的会话排序与标题保持最新。
+      await get().loadSessions();
+    }
   },
 
-  handleStreamEvent: (event) => {
+  handleStreamEvent: (event, sessionId) => {
     const { currentSessionId } = get();
+    const isBackground = sessionId !== currentSessionId;
 
     switch (event.type) {
       case "user_message": {
-        set((state) => ({
-          messages: [...state.messages, event.message],
-          sessions: currentSessionId
-            ? updateSessionTitle(
-                state.sessions,
-                currentSessionId,
-                formatTitle(event.message.content),
-              )
-            : state.sessions,
-        }));
+        set((state) => {
+          const messages = getMessages(state, sessionId);
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: appendUserMessage(messages, event.message),
+            },
+            sessions: updateSessionTitle(
+              state.sessions,
+              sessionId,
+              formatTitle(event.message.content),
+            ),
+          };
+        });
         break;
       }
 
       case "reason_delta": {
         set((state) => {
-          const targetId = event.message_id;
-          const exists = state.messages.some((m) => m.id === targetId);
-
-          if (!exists) {
-            const newMessage: ChatMessage = {
-              id: targetId,
-              role: "assistant",
-              content: event.delta,
-              timestamp: Math.floor(Date.now() / 1000),
-              metadata: { isReasoning: true },
-            };
-            return {
-              messages: [...state.messages, newMessage],
-              streamingMessageId: targetId,
-            };
-          }
-
+          const messages = getMessages(state, sessionId);
           return {
-            messages: state.messages.map((m) =>
-              m.id === targetId ? { ...m, content: m.content + event.delta } : m,
-            ),
-            streamingMessageId: targetId,
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: appendOrUpdateReasonDelta(messages, event.message_id, event.delta),
+            },
+            streamingBySession: {
+              ...state.streamingBySession,
+              [sessionId]: {
+                ...getStreamingState(state, sessionId),
+                streamingMessageId: event.message_id,
+              },
+            },
           };
         });
         break;
@@ -218,49 +348,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       case "assistant_delta": {
         set((state) => {
-          const targetId = event.message_id;
-          const existing = state.messages.find((m) => m.id === targetId);
-
-          if (!existing) {
-            const newMessage: ChatMessage = {
-              id: targetId,
-              role: "assistant",
-              content: event.delta,
-              timestamp: Math.floor(Date.now() / 1000),
-            };
-            return {
-              messages: [...state.messages, newMessage],
-              streamingMessageId: targetId,
-            };
-          }
-
-          // 如果前一段是 reasoning，把 reasoning 内容移到 metadata.reason，
-          // 然后开始写入正式回答内容。
-          if (existing.metadata?.isReasoning) {
-            const reasoningContent = existing.content;
-            return {
-              messages: state.messages.map((m) =>
-                m.id === targetId
-                  ? {
-                      ...m,
-                      content: event.delta,
-                      metadata: {
-                        ...m.metadata,
-                        reason: reasoningContent,
-                        isReasoning: false,
-                      },
-                    }
-                  : m,
-              ),
-              streamingMessageId: targetId,
-            };
-          }
-
+          const messages = getMessages(state, sessionId);
           return {
-            messages: state.messages.map((m) =>
-              m.id === targetId ? { ...m, content: m.content + event.delta } : m,
-            ),
-            streamingMessageId: targetId,
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: appendOrUpdateAssistantDelta(messages, event.message_id, event.delta),
+            },
+            streamingBySession: {
+              ...state.streamingBySession,
+              [sessionId]: {
+                ...getStreamingState(state, sessionId),
+                streamingMessageId: event.message_id,
+              },
+            },
           };
         });
         break;
@@ -268,26 +368,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       case "assistant_done": {
         set((state) => {
-          const idx = state.messages.findIndex((m) => m.id === event.message.id);
-          if (idx >= 0) {
-            const next = [...state.messages];
-            const existing = next[idx];
-            // 合并后端 metadata 与前端流式过程中积累的 metadata（主要是 reason）。
-            next[idx] = {
-              ...event.message,
-              metadata: {
-                ...(existing.metadata ?? {}),
-                ...(event.message.metadata ?? {}),
-                isReasoning: false,
-              },
-            };
-            return { messages: next, streamingMessageId: null };
-          }
+          const messages = getMessages(state, sessionId);
+          const nextMessages = finalizeAssistantMessage(messages, event.message);
+          const nextUnread = isBackground
+            ? {
+                ...state.unreadBySession,
+                [sessionId]: (state.unreadBySession[sessionId] ?? 0) + 1,
+              }
+            : state.unreadBySession;
 
-          // 兜底：id 不匹配时直接追加（正常不应发生）。
           return {
-            messages: [...state.messages, event.message],
-            streamingMessageId: null,
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: nextMessages,
+            },
+            streamingBySession: {
+              ...state.streamingBySession,
+              [sessionId]: { isStreaming: false, streamingMessageId: null },
+            },
+            unreadBySession: nextUnread,
           };
         });
         break;
@@ -295,9 +394,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       case "tool_call_start": {
         set((state) => {
-          const exists = state.messages.some(
-            (m) => m.tool_call_id === event.tool_call_id,
-          );
+          const messages = getMessages(state, sessionId);
+          const exists = messages.some((m) => m.tool_call_id === event.tool_call_id);
           if (exists) return state;
 
           const toolMessage: ChatMessage = {
@@ -312,38 +410,56 @@ export const useChatStore = create<ChatState>((set, get) => ({
               status: "running",
             },
           };
-          return { messages: [...state.messages, toolMessage] };
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: [...messages, toolMessage],
+            },
+          };
         });
         break;
       }
 
       case "tool_call_end": {
-        set((state) => ({
-          messages: state.messages.map((m) =>
-            m.tool_call_id === event.tool_call_id
-              ? {
-                  ...m,
-                  content: event.result,
-                  metadata: {
-                    ...(m.metadata ?? {}),
-                    tool_name: event.tool_name,
-                    status: event.is_error ? "error" : "done",
-                  },
-                }
-              : m,
-          ),
-        }));
+        set((state) => {
+          const messages = getMessages(state, sessionId);
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: messages.map((m) =>
+                m.tool_call_id === event.tool_call_id
+                  ? {
+                      ...m,
+                      content: event.result,
+                      metadata: {
+                        ...(m.metadata ?? {}),
+                        tool_name: event.tool_name,
+                        status: event.is_error ? "error" : "done",
+                      },
+                    }
+                  : m,
+              ),
+            },
+          };
+        });
         break;
       }
 
       case "tool_call_delta": {
-        set((state) => ({
-          messages: state.messages.map((m) =>
-            m.tool_call_id === event.tool_call_id
-              ? { ...m, content: m.content + event.delta }
-              : m,
-          ),
-        }));
+        set((state) => {
+          const messages = getMessages(state, sessionId);
+          const idx = messages.findIndex((m) => m.tool_call_id === event.tool_call_id);
+          if (idx === -1) return state;
+
+          const next = [...messages];
+          next[idx] = { ...next[idx], content: next[idx].content + event.delta };
+          return {
+            messagesBySession: {
+              ...state.messagesBySession,
+              [sessionId]: next,
+            },
+          };
+        });
         break;
       }
 
