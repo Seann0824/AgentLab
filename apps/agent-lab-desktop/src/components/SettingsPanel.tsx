@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useChatStore } from "../store/chatStore";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { ScrollContainer } from "./ScrollContainer";
 
 export function SettingsPanel() {
@@ -8,6 +9,7 @@ export function SettingsPanel() {
   const [content, setContent] = useState("");
   const [isIndexing, setIsIndexing] = useState(false);
   const [message, setMessage] = useState("");
+  const [deletingNamespace, setDeletingNamespace] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const namespaces = useChatStore((s) => s.namespaces);
@@ -75,7 +77,13 @@ export function SettingsPanel() {
   };
 
   const handleDelete = async (ns: string) => {
-    if (!confirm(`确定删除 namespace「${ns}」及其索引吗？`)) return;
+    setDeletingNamespace(ns);
+  };
+
+  const confirmDelete = async () => {
+    const ns = deletingNamespace;
+    if (!ns) return;
+    setDeletingNamespace(null);
     try {
       await deleteNamespace(ns);
       setMessage(`已删除 ${ns}`);
@@ -159,6 +167,19 @@ export function SettingsPanel() {
           )}
         </section>
       </div>
+
+      <ConfirmDialog
+        isOpen={deletingNamespace !== null}
+        title="删除知识库"
+        message={
+          deletingNamespace
+            ? `确定删除 namespace「${deletingNamespace}」及其索引吗？删除后无法恢复。`
+            : ""
+        }
+        confirmText="删除"
+        onConfirm={confirmDelete}
+        onCancel={() => setDeletingNamespace(null)}
+      />
     </ScrollContainer>
   );
 }

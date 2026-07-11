@@ -313,17 +313,18 @@ impl RagService {
             .map_err(|e| ServiceError::external(format!("[RagService] delete chunks failed: {}", e)))?
             .rows_affected();
 
-        let _ = sqlx::query("DELETE FROM rag_documents WHERE namespace = $1")
+        let documents_deleted = sqlx::query("DELETE FROM rag_documents WHERE namespace = $1")
             .bind(namespace)
             .execute(&mut *tx)
             .await
-            .map_err(|e| ServiceError::external(format!("[RagService] delete document record failed: {}", e)))?;
+            .map_err(|e| ServiceError::external(format!("[RagService] delete document record failed: {}", e)))?
+            .rows_affected();
 
         tx.commit()
             .await
             .map_err(|e| ServiceError::external(format!("[RagService] transaction commit failed: {}", e)))?;
 
-        Ok(chunks_deleted)
+        Ok(chunks_deleted + documents_deleted)
     }
 
     /// 单查询向量检索，供 retrieval 模块调用。
