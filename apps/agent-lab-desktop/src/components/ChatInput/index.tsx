@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useChatStore } from "../../store/chatStore";
+import { ModelSelector } from "../ModelSelector";
 import { ScrollContainer } from "../ScrollContainer";
 import { useModelSelector } from "./useModelSelector";
 import { useNamespaceMention } from "./useNamespaceMention";
@@ -112,39 +113,35 @@ export function ChatInput() {
             onCompositionEnd={() => rich.setIsComposing(false)}
             suppressContentEditableWarning
             data-placeholder="输入消息，Shift + Enter 换行，$ 选择知识库…"
-            className="input-minimal custom-scrollbar w-full max-h-40 overflow-y-auto resize-none py-3 pl-4 pr-[140px] text-ink whitespace-pre-wrap"
-            style={{
-              minHeight: "48px",
-              outline: "none",
-              height: `${Math.min(Math.max(rich.computedHeight, 48), 160)}px`,
-            }}
+            className="input-minimal custom-scrollbar w-full h-32 overflow-y-auto resize-none py-3 pl-4 pr-[140px] text-ink whitespace-pre-wrap"
+            style={{ outline: "none" }}
           />
-          <div className="absolute right-2 bottom-2 flex items-center gap-2">
-            <select
-              value={model.currentModelKey}
-              onChange={model.handleModelChange}
+          <div className="absolute right-3 bottom-3 flex items-center gap-2">
+            <ModelSelector
+              groups={model.modelGroups}
+              currentKey={model.currentModelKey}
+              onChange={model.selectModel}
               disabled={model.disabled}
-              className="text-xs bg-transparent text-stone hover:text-ink outline-none cursor-pointer disabled:opacity-50"
-            >
-              {model.modelOptions.length === 0 ? (
-                <option value="">无可用模型</option>
-              ) : (
-                <>
-                  <option value="">默认模型</option>
-                  {model.modelOptions.map((opt) => (
-                    <option key={opt.key} value={opt.key}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </>
-              )}
-            </select>
+            />
             <button
               onClick={handleSend}
               disabled={send.isStreaming}
-              className="btn-moss px-4 py-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label={send.isStreaming ? "思考中" : "发送"}
+              className="flex items-center justify-center w-8 h-8 bg-moss text-paper rounded-sm hover:bg-moss-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {send.isStreaming ? "思考中" : "发送"}
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
             </button>
           </div>
         </div>

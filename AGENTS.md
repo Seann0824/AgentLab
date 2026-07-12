@@ -178,12 +178,16 @@ cargo test --lib
 
 ### 5.1 LLM 基础配置（`AgentsLLM::from_env`）
 
+以下环境变量主要供 `agent-lab-core` 的独立示例（如 `rag_agent`、`novel_generation`）或 core 库的直接调用者使用：
+
 | 变量 | 说明 |
 |------|------|
 | `API_KEY` | LLM API Key（必填） |
 | `BASE_URL` | LLM 接口 base URL（必填） |
 | `MODEL` | 模型名（必填） |
 | `PROVIDER` | 提供商标识，默认 `Custom` |
+
+> **桌面端（`agent-lab-desktop`）不再读取这些环境变量作为 LLM 配置。** 桌面端通过设置面板管理 provider，配置持久化在 Tauri store（`settings.bin`）中。首次启动时会自动写入默认 DeepSeek 配置，用户可在设置里新增、编辑或删除 provider。
 
 ### 5.2 记忆/RAG/会话数据库
 
@@ -361,7 +365,7 @@ cargo test --lib
 
 ## 10. 安全注意事项
 
-- **API Key 与密码**：全部通过 `.env` 注入，`.env` 已在 `.gitignore` 中。**绝对不要将真实 key 写入源码或提交到 git**。
+- **API Key 与密码**：核心库示例通过 `.env` 注入；桌面端通过设置面板持久化到本地 store。`.env` 已在 `.gitignore` 中。**绝对不要将真实 key 写入源码或提交到 git**。
 - **Shell 工具**：`crates/agent-lab-core/src/tools/base_shell/mod.rs` 中的 `BashShell` 当前被注释导出。启用它会让 Agent 获得执行本地 shell 的能力，必须配合严格的命令白名单/沙箱，否则风险极高。
 - **SQL 注入**：存储层使用 `sqlx` 参数绑定，没有字符串拼接 SQL，基本安全。
 - **Neo4j 注入**：Cypher 查询使用 `neo4rs::query().param()` 绑定，避免拼接。
@@ -379,7 +383,7 @@ cargo test --lib
 2. 准备 PostgreSQL + pgvector，执行 `init_pg.sql`。
 3. 准备 Neo4j 并启动。
 4. 准备 Ollama 并拉取 `nomic-embed-text`。
-5. 在 `.env` 中填入 `DATABASE_URL`、`API_KEY`、`BASE_URL`、`MODEL`、`NEO4J_PASSWORD`。
+5. 在 `.env` 中填入 `DATABASE_URL`、`NEO4J_PASSWORD`；桌面端 LLM provider 在应用内设置面板配置。
 6. 安装前端依赖：`pnpm install`。
 7. 启动桌面端：
    - `pnpm desktop`

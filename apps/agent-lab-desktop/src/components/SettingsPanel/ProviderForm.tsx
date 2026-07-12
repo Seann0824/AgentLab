@@ -4,26 +4,30 @@ import { PROVIDER_OPTIONS } from "./utils";
 interface ProviderFormProps {
   provider: ProviderConfig;
   message: string;
+  embedded?: boolean;
   onChange: <K extends keyof ProviderConfig>(field: K, value: ProviderConfig[K]) => void;
   onUpdateModel: (index: number, value: string) => void;
   onAddModel: () => void;
   onRemoveModel: (index: number) => void;
   onSave: () => void;
   onCancel: () => void;
+  onDelete?: () => void;
 }
 
 export function ProviderForm({
   provider,
   message,
+  embedded = false,
   onChange,
   onUpdateModel,
   onAddModel,
   onRemoveModel,
   onSave,
   onCancel,
+  onDelete,
 }: ProviderFormProps) {
   return (
-    <div className="bg-paper border border-mist rounded-lg p-4 mb-4 space-y-4">
+    <div className={`space-y-4 ${embedded ? "" : "bg-paper border border-mist rounded-lg p-4 mb-4"}`}>
       {message && (
         <div className="text-sm text-stone bg-paper border border-mist rounded px-3 py-2">
           {message}
@@ -42,18 +46,20 @@ export function ProviderForm({
       </div>
 
       <div>
-        <label className="block text-xs text-stone mb-1">Provider</label>
-        <select
+        <label className="block text-xs text-stone mb-1">Provider 标识</label>
+        <input
+          type="text"
+          list="provider-suggestions"
           value={provider.provider}
           onChange={(e) => onChange("provider", e.currentTarget.value)}
+          placeholder="例如：DeepSeek、OpenAI、OpenRouter、Custom"
           className="input-minimal w-full py-2 px-3"
-        >
+        />
+        <datalist id="provider-suggestions">
           {PROVIDER_OPTIONS.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
+            <option key={opt} value={opt} />
           ))}
-        </select>
+        </datalist>
       </div>
 
       <div>
@@ -112,16 +118,34 @@ export function ProviderForm({
         </div>
       </div>
 
-      <div className="flex justify-end gap-3 pt-2">
-        <button
-          onClick={onCancel}
-          className="px-4 py-2 text-sm text-stone hover:text-ink transition-colors"
-        >
-          取消
-        </button>
-        <button onClick={onSave} className="btn-moss px-4 py-2 text-sm">
-          保存
-        </button>
+      <div className="flex items-center justify-between pt-2">
+        {onDelete ? (
+          <button
+            type="button"
+            onClick={onDelete}
+            className="text-xs text-stone hover:text-red-600 transition-colors"
+          >
+            删除 Provider
+          </button>
+        ) : (
+          <span />
+        )}
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-4 py-2 text-sm text-stone hover:text-ink transition-colors"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            className="btn-moss px-4 py-2 text-sm"
+          >
+            保存
+          </button>
+        </div>
       </div>
     </div>
   );

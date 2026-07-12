@@ -8,13 +8,24 @@
       "type": "shell",
       "isBackground": true,
       "command": "pnpm",
-      "args": ["-C", "apps/agent-lab-desktop", "dev"]
+      "args": ["-C", "apps/agent-lab-desktop", "dev"],
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "."
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": "ready in"
+        }
+      }
     },
     {
       "label": "ui:build",
       "type": "shell",
       "command": "pnpm",
-      "args": ["-C", "apps/agent-lab-desktop", "build"]
+      "args": ["-C", "apps/agent-lab-desktop", "build"],
+      "problemMatcher": []
     }
   ]
 }

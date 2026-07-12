@@ -92,8 +92,8 @@ impl AgentsLLM {
             .map_err(|_| AgentLabError::EnvVarMissing { name: "API_KEY" })?;
         let base_url = std::env::var("BASE_URL")
             .map_err(|_| AgentLabError::EnvVarMissing { name: "BASE_URL" })?;
-        let model = std::env::var("MODEL")
-            .map_err(|_| AgentLabError::EnvVarMissing { name: "MODEL" })?;
+        let model =
+            std::env::var("MODEL").map_err(|_| AgentLabError::EnvVarMissing { name: "MODEL" })?;
         let provider = std::env::var("PROVIDER").unwrap_or_else(|_| "Custom".into());
 
         Ok(Self::builder()
@@ -112,7 +112,7 @@ impl AgentsLLM {
     ) -> impl Stream<Item = ChatCompletionStreamResponse> + use<> {
         // build request
         let req = ChatCompletionStreamRequest::new(self.model.clone(), messages)
-            .temperature(temperature.unwrap_or(0f64))
+            .temperature(temperature.unwrap_or(1f64))
             .tools(tools.unwrap_or(vec![]))
             .tool_choice(openai_api_rs::v1::chat_completion::ToolChoiceType::Auto);
 

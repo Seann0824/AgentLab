@@ -34,8 +34,6 @@ fn default_model_selection() -> ModelSelection {
 }
 
 /// 从 store 读取 providers；为空时写入默认 DeepSeek 配置。
-/// 若环境变量中已配置 LLM，则把 key/url/model 预填充到默认 DeepSeek provider，
-/// 保证老用户升级后无需重新填写。
 fn init_providers(app: &tauri::AppHandle) -> Result<Vec<ProviderConfig>, String> {
     let store = app.store(STORE_NAME).map_err(|e| e.to_string())?;
     let configs: Vec<ProviderConfig> = store
@@ -44,22 +42,7 @@ fn init_providers(app: &tauri::AppHandle) -> Result<Vec<ProviderConfig>, String>
         .unwrap_or_default();
 
     if configs.is_empty() {
-        let mut default_provider = default_deepseek_provider();
-
-        // 兼容老版本 .env 配置：预填充 API Key / Base URL / 默认模型。
-        if let Ok(api_key) = std::env::var("API_KEY") {
-            default_provider.api_key = api_key;
-        }
-        if let Ok(base_url) = std::env::var("BASE_URL") {
-            default_provider.base_url = base_url;
-        }
-        if let Ok(model) = std::env::var("MODEL") {
-            if !default_provider.models.contains(&model) {
-                default_provider.models.insert(0, model.clone());
-            }
-        }
-
-        let default_configs = vec![default_provider];
+        let default_configs = vec![default_deepseek_provider()];
         store.set(
             PROVIDERS_KEY,
             serde_json::to_value(&default_configs).map_err(|e| e.to_string())?,
@@ -93,22 +76,21 @@ fn init_default_model(app: &tauri::AppHandle) -> Result<ModelSelection, String> 
 
 /// 根据默认模型配置构造 LLM。
 /// 若默认 provider 存在，即使 api_key 为空也使用它（启动时不强依赖 key）。
-/// 若找不到默认 provider，则退回到从环境变量构造（保持向后兼容）。
 fn build_default_llm(
     providers: &[ProviderConfig],
     default_model: &ModelSelection,
 ) -> Result<AgentsLLM, String> {
-    if let Some(provider) = providers.iter().find(|p| p.id == default_model.provider_id) {
-        let model = if provider.models.contains(&default_model.model) {
-            default_model.model.clone()
-        } else {
-            provider.models.first().cloned().unwrap_or_default()
-        };
-        return Ok(AgentsLLM::from_config_with_model(provider, &model));
-    }
+    let provider = providers
+        .iter()
+        .find(|p| p.id == default_model.provider_id)
+        .ok_or_else(|| format!("找不到默认 provider: {}", default_model.provider_id))?;
 
-    // 兜底：尝试从环境变量读取。
-    AgentsLLM::from_env().map_err(|e| format!("LLM 配置缺失: {}", e))
+    let model = if provider.models.contains(&default_model.model) {
+        default_model.model.clone()
+    } else {
+        provider.models.first().cloned().unwrap_or_default()
+    };
+    Ok(AgentsLLM::from_config_with_model(provider, &model))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

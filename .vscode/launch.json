@@ -12,8 +12,12 @@
         "args": [
           "build",
           "--manifest-path=./apps/agent-lab-desktop/src-tauri/Cargo.toml",
-          "--no-default-features"
-        ]
+          "--bin=agent-lab-desktop"
+        ],
+        "filter": {
+          "name": "agent-lab-desktop",
+          "kind": "bin"
+        }
       },
       "preLaunchTask": "ui:dev"
     },
@@ -25,8 +29,13 @@
         "args": [
           "build",
           "--release",
-          "--manifest-path=./apps/agent-lab-desktop/src-tauri/Cargo.toml"
-        ]
+          "--manifest-path=./apps/agent-lab-desktop/src-tauri/Cargo.toml",
+          "--bin=agent-lab-desktop"
+        ],
+        "filter": {
+          "name": "agent-lab-desktop",
+          "kind": "bin"
+        }
       },
       "preLaunchTask": "ui:build"
     }

@@ -39,6 +39,9 @@ interface ChatState {
   providers: ProviderConfig[];
   defaultModel: ModelSelection | null;
   selectedModelBySession: Record<string, ModelSelection>;
+  // 虚拟 session 的模型选择：在没有真实 session 时，用户仍可提前选择模型，
+  // 待 createSession 创建真实 session 后自动转移过去。
+  pendingSessionModel: ModelSelection | null;
 
   // actions
   loadSessions: () => Promise<void>;
@@ -59,6 +62,7 @@ interface ChatState {
   removeProvider: (id: string) => Promise<void>;
   setDefaultModel: (selection: ModelSelection) => Promise<void>;
   setSelectedModelForSession: (sessionId: string, selection: ModelSelection | null) => void;
+  setPendingSessionModel: (selection: ModelSelection | null) => void;
 
   // 按 session 读取的便捷 getter
   getSessionMessages: (sessionId: string) => ChatMessage[];
@@ -364,6 +368,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   providers: [],
   defaultModel: null,
   selectedModelBySession: {},
+  pendingSessionModel: null,
 
   getSessionMessages: (sessionId) => getMessages(get(), sessionId),
   getSessionStreamingState: (sessionId) => getStreamingState(get(), sessionId),
@@ -400,7 +405,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       title: "新会话",
       updated_at: Math.floor(Date.now() / 1000),
     };
-    const defaultModel = get().defaultModel;
+    // 如果存在虚拟 session 的模型选择，创建真实 session 时自动转移。
+    const initialModel = get().pendingSessionModel;
     set((state) => ({
       sessions: [newSession, ...state.sessions],
       currentSessionId: id,
@@ -410,9 +416,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         [id]: { isStreaming: false, streamingMessageId: null },
       },
       unreadBySession: { ...state.unreadBySession, [id]: 0 },
-      selectedModelBySession: defaultModel
-        ? { ...state.selectedModelBySession, [id]: defaultModel }
+      selectedModelBySession: initialModel
+        ? { ...state.selectedModelBySession, [id]: initialModel }
         : state.selectedModelBySession,
+      pendingSessionModel: null,
     }));
   },
 
@@ -439,6 +446,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const { [id]: _removedMessages, ...restMessages } = state.messagesBySession;
       const { [id]: _removedStreaming, ...restStreaming } = state.streamingBySession;
       const { [id]: _removedUnread, ...restUnread } = state.unreadBySession;
+      const { [id]: _removedModel, ...restSelectedModels } = state.selectedModelBySession;
 
       return {
         sessions: remaining,
@@ -446,6 +454,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         messagesBySession: restMessages,
         streamingBySession: restStreaming,
         unreadBySession: restUnread,
+        selectedModelBySession: restSelectedModels,
       };
     });
 
@@ -571,5 +580,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         },
       };
     });
+  },
+
+  setPendingSessionModel: (selection) => {
+    set({ pendingSessionModel: selection });
   },
 }));
