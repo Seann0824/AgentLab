@@ -13,6 +13,7 @@ use crate::base::provider_config::ModelSelection;
 use crate::error::AgentLabError;
 use crate::services::chat_dto::{ChatMessage, SessionSummary};
 use crate::services::{MessageService, ProviderResolver, RagService, SessionService};
+use crate::tools::memory_tool::MemoryTool;
 use crate::tools::rag_tool::RagTool;
 use crate::tools::time_tool::TimeTool;
 use crate::tools::web_search::WebSearch;
@@ -30,6 +31,7 @@ pub struct ChatService {
     llm: AgentsLLM,
     user_id: String,
     rag_service: Option<RagService>,
+    memory_tool: Option<MemoryTool>,
     /// 按 session 串行化发送，防止同一会话并发产生交错消息。
     send_locks: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
     /// Provider 解析器，用于根据前端传入的 model_selection 动态切换 LLM。
@@ -49,6 +51,7 @@ impl ChatService {
             llm,
             user_id: user_id.into(),
             rag_service: None,
+            memory_tool: None,
             send_locks: Mutex::new(HashMap::new()),
             resolver: None,
         }
@@ -57,6 +60,12 @@ impl ChatService {
     /// 注入 RAG 服务；注入后 Agent 才能使用 rag 工具。
     pub fn with_rag_service(mut self, rag_service: RagService) -> Self {
         self.rag_service = Some(rag_service);
+        self
+    }
+
+    /// 注入记忆工具；注入后 Agent 才能使用 memory 工具管理长期记忆。
+    pub fn with_memory_tool(mut self, memory_tool: MemoryTool) -> Self {
+        self.memory_tool = Some(memory_tool);
         self
     }
 
@@ -92,6 +101,10 @@ impl ChatService {
                     .with_default_namespace(default_namespace),
             );
             builder = builder.tool(rag_tool);
+        }
+
+        if let Some(memory_tool) = &self.memory_tool {
+            builder = builder.tool(Box::new(memory_tool.clone()));
         }
 
         builder.build()

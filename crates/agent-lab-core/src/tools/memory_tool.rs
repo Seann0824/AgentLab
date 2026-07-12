@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use openai_api_rs::v1::types;
 use tokio::sync::Mutex;
@@ -9,8 +10,9 @@ use crate::services::MemoryService;
 use crate::tools::types::Tool;
 
 /// 记忆管理 Tool：面向 LLM 提供记忆增删改查、整合、遗忘能力。
+#[derive(Clone)]
 pub struct MemoryTool {
-    inner: Mutex<MemoryToolInner>,
+    inner: Arc<Mutex<MemoryToolInner>>,
 }
 
 struct MemoryToolInner {
@@ -41,7 +43,7 @@ impl MemoryTool {
         .await?;
 
         Ok(Self {
-            inner: Mutex::new(MemoryToolInner { memory_service }),
+            inner: Arc::new(Mutex::new(MemoryToolInner { memory_service })),
         })
     }
 }
@@ -211,162 +213,73 @@ impl Tool for MemoryTool {
         let mut inner = self.inner.lock().await;
 
         match action {
-            "add" => {
-                let content = args["content"].as_str().unwrap_or("").to_string();
-                if content.is_empty() {
-                    return Err("content 不能为空".into());
-                }
-                let memory_type = args["memory_type"]
-                    .as_str()
-                    .unwrap_or("working")
-                    .to_string();
-                let importance = args["importance"].as_f64().map(|v| v as f32);
-                let id = inner
-                    .memory_service
-                    .add_memory(content, memory_type, importance.unwrap_or(0.5), None)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Ok(format!("记忆已添加 （ID: {}）", id))
-            }
-            "search" => {
-                let query = args["query"].as_str().unwrap_or("").to_string();
-                if query.is_empty() {
-                    return Err("query 不能为空".into());
-                }
-                let limit = args["limit"].as_u64().map(|v| v as usize).unwrap_or(5);
-                let memory_type = args["memory_type"].as_str().map(|v| v.to_string());
-                let memory_types = memory_type.map(|t| vec![t]).unwrap_or_default();
-
-                let results = inner
-                    .memory_service
-                    .search_memories(&query, limit, &memory_types, 0.1)
-                    .await
-                    .map_err(|e| e.to_string())?;
-
-                if results.is_empty() {
-                    return Ok(format!("未找到与 {} 相关的记忆", query));
-                }
-
-                let type_label_map = HashMap::from([
-                    ("working", "工作记忆"),
-                    ("episodic", "情景记忆"),
-                    ("semantic", "语义记忆"),
-                    ("perceptual", "感知记忆"),
-                ]);
-
-                let mut formatted = vec![format!("找到 {} 条相关记忆", results.len())];
-                for (i, memory) in results.iter().enumerate() {
-                    let label = type_label_map
-                        .get(memory.memory_type.as_str())
-                        .unwrap_or(&"未知类型");
-                    let preview = if memory.content.len() > 80 {
-                        format!("{} ...", memory.content.chars().take(80).collect::<String>())
-                    } else {
-                        memory.content.clone()
-                    };
-                    formatted.push(format!(
-                        "{}. [{}] {} (重要性: {})",
-                        i + 1,
-                        label,
-                        preview,
-                        memory.importance
-                    ));
-                }
-                Ok(formatted.join("\n"))
-            }
-            "summary" => {
-                let memory_type = args["memory_type"].as_str().unwrap_or("working");
-                let limit = args["limit"].as_u64().map(|v| v as usize).unwrap_or(5);
-                inner
-                    .memory_service
-                    .get_summary(memory_type, limit)
-                    .await
-                    .map_err(|e| e.to_string())
-            }
-            "stats" => {
-                let memory_type = args["memory_type"].as_str().unwrap_or("working");
-                inner
-                    .memory_service
-                    .get_stats(memory_type)
-                    .await
-                    .map_err(|e| e.to_string())
-            }
-            "update" => {
-                let memory_id = args["memory_id"].as_str().unwrap_or("").to_string();
-                if memory_id.is_empty() {
-                    return Err("memory_id 不能为空".into());
-                }
-                let content = args["content"].as_str().map(|v| v.to_string());
-                let importance = args["importance"].as_f64().map(|v| v as f32);
-                let metadata = args.get("metadata").cloned();
-                let ok = inner
-                    .memory_service
-                    .update_memory(&memory_id, content.as_deref(), importance, metadata)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                if ok {
-                    Ok(format!("记忆 {} 更新成功", memory_id))
-                } else {
-                    Ok(format!("未找到记忆 {}", memory_id))
-                }
-            }
-            "remove" => {
-                let memory_id = args["memory_id"].as_str().unwrap_or("").to_string();
-                if memory_id.is_empty() {
-                    return Err("memory_id 不能为空".into());
-                }
-                let ok = inner
-                    .memory_service
-                    .remove_memory(&memory_id)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                if ok {
-                    Ok(format!("记忆 {} 已删除", memory_id))
-                } else {
-                    Ok(format!("未找到记忆 {}", memory_id))
-                }
-            }
-            "forget" => {
-                let memory_type = args["memory_type"].as_str().unwrap_or("working");
-                let strategy = args["strategy"].as_str().unwrap_or("importance_based");
-                let threshold = args["threshold"].as_f64().map(|v| v as f32).unwrap_or(0.1);
-                let max_age_days = args["max_age_days"].as_u64().map(|v| v as i64).unwrap_or(30);
-                let count = inner
-                    .memory_service
-                    .forget_by_type(memory_type, strategy, threshold, max_age_days)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Ok(format!(
-                    "已遗忘 {} 条 {} 记忆（策略: {}）",
-                    count, memory_type, strategy
-                ))
-            }
-            "consolidate" => {
-                let from_type = args["from_type"].as_str().unwrap_or("working").to_string();
-                let to_type = args["to_type"].as_str().unwrap_or("episodic").to_string();
-                let importance_threshold = args["importance_threshold"]
-                    .as_f64()
-                    .map(|v| v as f32)
-                    .unwrap_or(0.7);
-                let count = inner
-                    .memory_service
-                    .consolidate_memories(&from_type, &to_type, importance_threshold)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Ok(format!(
-                    "已整合 {} 条记忆为长期记忆（{} → {}，阈值={}）",
-                    count, from_type, to_type, importance_threshold
-                ))
-            }
-            "clear_all" => {
-                let memory_type = args["memory_type"].as_str();
-                let count = inner
-                    .memory_service
-                    .clear_all(memory_type)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Ok(format!("已清空 {} 条记忆", count))
-            }
+            "add" => inner
+                .memory_service
+                .add_memory_agent(
+                    args["content"].as_str(),
+                    args["memory_type"].as_str(),
+                    args["importance"].as_f64().map(|v| v as f32),
+                )
+                .await
+                .map_err(|e| e.to_string()),
+            "search" => inner
+                .memory_service
+                .search_memories_agent(
+                    args["query"].as_str(),
+                    args["memory_type"].as_str(),
+                    args["limit"].as_u64(),
+                )
+                .await
+                .map_err(|e| e.to_string()),
+            "summary" => inner
+                .memory_service
+                .summary_agent(args["memory_type"].as_str(), args["limit"].as_u64())
+                .await
+                .map_err(|e| e.to_string()),
+            "stats" => inner
+                .memory_service
+                .stats_agent(args["memory_type"].as_str())
+                .await
+                .map_err(|e| e.to_string()),
+            "update" => inner
+                .memory_service
+                .update_memory_agent(
+                    args["memory_id"].as_str(),
+                    args["content"].as_str(),
+                    args["importance"].as_f64().map(|v| v as f32),
+                    args.get("metadata").cloned(),
+                )
+                .await
+                .map_err(|e| e.to_string()),
+            "remove" => inner
+                .memory_service
+                .remove_memory_agent(args["memory_id"].as_str())
+                .await
+                .map_err(|e| e.to_string()),
+            "forget" => inner
+                .memory_service
+                .forget_by_type_agent(
+                    args["memory_type"].as_str(),
+                    args["strategy"].as_str(),
+                    args["threshold"].as_f64().map(|v| v as f32),
+                    args["max_age_days"].as_u64(),
+                )
+                .await
+                .map_err(|e| e.to_string()),
+            "consolidate" => inner
+                .memory_service
+                .consolidate_memories_agent(
+                    args["from_type"].as_str(),
+                    args["to_type"].as_str(),
+                    args["importance_threshold"].as_f64().map(|v| v as f32),
+                )
+                .await
+                .map_err(|e| e.to_string()),
+            "clear_all" => inner
+                .memory_service
+                .clear_all_agent(args["memory_type"].as_str())
+                .await
+                .map_err(|e| e.to_string()),
             _ => Err(format!("不支持的 action: {}", action)),
         }
     }

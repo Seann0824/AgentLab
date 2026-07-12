@@ -7,6 +7,7 @@ use agent_lab_core::base::provider_config::{ModelSelection, ProviderConfig};
 use agent_lab_core::db::get_db_client;
 use agent_lab_core::services::{ChatService, MessageService, RagService, SessionService};
 use agent_lab_core::storage::ChatStore;
+use agent_lab_core::tools::memory_tool::MemoryTool;
 use state::AppState;
 use tauri::Manager;
 use tauri_plugin_store::StoreExt;
@@ -134,6 +135,10 @@ pub fn run() {
 
             let database_url =
                 std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
+            let neo4j_url = std::env::var("NEO4J_URL").unwrap_or_else(|_| "neo4j://127.0.0.1:7687".into());
+            let neo4j_user = std::env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".into());
+            let neo4j_password = std::env::var("NEO4J_PASSWORD").unwrap_or_default();
+
             let db = tauri::async_runtime::block_on(async { get_db_client(&database_url).await });
             let chat_store = ChatStore::new(db.clone());
             let session_service = SessionService::new(chat_store.clone());
@@ -143,15 +148,42 @@ pub fn run() {
                 app.handle().clone(),
             );
 
-            app.manage(AppState {
-                chat_service: ChatService::new(
-                    llm,
-                    session_service,
-                    message_service,
-                    "default_user",
+            let memory_tool = tauri::async_runtime::block_on(async {
+                if neo4j_password.is_empty() {
+                    eprintln!("NEO4J_PASSWORD 未设置，memory tool 不可用");
+                    return None;
+                }
+                match MemoryTool::new(
+                    llm.clone(),
+                    &database_url,
+                    neo4j_url,
+                    neo4j_user,
+                    neo4j_password,
                 )
-                .with_resolver(resolver)
-                .with_rag_service(rag_service.clone()),
+                .await
+                {
+                    Ok(tool) => Some(tool),
+                    Err(e) => {
+                        eprintln!("MemoryTool 初始化失败，memory tool 不可用: {}", e);
+                        None
+                    }
+                }
+            });
+
+            let mut chat_service = ChatService::new(
+                llm,
+                session_service,
+                message_service,
+                "default_user",
+            )
+            .with_resolver(resolver)
+            .with_rag_service(rag_service.clone());
+            if let Some(tool) = memory_tool {
+                chat_service = chat_service.with_memory_tool(tool);
+            }
+
+            app.manage(AppState {
+                chat_service,
                 rag_service,
             });
             #[cfg(debug_assertions)]

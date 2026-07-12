@@ -330,4 +330,169 @@ impl MemoryService {
             }
         }
     }
+
+    // === 面向 Agent 的便捷方法：参数校验、默认值、结果格式化统一放在 Service ===
+
+    pub async fn add_memory_agent(
+        &mut self,
+        content: Option<&str>,
+        memory_type: Option<&str>,
+        importance: Option<f32>,
+    ) -> Result<String, AgentLabError> {
+        let content = content.ok_or_else(|| ServiceError::invalid_argument("content 不能为空"))?;
+        if content.is_empty() {
+            return Err(ServiceError::invalid_argument("content 不能为空"))?;
+        }
+        let memory_type = memory_type.unwrap_or("working").to_string();
+        let importance = importance.unwrap_or(0.5);
+        let id = self.add_memory(content.into(), memory_type, importance, None).await?;
+        Ok(format!("记忆已添加（ID: {}）", id))
+    }
+
+    pub async fn search_memories_agent(
+        &mut self,
+        query: Option<&str>,
+        memory_type: Option<&str>,
+        limit: Option<u64>,
+    ) -> Result<String, AgentLabError> {
+        let query = query.ok_or_else(|| ServiceError::invalid_argument("query 不能为空"))?;
+        if query.is_empty() {
+            return Err(ServiceError::invalid_argument("query 不能为空"))?;
+        }
+        let limit = limit.unwrap_or(5) as usize;
+        let memory_types: Vec<String> = memory_type.map(|t| vec![t.into()]).unwrap_or_default();
+
+        let results = self.search_memories(query, limit, &memory_types, 0.1).await?;
+        if results.is_empty() {
+            return Ok(format!("未找到与 {} 相关的记忆", query));
+        }
+
+        let mut formatted = vec![format!("找到 {} 条相关记忆", results.len())];
+        for (i, memory) in results.iter().enumerate() {
+            let label = memory_type_label(&memory.memory_type);
+            let preview = if memory.content.len() > 80 {
+                format!("{} ...", memory.content.chars().take(80).collect::<String>())
+            } else {
+                memory.content.clone()
+            };
+            formatted.push(format!(
+                "{}. [{}] {} (重要性: {})",
+                i + 1,
+                label,
+                preview,
+                memory.importance
+            ));
+        }
+        Ok(formatted.join("\n"))
+    }
+
+    pub async fn update_memory_agent(
+        &mut self,
+        memory_id: Option<&str>,
+        content: Option<&str>,
+        importance: Option<f32>,
+        metadata: Option<Value>,
+    ) -> Result<String, AgentLabError> {
+        let memory_id =
+            memory_id.ok_or_else(|| ServiceError::invalid_argument("memory_id 不能为空"))?;
+        if memory_id.is_empty() {
+            return Err(ServiceError::invalid_argument("memory_id 不能为空"))?;
+        }
+        let ok = self
+            .update_memory(memory_id, content, importance, metadata)
+            .await?;
+        if ok {
+            Ok(format!("记忆 {} 更新成功", memory_id))
+        } else {
+            Ok(format!("未找到记忆 {}", memory_id))
+        }
+    }
+
+    pub async fn remove_memory_agent(
+        &mut self,
+        memory_id: Option<&str>,
+    ) -> Result<String, AgentLabError> {
+        let memory_id =
+            memory_id.ok_or_else(|| ServiceError::invalid_argument("memory_id 不能为空"))?;
+        if memory_id.is_empty() {
+            return Err(ServiceError::invalid_argument("memory_id 不能为空"))?;
+        }
+        let ok = self.remove_memory(memory_id).await?;
+        if ok {
+            Ok(format!("记忆 {} 已删除", memory_id))
+        } else {
+            Ok(format!("未找到记忆 {}", memory_id))
+        }
+    }
+
+    pub async fn forget_by_type_agent(
+        &self,
+        memory_type: Option<&str>,
+        strategy: Option<&str>,
+        threshold: Option<f32>,
+        max_age_days: Option<u64>,
+    ) -> Result<String, AgentLabError> {
+        let memory_type = memory_type.unwrap_or("working");
+        let strategy = strategy.unwrap_or("importance_based");
+        let threshold = threshold.unwrap_or(0.1);
+        let max_age_days = max_age_days.unwrap_or(30) as i64;
+        let count = self
+            .forget_by_type(memory_type, strategy, threshold, max_age_days)
+            .await?;
+        Ok(format!(
+            "已遗忘 {} 条 {} 记忆（策略: {}）",
+            count, memory_type, strategy
+        ))
+    }
+
+    pub async fn consolidate_memories_agent(
+        &mut self,
+        from_type: Option<&str>,
+        to_type: Option<&str>,
+        importance_threshold: Option<f32>,
+    ) -> Result<String, AgentLabError> {
+        let from_type = from_type.unwrap_or("working");
+        let to_type = to_type.unwrap_or("episodic");
+        let importance_threshold = importance_threshold.unwrap_or(0.7);
+        let count = self
+            .consolidate_memories(from_type, to_type, importance_threshold)
+            .await?;
+        Ok(format!(
+            "已整合 {} 条记忆为长期记忆（{} → {}，阈值={}）",
+            count, from_type, to_type, importance_threshold
+        ))
+    }
+
+    pub async fn clear_all_agent(
+        &mut self,
+        memory_type: Option<&str>,
+    ) -> Result<String, AgentLabError> {
+        let count = self.clear_all(memory_type).await?;
+        Ok(format!("已清空 {} 条记忆", count))
+    }
+
+    pub async fn summary_agent(
+        &self,
+        memory_type: Option<&str>,
+        limit: Option<u64>,
+    ) -> Result<String, AgentLabError> {
+        let memory_type = memory_type.unwrap_or("working");
+        let limit = limit.unwrap_or(5) as usize;
+        self.get_summary(memory_type, limit).await
+    }
+
+    pub async fn stats_agent(&self, memory_type: Option<&str>) -> Result<String, AgentLabError> {
+        let memory_type = memory_type.unwrap_or("working");
+        self.get_stats(memory_type).await
+    }
+}
+
+fn memory_type_label(memory_type: &str) -> &'static str {
+    match memory_type {
+        "working" => "工作记忆",
+        "episodic" => "情景记忆",
+        "semantic" => "语义记忆",
+        "perceptual" => "感知记忆",
+        _ => "未知类型",
+    }
 }
