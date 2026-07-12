@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import {
   chatCompletionStream,
-  createChatSession,
   deleteChatSession,
   deleteNamespace,
   getChatHistory,
@@ -40,13 +39,15 @@ interface ChatState {
   defaultModel: ModelSelection | null;
   selectedModelBySession: Record<string, ModelSelection>;
   // 虚拟 session 的模型选择：在没有真实 session 时，用户仍可提前选择模型，
-  // 待 createSession 创建真实 session 后自动转移过去。
+  // 待发送第一条消息创建真实 session 后自动转移过去。
   pendingSessionModel: ModelSelection | null;
+  // 侧边栏折叠状态
+  isSidebarCollapsed: boolean;
 
   // actions
   loadSessions: () => Promise<void>;
   selectSession: (id: string) => Promise<void>;
-  createSession: () => Promise<void>;
+  startNewChat: () => void;
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
@@ -54,6 +55,7 @@ interface ChatState {
   loadNamespaces: () => Promise<void>;
   indexDocument: (namespace: string, content: string, source: string) => Promise<IndexDocumentResult>;
   deleteNamespace: (namespace: string) => Promise<boolean>;
+  toggleSidebar: () => void;
 
   // 模型配置 actions
   loadProviders: () => Promise<void>;
@@ -68,7 +70,7 @@ interface ChatState {
   getSessionMessages: (sessionId: string) => ChatMessage[];
   getSessionStreamingState: (sessionId: string) => StreamingState;
   getSessionUnreadCount: (sessionId: string) => number;
-  getSelectedModelForSession: (sessionId: string) => ModelSelection | null;
+  getSelectedModelForSession: (sessionId: string | null) => ModelSelection | null;
 }
 
 interface StreamEventContext {
@@ -369,12 +371,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
   defaultModel: null,
   selectedModelBySession: {},
   pendingSessionModel: null,
+  isSidebarCollapsed: false,
 
   getSessionMessages: (sessionId) => getMessages(get(), sessionId),
   getSessionStreamingState: (sessionId) => getStreamingState(get(), sessionId),
   getSessionUnreadCount: (sessionId) => get().unreadBySession[sessionId] ?? 0,
   getSelectedModelForSession: (sessionId) =>
-    get().selectedModelBySession[sessionId] ?? get().defaultModel,
+    sessionId
+      ? (get().selectedModelBySession[sessionId] ?? get().defaultModel)
+      : (get().pendingSessionModel ?? get().defaultModel),
 
   loadSessions: async () => {
     const sessions = await listChatSessions();
@@ -398,29 +403,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  createSession: async () => {
-    const id = await createChatSession();
-    const newSession: SessionSummary = {
-      id,
-      title: "新会话",
-      updated_at: Math.floor(Date.now() / 1000),
-    };
-    // 如果存在虚拟 session 的模型选择，创建真实 session 时自动转移。
-    const initialModel = get().pendingSessionModel;
-    set((state) => ({
-      sessions: [newSession, ...state.sessions],
-      currentSessionId: id,
-      messagesBySession: { ...state.messagesBySession, [id]: [] },
-      streamingBySession: {
-        ...state.streamingBySession,
-        [id]: { isStreaming: false, streamingMessageId: null },
-      },
-      unreadBySession: { ...state.unreadBySession, [id]: 0 },
-      selectedModelBySession: initialModel
-        ? { ...state.selectedModelBySession, [id]: initialModel }
-        : state.selectedModelBySession,
-      pendingSessionModel: null,
-    }));
+  startNewChat: () => {
+    set((state) => {
+      const { ["__pending__"]: _pendingMessages, ...restMessages } = state.messagesBySession;
+      const { ["__pending__"]: _pendingStreaming, ...restStreaming } = state.streamingBySession;
+      return {
+        currentSessionId: null,
+        pendingSessionModel: null,
+        messagesBySession: restMessages,
+        streamingBySession: restStreaming,
+      };
+    });
   },
 
   deleteSession: async (id) => {
@@ -475,36 +468,82 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (content) => {
-    let targetSessionId = get().currentSessionId;
-    if (!targetSessionId) {
-      await get().createSession();
-      targetSessionId = get().currentSessionId;
-      if (!targetSessionId) return;
-    }
+    const initialSessionId = get().currentSessionId;
+    // 新会话模式下使用临时 key 缓存流式状态，待后端返回真实 session_id 后迁移。
+    const tempSessionId = initialSessionId ?? "__pending__";
+    const modelSelection = get().getSelectedModelForSession(initialSessionId);
 
     set((state) => ({
       streamingBySession: {
         ...state.streamingBySession,
-        [targetSessionId]: { isStreaming: true, streamingMessageId: null },
+        [tempSessionId]: { isStreaming: true, streamingMessageId: null },
       },
     }));
 
-    const modelSelection = get().getSelectedModelForSession(targetSessionId);
+    // 流式回调通过闭包变量读取当前生效的 session id；创建新会话时会从 temp 切换到真实 id。
+    let activeSessionId = tempSessionId;
 
     try {
-      await chatCompletionStream(
-        targetSessionId,
+      const returnedSessionId = await chatCompletionStream(
+        initialSessionId,
         content,
         modelSelection,
         (event) => {
-          get().handleStreamEvent(event, targetSessionId);
+          get().handleStreamEvent(event, activeSessionId);
         },
       );
+
+      // 后端创建了新会话：把临时 key 下的消息/流式状态迁移到真实 session。
+      if (returnedSessionId !== initialSessionId) {
+        activeSessionId = returnedSessionId;
+        set((state) => {
+          const pendingMessages = state.messagesBySession[tempSessionId] ?? [];
+          const pendingStreaming = state.streamingBySession[tempSessionId] ?? {
+            isStreaming: false,
+            streamingMessageId: null,
+          };
+          const pendingModel = state.pendingSessionModel;
+
+          const { [tempSessionId]: _removedMessages, ...restMessages } =
+            state.messagesBySession;
+          const { [tempSessionId]: _removedStreaming, ...restStreaming } =
+            state.streamingBySession;
+
+          const firstUserMessage = pendingMessages.find((m) => m.role === "user");
+          const newSession: SessionSummary = {
+            id: returnedSessionId,
+            title: firstUserMessage
+              ? formatTitle(firstUserMessage.content)
+              : "新会话",
+            updated_at: Math.floor(Date.now() / 1000),
+          };
+
+          return {
+            currentSessionId: returnedSessionId,
+            sessions: [newSession, ...state.sessions],
+            messagesBySession: {
+              ...restMessages,
+              [returnedSessionId]: pendingMessages,
+            },
+            streamingBySession: {
+              ...restStreaming,
+              [returnedSessionId]: pendingStreaming,
+            },
+            selectedModelBySession: pendingModel
+              ? {
+                  ...state.selectedModelBySession,
+                  [returnedSessionId]: pendingModel,
+                }
+              : state.selectedModelBySession,
+            pendingSessionModel: null,
+          };
+        });
+      }
     } finally {
       set((state) => ({
         streamingBySession: {
           ...state.streamingBySession,
-          [targetSessionId]: { isStreaming: false, streamingMessageId: null },
+          [activeSessionId]: { isStreaming: false, streamingMessageId: null },
         },
       }));
       // 刷新会话列表，使后台完成的会话排序与标题保持最新。
@@ -514,7 +553,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   handleStreamEvent: (event, sessionId) => {
     const { currentSessionId } = get();
-    const isBackground = sessionId !== currentSessionId;
+    // 当前未选中任何会话时（新会话刚发送第一条消息），所有事件都属于当前前台流式。
+    const isBackground = currentSessionId !== null && sessionId !== currentSessionId;
     const handler = streamEventHandlers[event.type];
     if (handler) {
       handler(event as never, sessionId, { get, set, isBackground });
@@ -540,6 +580,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await get().loadNamespaces();
     }
     return ok;
+  },
+
+  toggleSidebar: () => {
+    set((state) => ({ isSidebarCollapsed: !state.isSidebarCollapsed }));
   },
 
   loadProviders: async () => {

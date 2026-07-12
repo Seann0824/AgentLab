@@ -11,18 +11,18 @@ export function useSendMessage(): UseSendMessageReturn {
   const isStreaming = useChatStore((s) =>
     currentSessionId
       ? (s.streamingBySession[currentSessionId]?.isStreaming ?? false)
-      : false,
+      : (s.streamingBySession["__pending__"]?.isStreaming ?? false),
   );
   const sendMessage = useChatStore((s) => s.sendMessage);
 
   const handleSend = useCallback(
     async (text: string) => {
-      if (!currentSessionId || isStreaming) return;
+      if (isStreaming) return;
       const trimmed = text.trim();
       if (!trimmed) return;
       await sendMessage(trimmed);
     },
-    [currentSessionId, isStreaming, sendMessage],
+    [isStreaming, sendMessage],
   );
 
   return { isStreaming, handleSend };

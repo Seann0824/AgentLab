@@ -7,6 +7,7 @@ interface SessionItemProps {
   isActive: boolean;
   isStreaming: boolean;
   unreadCount: number;
+  collapsed?: boolean;
   onSelect: () => void;
   onRename: (title: string) => void;
   onDelete: () => void;
@@ -17,11 +18,51 @@ export function SessionItem({
   isActive,
   isStreaming,
   unreadCount,
+  collapsed,
   onSelect,
   onRename,
   onDelete,
 }: SessionItemProps) {
   const edit = useInlineEdit(session.title, onRename);
+
+  if (collapsed) {
+    return (
+      <div
+        onClick={onSelect}
+        title={session.title}
+        className={`
+          group relative py-3 px-2 cursor-pointer transition-all flex justify-center
+          ${
+            isActive
+              ? "bg-paper-dark"
+              : "hover:bg-paper-dark/50"
+          }
+        `}
+      >
+        <div
+          className={`
+            w-9 h-9 rounded-full flex items-center justify-center text-xs font-medium
+            ${isActive ? "bg-moss text-paper" : "bg-paper text-ink"}
+          `}
+        >
+          {session.title.charAt(0) || "?"}
+        </div>
+        <div className="absolute right-1 top-1 flex flex-col items-center gap-1">
+          {isStreaming && (
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-moss animate-pulse"
+              title="思考中…"
+            />
+          )}
+          {!isStreaming && unreadCount > 0 && (
+            <span className="min-w-[14px] h-[14px] px-0.5 flex items-center justify-center rounded-full bg-red-500 text-white text-[9px] font-medium">
+              {unreadCount > 99 ? "99+" : unreadCount}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

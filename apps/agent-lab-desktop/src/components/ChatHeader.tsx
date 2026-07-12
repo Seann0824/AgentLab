@@ -26,7 +26,7 @@ export function ChatHeader() {
   if (!currentSession) {
     return (
       <header className="h-14 flex items-center px-6 border-b border-mist bg-paper">
-        <span className="text-sm text-stone">选择一个会话开始对话</span>
+        <span className="text-sm text-stone">新会话</span>
       </header>
     );
   }
