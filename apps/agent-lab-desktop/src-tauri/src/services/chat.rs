@@ -1,4 +1,5 @@
 use agent_lab_core::base::agent::AgentStreamEvent;
+use agent_lab_core::base::provider_config::ModelSelection;
 use agent_lab_core::services::ChatService;
 use tauri::ipc::Channel;
 use tokio::sync::mpsc;
@@ -9,6 +10,7 @@ pub async fn chat_completion_stream(
     channel: Channel<AgentStreamEvent>,
     session_id: Option<String>,
     message: String,
+    model_selection: Option<ModelSelection>,
 ) -> Result<String, String> {
     let (tx, mut rx) = mpsc::channel::<AgentStreamEvent>(64);
 
@@ -22,7 +24,7 @@ pub async fn chat_completion_stream(
     });
 
     chat_service
-        .send_message(session_id, message, tx)
+        .send_message(session_id, message, tx, model_selection)
         .await
         .map_err(|e| e.to_string())
 }

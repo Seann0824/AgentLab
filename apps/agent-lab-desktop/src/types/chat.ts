@@ -25,6 +25,20 @@ export interface IndexDocumentResult {
   already_exists: boolean;
 }
 
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  provider: string;
+  base_url: string;
+  api_key: string;
+  models: string[];
+}
+
+export interface ModelSelection {
+  provider_id: string;
+  model: string;
+}
+
 export type AgentStreamEvent =
   | { type: "user_message"; message: ChatMessage }
   | { type: "assistant_delta"; message_id: string; delta: string }

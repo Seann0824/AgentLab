@@ -5,15 +5,22 @@ import {
   deleteChatSession,
   deleteNamespace,
   getChatHistory,
+  getDefaultModel,
   indexDocumentContent,
   listChatSessions,
   listNamespaces,
+  listProviders,
   renameChatSession,
+  saveProvider,
+  deleteProvider,
+  setDefaultModel,
 } from "../api/chatApi";
 import type {
   AgentStreamEvent,
   ChatMessage,
   IndexDocumentResult,
+  ModelSelection,
+  ProviderConfig,
   SessionSummary,
 } from "../types/chat";
 
@@ -29,6 +36,9 @@ interface ChatState {
   streamingBySession: Record<string, StreamingState>;
   unreadBySession: Record<string, number>;
   namespaces: string[];
+  providers: ProviderConfig[];
+  defaultModel: ModelSelection | null;
+  selectedModelBySession: Record<string, ModelSelection>;
 
   // actions
   loadSessions: () => Promise<void>;
@@ -42,11 +52,34 @@ interface ChatState {
   indexDocument: (namespace: string, content: string, source: string) => Promise<IndexDocumentResult>;
   deleteNamespace: (namespace: string) => Promise<boolean>;
 
+  // 模型配置 actions
+  loadProviders: () => Promise<void>;
+  loadDefaultModel: () => Promise<void>;
+  createOrUpdateProvider: (config: ProviderConfig) => Promise<void>;
+  removeProvider: (id: string) => Promise<void>;
+  setDefaultModel: (selection: ModelSelection) => Promise<void>;
+  setSelectedModelForSession: (sessionId: string, selection: ModelSelection | null) => void;
+
   // 按 session 读取的便捷 getter
   getSessionMessages: (sessionId: string) => ChatMessage[];
   getSessionStreamingState: (sessionId: string) => StreamingState;
   getSessionUnreadCount: (sessionId: string) => number;
+  getSelectedModelForSession: (sessionId: string) => ModelSelection | null;
 }
+
+interface StreamEventContext {
+  get: () => ChatState;
+  set: (fn: (state: ChatState) => Partial<ChatState>) => void;
+  isBackground: boolean;
+}
+
+type StreamEventHandlerMap = {
+  [K in AgentStreamEvent['type']]?: (
+    event: Extract<AgentStreamEvent, { type: K }>,
+    sessionId: string,
+    ctx: StreamEventContext,
+  ) => void;
+};
 
 function formatTitle(content: string): string {
   const trimmed = content.trim();
@@ -166,6 +199,161 @@ function finalizeAssistantMessage(
   return [...messages, message];
 }
 
+const streamEventHandlers: StreamEventHandlerMap = {
+  user_message: (event, sessionId, { set }) => {
+    set((state) => {
+      const messages = getMessages(state, sessionId);
+      return {
+        messagesBySession: {
+          ...state.messagesBySession,
+          [sessionId]: appendUserMessage(messages, event.message),
+        },
+        sessions: updateSessionTitle(
+          state.sessions,
+          sessionId,
+          formatTitle(event.message.content),
+        ),
+      };
+    });
+  },
+
+  reason_delta: (event, sessionId, { set }) => {
+    set((state) => {
+      const messages = getMessages(state, sessionId);
+      return {
+        messagesBySession: {
+          ...state.messagesBySession,
+          [sessionId]: appendOrUpdateReasonDelta(messages, event.message_id, event.delta),
+        },
+        streamingBySession: {
+          ...state.streamingBySession,
+          [sessionId]: {
+            ...getStreamingState(state, sessionId),
+            streamingMessageId: event.message_id,
+          },
+        },
+      };
+    });
+  },
+
+  assistant_delta: (event, sessionId, { set }) => {
+    set((state) => {
+      const messages = getMessages(state, sessionId);
+      return {
+        messagesBySession: {
+          ...state.messagesBySession,
+          [sessionId]: appendOrUpdateAssistantDelta(messages, event.message_id, event.delta),
+        },
+        streamingBySession: {
+          ...state.streamingBySession,
+          [sessionId]: {
+            ...getStreamingState(state, sessionId),
+            streamingMessageId: event.message_id,
+          },
+        },
+      };
+    });
+  },
+
+  assistant_done: (event, sessionId, { set, isBackground }) => {
+    set((state) => {
+      const messages = getMessages(state, sessionId);
+      const nextMessages = finalizeAssistantMessage(messages, event.message);
+      const nextUnread = isBackground
+        ? {
+            ...state.unreadBySession,
+            [sessionId]: (state.unreadBySession[sessionId] ?? 0) + 1,
+          }
+        : state.unreadBySession;
+
+      return {
+        messagesBySession: {
+          ...state.messagesBySession,
+          [sessionId]: nextMessages,
+        },
+        streamingBySession: {
+          ...state.streamingBySession,
+          [sessionId]: { isStreaming: false, streamingMessageId: null },
+        },
+        unreadBySession: nextUnread,
+      };
+    });
+  },
+
+  tool_call_start: (event, sessionId, { set }) => {
+    set((state) => {
+      const messages = getMessages(state, sessionId);
+      const exists = messages.some((m) => m.tool_call_id === event.tool_call_id);
+      if (exists) return state;
+
+      const toolMessage: ChatMessage = {
+        id: event.tool_call_id,
+        role: "tool",
+        content: "",
+        timestamp: Math.floor(Date.now() / 1000),
+        tool_call_id: event.tool_call_id,
+        metadata: {
+          tool_name: event.tool_name,
+          arguments: event.arguments,
+          status: "running",
+        },
+      };
+      return {
+        messagesBySession: {
+          ...state.messagesBySession,
+          [sessionId]: [...messages, toolMessage],
+        },
+      };
+    });
+  },
+
+  tool_call_end: (event, sessionId, { set }) => {
+    set((state) => {
+      const messages = getMessages(state, sessionId);
+      return {
+        messagesBySession: {
+          ...state.messagesBySession,
+          [sessionId]: messages.map((m) =>
+            m.tool_call_id === event.tool_call_id
+              ? {
+                  ...m,
+                  content: event.result,
+                  metadata: {
+                    ...(m.metadata ?? {}),
+                    tool_name: event.tool_name,
+                    status: event.is_error ? "error" : "done",
+                  },
+                }
+              : m,
+          ),
+        },
+      };
+    });
+  },
+
+  tool_call_delta: (event, sessionId, { set }) => {
+    set((state) => {
+      const messages = getMessages(state, sessionId);
+      const idx = messages.findIndex((m) => m.tool_call_id === event.tool_call_id);
+      if (idx === -1) return state;
+
+      const next = [...messages];
+      next[idx] = { ...next[idx], content: next[idx].content + event.delta };
+      return {
+        messagesBySession: {
+          ...state.messagesBySession,
+          [sessionId]: next,
+        },
+      };
+    });
+  },
+
+  reason_done: () => {
+    // reasoning 内容已通过 reason_delta 流式累积到消息 content 中，
+    // 这里不需要额外更新；metadata.reason 会在 assistant_delta 切换时写入。
+  },
+};
+
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
   currentSessionId: null,
@@ -173,10 +361,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingBySession: {},
   unreadBySession: {},
   namespaces: [],
+  providers: [],
+  defaultModel: null,
+  selectedModelBySession: {},
 
   getSessionMessages: (sessionId) => getMessages(get(), sessionId),
   getSessionStreamingState: (sessionId) => getStreamingState(get(), sessionId),
   getSessionUnreadCount: (sessionId) => get().unreadBySession[sessionId] ?? 0,
+  getSelectedModelForSession: (sessionId) =>
+    get().selectedModelBySession[sessionId] ?? get().defaultModel,
 
   loadSessions: async () => {
     const sessions = await listChatSessions();
@@ -207,6 +400,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       title: "新会话",
       updated_at: Math.floor(Date.now() / 1000),
     };
+    const defaultModel = get().defaultModel;
     set((state) => ({
       sessions: [newSession, ...state.sessions],
       currentSessionId: id,
@@ -216,6 +410,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
         [id]: { isStreaming: false, streamingMessageId: null },
       },
       unreadBySession: { ...state.unreadBySession, [id]: 0 },
+      selectedModelBySession: defaultModel
+        ? { ...state.selectedModelBySession, [id]: defaultModel }
+        : state.selectedModelBySession,
     }));
   },
 
@@ -283,10 +480,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       },
     }));
 
+    const modelSelection = get().getSelectedModelForSession(targetSessionId);
+
     try {
       await chatCompletionStream(
         targetSessionId,
         content,
+        modelSelection,
         (event) => {
           get().handleStreamEvent(event, targetSessionId);
         },
@@ -306,168 +506,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   handleStreamEvent: (event, sessionId) => {
     const { currentSessionId } = get();
     const isBackground = sessionId !== currentSessionId;
-
-    switch (event.type) {
-      case "user_message": {
-        set((state) => {
-          const messages = getMessages(state, sessionId);
-          return {
-            messagesBySession: {
-              ...state.messagesBySession,
-              [sessionId]: appendUserMessage(messages, event.message),
-            },
-            sessions: updateSessionTitle(
-              state.sessions,
-              sessionId,
-              formatTitle(event.message.content),
-            ),
-          };
-        });
-        break;
-      }
-
-      case "reason_delta": {
-        set((state) => {
-          const messages = getMessages(state, sessionId);
-          return {
-            messagesBySession: {
-              ...state.messagesBySession,
-              [sessionId]: appendOrUpdateReasonDelta(messages, event.message_id, event.delta),
-            },
-            streamingBySession: {
-              ...state.streamingBySession,
-              [sessionId]: {
-                ...getStreamingState(state, sessionId),
-                streamingMessageId: event.message_id,
-              },
-            },
-          };
-        });
-        break;
-      }
-
-      case "assistant_delta": {
-        set((state) => {
-          const messages = getMessages(state, sessionId);
-          return {
-            messagesBySession: {
-              ...state.messagesBySession,
-              [sessionId]: appendOrUpdateAssistantDelta(messages, event.message_id, event.delta),
-            },
-            streamingBySession: {
-              ...state.streamingBySession,
-              [sessionId]: {
-                ...getStreamingState(state, sessionId),
-                streamingMessageId: event.message_id,
-              },
-            },
-          };
-        });
-        break;
-      }
-
-      case "assistant_done": {
-        set((state) => {
-          const messages = getMessages(state, sessionId);
-          const nextMessages = finalizeAssistantMessage(messages, event.message);
-          const nextUnread = isBackground
-            ? {
-                ...state.unreadBySession,
-                [sessionId]: (state.unreadBySession[sessionId] ?? 0) + 1,
-              }
-            : state.unreadBySession;
-
-          return {
-            messagesBySession: {
-              ...state.messagesBySession,
-              [sessionId]: nextMessages,
-            },
-            streamingBySession: {
-              ...state.streamingBySession,
-              [sessionId]: { isStreaming: false, streamingMessageId: null },
-            },
-            unreadBySession: nextUnread,
-          };
-        });
-        break;
-      }
-
-      case "tool_call_start": {
-        set((state) => {
-          const messages = getMessages(state, sessionId);
-          const exists = messages.some((m) => m.tool_call_id === event.tool_call_id);
-          if (exists) return state;
-
-          const toolMessage: ChatMessage = {
-            id: event.tool_call_id,
-            role: "tool",
-            content: "",
-            timestamp: Math.floor(Date.now() / 1000),
-            tool_call_id: event.tool_call_id,
-            metadata: {
-              tool_name: event.tool_name,
-              arguments: event.arguments,
-              status: "running",
-            },
-          };
-          return {
-            messagesBySession: {
-              ...state.messagesBySession,
-              [sessionId]: [...messages, toolMessage],
-            },
-          };
-        });
-        break;
-      }
-
-      case "tool_call_end": {
-        set((state) => {
-          const messages = getMessages(state, sessionId);
-          return {
-            messagesBySession: {
-              ...state.messagesBySession,
-              [sessionId]: messages.map((m) =>
-                m.tool_call_id === event.tool_call_id
-                  ? {
-                      ...m,
-                      content: event.result,
-                      metadata: {
-                        ...(m.metadata ?? {}),
-                        tool_name: event.tool_name,
-                        status: event.is_error ? "error" : "done",
-                      },
-                    }
-                  : m,
-              ),
-            },
-          };
-        });
-        break;
-      }
-
-      case "tool_call_delta": {
-        set((state) => {
-          const messages = getMessages(state, sessionId);
-          const idx = messages.findIndex((m) => m.tool_call_id === event.tool_call_id);
-          if (idx === -1) return state;
-
-          const next = [...messages];
-          next[idx] = { ...next[idx], content: next[idx].content + event.delta };
-          return {
-            messagesBySession: {
-              ...state.messagesBySession,
-              [sessionId]: next,
-            },
-          };
-        });
-        break;
-      }
-
-      case "reason_done": {
-        // reasoning 内容已通过 reason_delta 流式累积到消息 content 中，
-        // 这里不需要额外更新；metadata.reason 会在 assistant_delta 切换时写入。
-        break;
-      }
+    const handler = streamEventHandlers[event.type];
+    if (handler) {
+      handler(event as never, sessionId, { get, set, isBackground });
     }
   },
 
@@ -490,5 +531,45 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await get().loadNamespaces();
     }
     return ok;
+  },
+
+  loadProviders: async () => {
+    const providers = await listProviders();
+    set({ providers });
+  },
+
+  loadDefaultModel: async () => {
+    const defaultModel = await getDefaultModel();
+    set({ defaultModel });
+  },
+
+  createOrUpdateProvider: async (config) => {
+    const providers = await saveProvider(config);
+    set({ providers });
+  },
+
+  removeProvider: async (id) => {
+    const providers = await deleteProvider(id);
+    set({ providers });
+  },
+
+  setDefaultModel: async (selection) => {
+    await setDefaultModel(selection);
+    set({ defaultModel: selection });
+  },
+
+  setSelectedModelForSession: (sessionId, selection) => {
+    set((state) => {
+      if (!selection) {
+        const { [sessionId]: _removed, ...rest } = state.selectedModelBySession;
+        return { selectedModelBySession: rest };
+      }
+      return {
+        selectedModelBySession: {
+          ...state.selectedModelBySession,
+          [sessionId]: selection,
+        },
+      };
+    });
   },
 }));

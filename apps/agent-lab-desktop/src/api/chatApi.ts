@@ -3,6 +3,8 @@ import type {
   AgentStreamEvent,
   ChatMessage,
   IndexDocumentResult,
+  ModelSelection,
+  ProviderConfig,
   SessionSummary,
 } from "../types/chat";
 
@@ -52,6 +54,7 @@ export async function renameChatSession(
 export async function chatCompletionStream(
   sessionId: string | null,
   message: string,
+  modelSelection: ModelSelection | null,
   onEvent: (event: AgentStreamEvent) => void,
 ): Promise<string> {
   const channel = new Channel<AgentStreamEvent>((event) => {
@@ -61,6 +64,32 @@ export async function chatCompletionStream(
   return invoke<string>("chat_completion_stream", {
     sessionId,
     message,
+    modelSelection,
     channel,
   });
+}
+
+// 模型配置相关 API
+export async function listProviders(): Promise<ProviderConfig[]> {
+  return invoke<ProviderConfig[]>("list_providers");
+}
+
+export async function saveProvider(
+  config: ProviderConfig,
+): Promise<ProviderConfig[]> {
+  return invoke<ProviderConfig[]>("save_provider", { config });
+}
+
+export async function deleteProvider(id: string): Promise<ProviderConfig[]> {
+  return invoke<ProviderConfig[]>("delete_provider", { id });
+}
+
+export async function getDefaultModel(): Promise<ModelSelection> {
+  return invoke<ModelSelection>("get_default_model");
+}
+
+export async function setDefaultModel(
+  selection: ModelSelection,
+): Promise<void> {
+  return invoke("set_default_model", { selection });
 }

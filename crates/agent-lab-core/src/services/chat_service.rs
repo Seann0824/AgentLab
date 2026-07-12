@@ -9,9 +9,10 @@ use crate::agent::simple_agent::{AgentBuilder, SimpleAgent};
 use crate::base::agent::{Agent as AgentTrait, AgentStreamEvent};
 use crate::base::config::Config;
 use crate::base::llm::AgentsLLM;
+use crate::base::provider_config::ModelSelection;
 use crate::error::AgentLabError;
 use crate::services::chat_dto::{ChatMessage, SessionSummary};
-use crate::services::{MessageService, RagService, SessionService};
+use crate::services::{MessageService, ProviderResolver, RagService, SessionService};
 use crate::tools::rag_tool::RagTool;
 use crate::tools::time_tool::TimeTool;
 use crate::tools::web_search::WebSearch;
@@ -31,6 +32,8 @@ pub struct ChatService {
     rag_service: Option<RagService>,
     /// 按 session 串行化发送，防止同一会话并发产生交错消息。
     send_locks: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
+    /// Provider 解析器，用于根据前端传入的 model_selection 动态切换 LLM。
+    resolver: Option<Arc<dyn ProviderResolver>>,
 }
 
 impl ChatService {
@@ -47,12 +50,19 @@ impl ChatService {
             user_id: user_id.into(),
             rag_service: None,
             send_locks: Mutex::new(HashMap::new()),
+            resolver: None,
         }
     }
 
     /// 注入 RAG 服务；注入后 Agent 才能使用 rag 工具。
     pub fn with_rag_service(mut self, rag_service: RagService) -> Self {
         self.rag_service = Some(rag_service);
+        self
+    }
+
+    /// 注入 Provider 解析器；注入后 `send_message` 才能根据 `model_selection` 切换模型。
+    pub fn with_resolver(mut self, resolver: impl ProviderResolver + 'static) -> Self {
+        self.resolver = Some(Arc::new(resolver));
         self
     }
 
@@ -190,6 +200,7 @@ impl ChatService {
         session_id: Option<String>,
         message: String,
         channel: mpsc::Sender<AgentStreamEvent>,
+        model_selection: Option<ModelSelection>,
     ) -> Result<String, AgentLabError> {
         let session_id = self.get_or_create_session(session_id).await?;
         let history = self.messages.history(&session_id).await?;
@@ -213,7 +224,18 @@ impl ChatService {
 
         let sessions = self.sessions.clone();
         let messages = self.messages.clone();
-        let llm = self.llm.clone();
+        let llm = match model_selection {
+            Some(selection) => self
+                .resolver
+                .as_ref()
+                .ok_or_else(|| {
+                    AgentLabError::ProviderConfig(
+                        "未配置 ProviderResolver，无法使用 model_selection".into(),
+                    )
+                })?
+                .resolve(&selection)?,
+            None => self.llm.clone(),
+        };
         let session_id_for_task = session_id.clone();
 
         // 在闭包外构建 Agent，避免在 async move 中捕获 self。

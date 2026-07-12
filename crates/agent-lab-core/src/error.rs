@@ -16,6 +16,9 @@ pub enum AgentLabError {
     #[error("序列化/反序列化失败: {0}")]
     Serialization(#[from] serde_json::Error),
 
+    #[error("Provider 配置错误: {0}")]
+    ProviderConfig(String),
+
     #[error("参数无效: {0}")]
     InvalidArgument(String),
 

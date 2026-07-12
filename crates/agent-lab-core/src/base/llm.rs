@@ -8,6 +8,7 @@ use openai_api_rs::v1::chat_completion::chat_completion_stream::{
 };
 use openai_api_rs::v1::chat_completion::{ChatCompletionMessage, Tool, ToolChoiceType};
 
+use crate::base::provider_config::ProviderConfig;
 use crate::error::AgentLabError;
 
 pub struct AgentsLLM {
@@ -61,6 +62,22 @@ impl AgentsLLM {
 
     pub fn builder() -> AgentsLLMBuilder {
         AgentsLLMBuilder::new()
+    }
+
+    /// 从 ProviderConfig 构造 LLM 客户端。
+    /// api_key 允许为空，发送前需要校验。
+    pub fn from_config(config: &ProviderConfig) -> Self {
+        Self::from_config_with_model(config, &config.models.first().cloned().unwrap_or_default())
+    }
+
+    /// 从 ProviderConfig 构造 LLM 客户端，并指定模型。
+    pub fn from_config_with_model(config: &ProviderConfig, model: &str) -> Self {
+        Self::builder()
+            .api_key(config.api_key.clone())
+            .base_url(config.base_url.clone())
+            .model(model)
+            .provider(config.provider.clone())
+            .build()
     }
 
     /// 从环境变量构造 LLM 客户端。
@@ -177,9 +194,7 @@ impl AgentsLLMBuilder {
         let model = self
             .model
             .expect("AgentsLLMBuilder: model is required, use .model(...) to set it");
-        let api_key = self
-            .api_key
-            .expect("AgentsLLMBuilder: api_key is required, use .api_key(...) to set it");
+        let api_key = self.api_key.unwrap_or_default();
         let base_url = self
             .base_url
             .expect("AgentsLLMBuilder: base_url is required, use .base_url(...) to set it");
