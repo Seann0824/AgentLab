@@ -271,14 +271,7 @@ impl MemoryService {
         let lines: Vec<String> = items
             .iter()
             .enumerate()
-            .map(|(i, item)| {
-                let preview = if item.content.len() > 80 {
-                    format!("{} ...", item.content.chars().take(80).collect::<String>())
-                } else {
-                    item.content.clone()
-                };
-                format!("{}. {}", i + 1, preview)
-            })
+            .map(|(i, item)| format!("{}. {}", i + 1, item.content))
             .collect();
 
         Ok(format!(
@@ -370,16 +363,11 @@ impl MemoryService {
         let mut formatted = vec![format!("找到 {} 条相关记忆", results.len())];
         for (i, memory) in results.iter().enumerate() {
             let label = memory_type_label(&memory.memory_type);
-            let preview = if memory.content.len() > 80 {
-                format!("{} ...", memory.content.chars().take(80).collect::<String>())
-            } else {
-                memory.content.clone()
-            };
             formatted.push(format!(
                 "{}. [{}] {} (重要性: {})",
                 i + 1,
                 label,
-                preview,
+                memory.content,
                 memory.importance
             ));
         }

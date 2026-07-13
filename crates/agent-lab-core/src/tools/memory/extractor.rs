@@ -7,7 +7,7 @@ use crate::agent::tool_agent::ToolAgent;
 use crate::base::llm::AgentsLLM;
 use crate::tools::ToolManager;
 use crate::storage::neo4j::{EntityInput, RelationInput};
-use crate::tools::types::Tool;
+use crate::tools::types::{Tool, ToolError};
 
 /// 内部子 agent：专门负责从记忆内容里抽取实体和关系。
 ///
@@ -76,11 +76,15 @@ impl Tool for ExtractEntitiesRelationsTool {
         extraction_schema()
     }
 
-    async fn execute(&self, args: Value) -> Result<String, String> {
+    async fn execute(&self, args: Value) -> Result<String, ToolError> {
         // 该工具仅用于约束 LLM 的输出格式，执行时直接把参数原样返回，
         // 由 ToolAgent 把返回值反序列化为结构化结果。
-        serde_json::to_string(&args)
-            .map_err(|e| format!("[ExtractEntitiesRelationsTool] serialize args failed: {}", e))
+        serde_json::to_string(&args).map_err(|e| {
+            ToolError::Internal(format!(
+                "[ExtractEntitiesRelationsTool] serialize args failed: {}",
+                e
+            ))
+        })
     }
 }
 

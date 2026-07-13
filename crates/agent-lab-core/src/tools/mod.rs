@@ -7,9 +7,11 @@ pub mod rag_tool;
 pub mod time_tool;
 pub mod web_search;
 
-use crate::tools::types::Tool;
+use crate::tools::types::{Tool, ToolError};
+use futures_util::FutureExt;
 use openai_api_rs::v1::chat_completion::{self, ToolCall, ToolType};
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 
 pub struct ToolManager {
     tools: HashMap<String, Box<dyn Tool + Send + Sync>>,
@@ -63,11 +65,21 @@ impl ToolManager {
         };
 
         let arguments = tool_call.function.arguments.unwrap_or("{}".to_string());
-        (
-            tool_name,
-            tool_call_id,
-            tool.execute(serde_json::from_str(&arguments).unwrap_or(serde_json::json!({})))
-                .await,
-        )
+        let args = serde_json::from_str(&arguments).unwrap_or(serde_json::json!({}));
+
+        // 捕获工具执行期间的 panic（如第三方 crate 内部 unwrap 失败），
+        // 将其转换为 ToolError::Internal，避免单个工具拖垮整个 Agent。
+        let result = match AssertUnwindSafe(tool.execute(args)).catch_unwind().await {
+            Ok(result) => result,
+            Err(_) => Err(ToolError::Internal(format!(
+                "工具 {} 执行时发生内部崩溃",
+                tool_name
+            ))),
+        };
+
+        // 将结构化错误统一转换为模型可读的文本。
+        let result = result.map_err(|e| e.to_agent_message());
+
+        (tool_name, tool_call_id, result)
     }
 }

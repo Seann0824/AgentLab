@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use crate::base::llm::AgentsLLM;
 use crate::services::rag_service::RagService;
 use crate::tools::rag::chunking::{self, Paragraph};
-use crate::tools::types::Tool;
+use crate::tools::types::{Tool, ToolError};
 
 /// RAG 资料库 Tool：面向 LLM 提供文档索引与语义检索能力。
 pub struct RagTool {
@@ -41,10 +41,10 @@ impl RagTool {
         self
     }
 
-    fn service(&self) -> Result<&RagService, String> {
+    fn service(&self) -> Result<&RagService, ToolError> {
         self.service
             .as_ref()
-            .ok_or_else(|| "RagTool 未初始化索引器".to_string())
+            .ok_or_else(|| ToolError::Internal("RagTool 未初始化索引器".to_string()))
     }
 
     /// 读取 Markdown 文件内容。
@@ -132,21 +132,23 @@ impl Tool for RagTool {
         }
     }
 
-    async fn execute(&self, args: serde_json::Value) -> Result<String, String> {
+    async fn execute(&self, args: serde_json::Value) -> Result<String, ToolError> {
         let action = args["action"].as_str().unwrap_or("").to_string();
 
         match action.as_str() {
             "add_document" => {
                 let path = args["file_path"].as_str().unwrap_or("").to_string();
                 if path.is_empty() {
-                    return Err("add_document 操作需要 file_path 参数".to_string());
+                    return Err(ToolError::InvalidArgument(
+                        "add_document 操作需要 file_path 参数".to_string(),
+                    ));
                 }
 
                 let result = self
                     .service()?
                     .index_document(&path, "default", 512, 64)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| ToolError::external("RagService", e.to_string()))?;
                 if result.already_exists {
                     Ok("该文档已索引，无需重复上传".to_string())
                 } else {
@@ -156,7 +158,9 @@ impl Tool for RagTool {
             "search" => {
                 let query = args["query"].as_str().unwrap_or("").to_string();
                 if query.is_empty() {
-                    return Err("search 操作需要 query 参数".to_string());
+                    return Err(ToolError::InvalidArgument(
+                        "search 操作需要 query 参数".to_string(),
+                    ));
                 }
 
                 let namespace = args["namespace"]
@@ -168,7 +172,7 @@ impl Tool for RagTool {
                     .service()?
                     .search(&query, namespace.as_deref(), 5)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| ToolError::external("RagService", e.to_string()))?;
 
                 let formatted: Vec<String> = results
                     .iter()
@@ -191,7 +195,10 @@ impl Tool for RagTool {
                     formatted.join("\n\n")
                 ))
             }
-            _ => Err(format!("不支持的 action: {}", action)),
+            _ => Err(ToolError::InvalidArgument(format!(
+                "不支持的 action: {}",
+                action
+            ))),
         }
     }
 }

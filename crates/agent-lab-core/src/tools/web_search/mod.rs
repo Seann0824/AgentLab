@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use openai_api_rs::v1::types;
 use serpapi::serpapi::Client;
-use crate::tools::types::Tool;
+use crate::tools::types::{Tool, ToolError};
 
 pub struct WebSearch {
     api_key: String,
@@ -45,25 +45,24 @@ impl Tool for WebSearch  {
         }
     }
 
-    async fn execute(&self, args: serde_json::Value) -> Result<String, String> {
+    async fn execute(&self, args: serde_json::Value) -> Result<String, ToolError> {
         let query = args["query"].as_str().unwrap_or("").to_string();
         if self.api_key.is_empty() {
-            return Err("WebSearch api_key is empty".into());
+            return Err(ToolError::InvalidArgument(
+                "WebSearch api_key 未配置".to_string(),
+            ));
         }
 
-        let Ok(client) = Client::new(
-            HashMap::from([
-                ("api_key".to_string(), self.api_key.clone()),
-                ("engine".to_string(), "google".to_string())
-            ])
-        ) else {
-            return Err("WebSearch initial failed".into());
-        };
-        
+        let client = Client::new(HashMap::from([
+            ("api_key".to_string(), self.api_key.clone()),
+            ("engine".to_string(), "google".to_string()),
+        ]))
+        .map_err(|e| ToolError::external("SerpApi", format!("初始化失败: {}", e)))?;
+
         let query_params = HashMap::from([
             ("q".to_string(), query.clone()),
             ("gl".to_string(), "cn".into()),
-            ("hl".to_string(), "zh-cn".into())
+            ("hl".to_string(), "zh-cn".into()),
         ]);
 
         match client.search(query_params).await {
@@ -71,32 +70,37 @@ impl Tool for WebSearch  {
                 if let Some(answer_box_list) = results.get("answer_box_list") {
                     return Ok(format!("\n{}", answer_box_list));
                 }
-                
-                if let Some(answer_box) = results.get("answer_box") && let Some(answer) = answer_box.get("answer") {
+
+                if let Some(answer_box) = results.get("answer_box")
+                    && let Some(answer) = answer_box.get("answer")
+                {
                     return Ok(answer.to_string());
                 }
 
-                if let Some(knowledge_graph) = results.get("knowledge_graph") && let Some(description) = knowledge_graph.get("description") {
+                if let Some(knowledge_graph) = results.get("knowledge_graph")
+                    && let Some(description) = knowledge_graph.get("description")
+                {
                     return Ok(description.to_string());
                 }
 
-                if let Some(organic_results) = results["organic_results"].as_array() && organic_results.len() > 0 {
+                if let Some(organic_results) = results["organic_results"].as_array()
+                    && !organic_results.is_empty()
+                {
                     // 返回前3
                     let snippets = organic_results
-                        .iter().enumerate()
+                        .iter()
+                        .enumerate()
                         .take(3)
-                        .map(|(i, res)| {
-                            format!("{} {}\n{}", i + 1, res["title"], res["snippet"])
-                        })
+                        .map(|(i, res)| format!("{} {}\n{}", i + 1, res["title"], res["snippet"]))
                         .collect::<Vec<_>>()
                         .join("");
-                    
-                    return Ok(format!("\n\n{}", snippets))
+
+                    return Ok(format!("\n\n{}", snippets));
                 }
 
                 Ok(format!("对不起，没有找到关于 {} 的信息。", query))
-            },
-            Err(_) => Err("工具不可用".into())
+            }
+            Err(e) => Err(ToolError::external("SerpApi", e.to_string())),
         }
     }
 }

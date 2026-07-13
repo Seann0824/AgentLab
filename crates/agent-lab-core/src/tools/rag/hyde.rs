@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::agent::tool_agent::ToolAgent;
 use crate::base::llm::AgentsLLM;
 use crate::tools::ToolManager;
-use crate::tools::types::Tool;
+use crate::tools::types::{Tool, ToolError};
 
 /// HyDE（Hypothetical Document Embeddings）子 agent：让 LLM 先根据问题生成一段假设答案，
 /// 再用这段假设答案的 embedding 去检索真实文档，从而缩小「问题」与「答案」之间的语义鸿沟。
@@ -84,8 +84,12 @@ impl Tool for GenerateHypotheticalDocumentTool {
         }
     }
 
-    async fn execute(&self, args: Value) -> Result<String, String> {
-        serde_json::to_string(&args)
-            .map_err(|e| format!("[GenerateHypotheticalDocumentTool] serialize args failed: {}", e))
+    async fn execute(&self, args: Value) -> Result<String, ToolError> {
+        serde_json::to_string(&args).map_err(|e| {
+            ToolError::Internal(format!(
+                "[GenerateHypotheticalDocumentTool] serialize args failed: {}",
+                e
+            ))
+        })
     }
 }

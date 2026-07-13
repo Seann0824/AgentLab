@@ -20,12 +20,16 @@ export function SettingsPanel() {
   const loadNamespaces = useChatStore((s) => s.loadNamespaces);
   const loadProviders = useChatStore((s) => s.loadProviders);
   const loadDefaultModel = useChatStore((s) => s.loadDefaultModel);
+  const loadMemoryEnabled = useChatStore((s) => s.loadMemoryEnabled);
+  const memoryEnabled = useChatStore((s) => s.memoryEnabled);
+  const setMemoryEnabled = useChatStore((s) => s.setMemoryEnabled);
 
   useEffect(() => {
     loadNamespaces();
     loadProviders();
     loadDefaultModel();
-  }, [loadNamespaces, loadProviders, loadDefaultModel]);
+    loadMemoryEnabled();
+  }, [loadNamespaces, loadProviders, loadDefaultModel, loadMemoryEnabled]);
 
   const provider = useProviderManager();
   const defaultModel = useDefaultModel();
@@ -162,6 +166,33 @@ export function SettingsPanel() {
                 {defaultModel.message}
               </div>
             )}
+          </div>
+        </section>
+
+        {/* 记忆设置 */}
+        <h1 className="text-xl font-medium text-ink mb-6">记忆设置</h1>
+
+        <section className="bg-paper-dark border border-mist rounded-lg p-6 mb-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-medium text-ink">启用记忆记录</h2>
+              <p className="text-xs text-stone mt-1">
+                开启后，Agent 会根据需要调用 memory 工具保存或检索长期记忆。
+              </p>
+            </div>
+            <button
+              onClick={() => setMemoryEnabled(!memoryEnabled)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                memoryEnabled ? "bg-moss" : "bg-stone/40"
+              }`}
+              aria-pressed={memoryEnabled}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  memoryEnabled ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
           </div>
         </section>
 

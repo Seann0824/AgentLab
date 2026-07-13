@@ -80,6 +80,7 @@ impl ChatService {
         llm: AgentsLLM,
         system_prompt: Option<String>,
         default_namespace: Option<String>,
+        memory_enabled: bool,
     ) -> SimpleAgent {
         let time_tool = Box::new(TimeTool::new());
         let search_tool = Box::new(WebSearch::serpapi(
@@ -103,8 +104,11 @@ impl ChatService {
             builder = builder.tool(rag_tool);
         }
 
-        if let Some(memory_tool) = &self.memory_tool {
-            builder = builder.tool(Box::new(memory_tool.clone()));
+        // 仅在开关开启且 memory_tool 已初始化成功时才注册记忆工具。
+        if memory_enabled {
+            if let Some(memory_tool) = &self.memory_tool {
+                builder = builder.tool(Box::new(memory_tool.clone()));
+            }
         }
 
         builder.build()
@@ -130,6 +134,40 @@ impl ChatService {
              如果问题与知识库无关，直接回答即可。",
             namespaces_list
         ))
+    }
+
+    /// 构建记忆相关的 system prompt。
+    fn build_memory_prompt() -> Option<String> {
+        Some(
+            "你拥有长期记忆能力。在对话过程中：\n\
+             - 当用户提到值得长期保留的信息（如个人偏好、重要事实、计划、关键经历等）时，\
+               你可以调用 memory 工具的 add action 将其保存到记忆中。\n\
+             - 在回答用户问题前，如果认为相关历史记忆可能有助于回答，\
+               可以调用 memory 工具的 search action 检索相关记忆。\n\
+             - 不需要频繁保存每一条对话，只保存你认为对未来对话真正有价值的内容。"
+                .to_string(),
+        )
+    }
+
+    /// 组合知识库与记忆相关的 system prompt。
+    fn build_system_prompt(
+        &self,
+        available_namespaces: &[String],
+        memory_enabled: bool,
+    ) -> Option<String> {
+        let knowledge = Self::build_knowledge_prompt(available_namespaces);
+        let memory = if memory_enabled && self.memory_tool.is_some() {
+            Self::build_memory_prompt()
+        } else {
+            None
+        };
+
+        match (knowledge, memory) {
+            (Some(k), Some(m)) => Some(format!("{}\n\n{}", k, m)),
+            (Some(k), None) => Some(k),
+            (None, Some(m)) => Some(m),
+            (None, None) => None,
+        }
     }
 
     /// 创建新会话并返回 session_id。
@@ -202,7 +240,7 @@ impl ChatService {
     ///
     /// 流程：
     /// 1. 从 DB 加载历史；
-    /// 2. 查询所有可用知识库 namespace 并写入 system_prompt；
+    /// 2. 查询所有可用知识库 namespace 与记忆开关，构建 system_prompt；
     /// 3. 新建 Agent 并注入历史；
     /// 4. Agent 运行期间产生的事件会同时转发给调用方并持久化到 DB。
     ///
@@ -214,17 +252,18 @@ impl ChatService {
         message: String,
         channel: mpsc::Sender<AgentStreamEvent>,
         model_selection: Option<ModelSelection>,
+        memory_enabled: bool,
     ) -> Result<String, AgentLabError> {
         let session_id = self.get_or_create_session(session_id).await?;
         let history = self.messages.history(&session_id).await?;
 
-        // 查询可用 namespace 列表，构建知识库感知的 system prompt。
+        // 查询可用 namespace 列表，构建知识库与记忆感知的 system prompt。
         let available_namespaces = if let Some(rag) = &self.rag_service {
             rag.list_namespaces().await.unwrap_or_default()
         } else {
             Vec::new()
         };
-        let system_prompt = Self::build_knowledge_prompt(&available_namespaces);
+        let system_prompt = self.build_system_prompt(&available_namespaces, memory_enabled);
 
         // 获取该 session 的串行化锁。
         let lock = {
@@ -252,7 +291,7 @@ impl ChatService {
         let session_id_for_task = session_id.clone();
 
         // 在闭包外构建 Agent，避免在 async move 中捕获 self。
-        let mut agent = self.build_agent(llm.clone(), system_prompt, None);
+        let mut agent = self.build_agent(llm.clone(), system_prompt, None, memory_enabled);
         let history_cc: Vec<ChatCompletionMessage> = history
             .iter()
             .map(ChatMessage::to_chat_completion_message)

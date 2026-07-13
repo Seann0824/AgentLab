@@ -2,7 +2,7 @@ use chrono::{Local, Utc};
 use openai_api_rs::v1::types;
 use std::collections::HashMap;
 
-use crate::tools::types::Tool;
+use crate::tools::types::{Tool, ToolError};
 
 /// 获取当前时间的工具。
 ///
@@ -50,7 +50,7 @@ impl Tool for TimeTool {
         }
     }
 
-    async fn execute(&self, args: serde_json::Value) -> Result<String, String> {
+    async fn execute(&self, args: serde_json::Value) -> Result<String, ToolError> {
         let format = args["format"].as_str().unwrap_or("readable");
         let local = Local::now();
         let utc = Utc::now();

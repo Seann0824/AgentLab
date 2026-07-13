@@ -5,6 +5,7 @@ import {
   deleteNamespace,
   getChatHistory,
   getDefaultModel,
+  getMemoryEnabled,
   indexDocumentContent,
   listChatSessions,
   listNamespaces,
@@ -13,6 +14,7 @@ import {
   saveProvider,
   deleteProvider,
   setDefaultModel,
+  setMemoryEnabled,
 } from "../api/chatApi";
 import type {
   AgentStreamEvent,
@@ -37,6 +39,7 @@ interface ChatState {
   namespaces: string[];
   providers: ProviderConfig[];
   defaultModel: ModelSelection | null;
+  memoryEnabled: boolean;
   selectedModelBySession: Record<string, ModelSelection>;
   // 虚拟 session 的模型选择：在没有真实 session 时，用户仍可提前选择模型，
   // 待发送第一条消息创建真实 session 后自动转移过去。
@@ -65,6 +68,10 @@ interface ChatState {
   setDefaultModel: (selection: ModelSelection) => Promise<void>;
   setSelectedModelForSession: (sessionId: string, selection: ModelSelection | null) => void;
   setPendingSessionModel: (selection: ModelSelection | null) => void;
+
+  // 记忆开关 actions
+  loadMemoryEnabled: () => Promise<void>;
+  setMemoryEnabled: (enabled: boolean) => Promise<void>;
 
   // 按 session 读取的便捷 getter
   getSessionMessages: (sessionId: string) => ChatMessage[];
@@ -369,6 +376,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   namespaces: [],
   providers: [],
   defaultModel: null,
+  memoryEnabled: true,
   selectedModelBySession: {},
   pendingSessionModel: null,
   isSidebarCollapsed: false,
@@ -609,6 +617,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setDefaultModel: async (selection) => {
     await setDefaultModel(selection);
     set({ defaultModel: selection });
+  },
+
+  loadMemoryEnabled: async () => {
+    const memoryEnabled = await getMemoryEnabled();
+    set({ memoryEnabled });
+  },
+
+  setMemoryEnabled: async (enabled) => {
+    await setMemoryEnabled(enabled);
+    set({ memoryEnabled: enabled });
   },
 
   setSelectedModelForSession: (sessionId, selection) => {

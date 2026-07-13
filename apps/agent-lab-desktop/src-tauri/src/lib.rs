@@ -210,6 +210,8 @@ pub fn run() {
             commands::settings::delete_provider,
             commands::settings::get_default_model,
             commands::settings::set_default_model,
+            commands::settings::get_memory_enabled,
+            commands::settings::set_memory_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

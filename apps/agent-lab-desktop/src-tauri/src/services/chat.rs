@@ -11,6 +11,7 @@ pub async fn chat_completion_stream(
     session_id: Option<String>,
     message: String,
     model_selection: Option<ModelSelection>,
+    memory_enabled: bool,
 ) -> Result<String, String> {
     let (tx, mut rx) = mpsc::channel::<AgentStreamEvent>(64);
 
@@ -24,7 +25,7 @@ pub async fn chat_completion_stream(
     });
 
     chat_service
-        .send_message(session_id, message, tx, model_selection)
+        .send_message(session_id, message, tx, model_selection, memory_enabled)
         .await
         .map_err(|e| e.to_string())
 }

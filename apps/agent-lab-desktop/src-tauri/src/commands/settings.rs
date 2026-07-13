@@ -6,6 +6,11 @@ use tauri_plugin_store::StoreExt;
 const STORE_NAME: &str = "settings.bin";
 const PROVIDERS_KEY: &str = "providers";
 const DEFAULT_MODEL_KEY: &str = "default_model";
+pub const MEMORY_ENABLED_KEY: &str = "memory_enabled";
+
+pub fn default_memory_enabled() -> bool {
+    true
+}
 
 fn default_deepseek_provider() -> ProviderConfig {
     ProviderConfig {
@@ -158,4 +163,26 @@ pub async fn set_default_model(
     Ok(())
 }
 
+/// 获取记忆开关状态；未设置时默认开启。
+#[tauri::command]
+pub async fn get_memory_enabled(app: AppHandle) -> Result<bool, String> {
+    let store = app.store(STORE_NAME).map_err(|e| e.to_string())?;
+    let enabled: bool = store
+        .get(MEMORY_ENABLED_KEY)
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_else(default_memory_enabled);
+    Ok(enabled)
+}
+
+/// 设置记忆开关状态。
+#[tauri::command]
+pub async fn set_memory_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let store = app.store(STORE_NAME).map_err(|e| e.to_string())?;
+    store.set(
+        MEMORY_ENABLED_KEY,
+        serde_json::to_value(enabled).map_err(|e| e.to_string())?,
+    );
+    store.save().map_err(|e| e.to_string())?;
+    Ok(())
+}
 

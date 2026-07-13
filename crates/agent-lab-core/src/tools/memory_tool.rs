@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use crate::base::llm::AgentsLLM;
 use crate::error::AgentLabError;
 use crate::services::MemoryService;
-use crate::tools::types::Tool;
+use crate::tools::types::{Tool, ToolError};
 
 /// 记忆管理 Tool：面向 LLM 提供记忆增删改查、整合、遗忘能力。
 #[derive(Clone)]
@@ -208,79 +208,97 @@ impl Tool for MemoryTool {
         }
     }
 
-    async fn execute(&self, args: serde_json::Value) -> Result<String, String> {
+    async fn execute(&self, args: serde_json::Value) -> Result<String, ToolError> {
         let action = args["action"].as_str().unwrap_or("");
         let mut inner = self.inner.lock().await;
 
-        match action {
-            "add" => inner
-                .memory_service
-                .add_memory_agent(
-                    args["content"].as_str(),
-                    args["memory_type"].as_str(),
-                    args["importance"].as_f64().map(|v| v as f32),
-                )
-                .await
-                .map_err(|e| e.to_string()),
-            "search" => inner
-                .memory_service
-                .search_memories_agent(
-                    args["query"].as_str(),
-                    args["memory_type"].as_str(),
-                    args["limit"].as_u64(),
-                )
-                .await
-                .map_err(|e| e.to_string()),
-            "summary" => inner
-                .memory_service
-                .summary_agent(args["memory_type"].as_str(), args["limit"].as_u64())
-                .await
-                .map_err(|e| e.to_string()),
-            "stats" => inner
-                .memory_service
-                .stats_agent(args["memory_type"].as_str())
-                .await
-                .map_err(|e| e.to_string()),
-            "update" => inner
-                .memory_service
-                .update_memory_agent(
-                    args["memory_id"].as_str(),
-                    args["content"].as_str(),
-                    args["importance"].as_f64().map(|v| v as f32),
-                    args.get("metadata").cloned(),
-                )
-                .await
-                .map_err(|e| e.to_string()),
-            "remove" => inner
-                .memory_service
-                .remove_memory_agent(args["memory_id"].as_str())
-                .await
-                .map_err(|e| e.to_string()),
-            "forget" => inner
-                .memory_service
-                .forget_by_type_agent(
-                    args["memory_type"].as_str(),
-                    args["strategy"].as_str(),
-                    args["threshold"].as_f64().map(|v| v as f32),
-                    args["max_age_days"].as_u64(),
-                )
-                .await
-                .map_err(|e| e.to_string()),
-            "consolidate" => inner
-                .memory_service
-                .consolidate_memories_agent(
-                    args["from_type"].as_str(),
-                    args["to_type"].as_str(),
-                    args["importance_threshold"].as_f64().map(|v| v as f32),
-                )
-                .await
-                .map_err(|e| e.to_string()),
-            "clear_all" => inner
-                .memory_service
-                .clear_all_agent(args["memory_type"].as_str())
-                .await
-                .map_err(|e| e.to_string()),
-            _ => Err(format!("不支持的 action: {}", action)),
-        }
+        let result = match action {
+            "add" => {
+                inner
+                    .memory_service
+                    .add_memory_agent(
+                        args["content"].as_str(),
+                        args["memory_type"].as_str(),
+                        args["importance"].as_f64().map(|v| v as f32),
+                    )
+                    .await
+            }
+            "search" => {
+                inner
+                    .memory_service
+                    .search_memories_agent(
+                        args["query"].as_str(),
+                        args["memory_type"].as_str(),
+                        args["limit"].as_u64(),
+                    )
+                    .await
+            }
+            "summary" => {
+                inner
+                    .memory_service
+                    .summary_agent(args["memory_type"].as_str(), args["limit"].as_u64())
+                    .await
+            }
+            "stats" => {
+                inner
+                    .memory_service
+                    .stats_agent(args["memory_type"].as_str())
+                    .await
+            }
+            "update" => {
+                inner
+                    .memory_service
+                    .update_memory_agent(
+                        args["memory_id"].as_str(),
+                        args["content"].as_str(),
+                        args["importance"].as_f64().map(|v| v as f32),
+                        args.get("metadata").cloned(),
+                    )
+                    .await
+            }
+            "remove" => {
+                inner
+                    .memory_service
+                    .remove_memory_agent(args["memory_id"].as_str())
+                    .await
+            }
+            "forget" => {
+                inner
+                    .memory_service
+                    .forget_by_type_agent(
+                        args["memory_type"].as_str(),
+                        args["strategy"].as_str(),
+                        args["threshold"].as_f64().map(|v| v as f32),
+                        args["max_age_days"].as_u64(),
+                    )
+                    .await
+            }
+            "consolidate" => {
+                inner
+                    .memory_service
+                    .consolidate_memories_agent(
+                        args["from_type"].as_str(),
+                        args["to_type"].as_str(),
+                        args["importance_threshold"].as_f64().map(|v| v as f32),
+                    )
+                    .await
+            }
+            "clear_all" => {
+                inner
+                    .memory_service
+                    .clear_all_agent(args["memory_type"].as_str())
+                    .await
+            }
+            _ => return Err(ToolError::InvalidArgument(format!("不支持的 action: {}", action))),
+        };
+
+        result.map_err(|e| {
+            let msg = e.to_string();
+            if msg.starts_with("参数") || msg.contains("不能为空") {
+                ToolError::InvalidArgument(msg)
+            } else {
+                ToolError::external("MemoryService", msg)
+            }
+        })
     }
 }

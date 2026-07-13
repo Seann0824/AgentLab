@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::agent::tool_agent::ToolAgent;
 use crate::base::llm::AgentsLLM;
 use crate::tools::ToolManager;
-use crate::tools::types::Tool;
+use crate::tools::types::{Tool, ToolError};
 
 /// MQE（Multi-Query Expansion）子 agent：把用户的一个问题扩展成多个语义等价的查询句。
 ///
@@ -87,8 +87,9 @@ impl Tool for ExpandQueriesTool {
         }
     }
 
-    async fn execute(&self, args: Value) -> Result<String, String> {
-        serde_json::to_string(&args)
-            .map_err(|e| format!("[ExpandQueriesTool] serialize args failed: {}", e))
+    async fn execute(&self, args: Value) -> Result<String, ToolError> {
+        serde_json::to_string(&args).map_err(|e| {
+            ToolError::Internal(format!("[ExpandQueriesTool] serialize args failed: {}", e))
+        })
     }
 }

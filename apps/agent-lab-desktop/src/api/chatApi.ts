@@ -93,3 +93,11 @@ export async function setDefaultModel(
 ): Promise<void> {
   return invoke("set_default_model", { selection });
 }
+
+export async function getMemoryEnabled(): Promise<boolean> {
+  return invoke<boolean>("get_memory_enabled");
+}
+
+export async function setMemoryEnabled(enabled: boolean): Promise<void> {
+  return invoke("set_memory_enabled", { enabled });
+}
