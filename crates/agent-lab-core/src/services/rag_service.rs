@@ -328,6 +328,9 @@ impl RagService {
     }
 
     /// 单查询向量检索，供 retrieval 模块调用。
+    ///
+    /// 返回的 `f64` 是 cosine similarity（范围 [0, 1]），越大表示越相关。
+    /// 内部由 pgvector 的 cosine distance 转换而来：`similarity = 1.0 - distance`。
     pub(crate) async fn search_single(
         &self,
         query: &str,
@@ -350,7 +353,7 @@ impl RagService {
                 embedding <=> $1 AS score
             FROM rag_chunks
             WHERE namespace = $2 OR $2 IS NULL
-            ORDER BY embedding <=> $1
+            ORDER BY embedding <=> $1 ASC
             LIMIT $3
             "#,
         )
@@ -381,8 +384,9 @@ impl RagService {
                         .get::<Option<serde_json::Value>, _>("metadata")
                         .unwrap_or_else(|| serde_json::json!({})),
                 };
-                let score: f64 = row.get("score");
-                (score, chunk)
+                let distance: f64 = row.get("score");
+                let similarity = (1.0 - distance).clamp(0.0, 1.0);
+                (similarity, chunk)
             })
             .collect();
 

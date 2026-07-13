@@ -14,11 +14,7 @@ impl MessageService {
     }
 
     /// 添加消息，seq 由存储层自动分配。
-    pub async fn add(
-        &self,
-        session_id: &str,
-        message: &ChatMessage,
-    ) -> Result<(), ServiceError> {
+    pub async fn add(&self, session_id: &str, message: &ChatMessage) -> Result<(), ServiceError> {
         let seq = self.store.next_seq(session_id).await?;
         self.store.add_message(session_id, message, seq).await?;
         Ok(())

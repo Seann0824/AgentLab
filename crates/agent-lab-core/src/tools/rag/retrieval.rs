@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::error::AgentLabError;
 use crate::services::rag_service::{RagChunk, RagService};
@@ -14,75 +14,108 @@ pub async fn search(
     namespace: Option<&str>,
     limit: usize,
 ) -> Result<Vec<(f64, RagChunk)>, AgentLabError> {
-    // 1. 收集原始查询与 HyDE 假设文档
-    let mut base_queries = vec![query.to_string()];
-    if let Some(hyde) = &service.hyde_generator {
-        let mut guard = hyde.lock().await;
-        match guard.generate(query).await {
-            Ok(doc) => {
-                eprintln!(
-                    "[RagIndex] HyDE generated: {}",
-                    doc.chars().take(80).collect::<String>()
-                );
-                base_queries.push(doc);
-            }
-            Err(e) => {
-                eprintln!(
-                    "[RagIndex] HyDE generation failed: {}, use original query only",
-                    e
-                );
-            }
-        }
-    }
+    // 1. HyDE 任务与 MQE 任务并发执行，各自负责增强 + 检索
+    let (hyde_results, mqe_results) = tokio::join!(
+        hyde_search_task(service, query, namespace, limit),
+        mqe_search_task(service, query, namespace, limit),
+    );
 
-    // 2. 用 MQE 对每个 base query 做扩展
-    let mut expanded_queries: Vec<String> = Vec::new();
-    match &service.query_expander {
-        Some(expander) => {
-            let mut guard = expander.lock().await;
-            for base in base_queries {
-                match guard.expand(&base).await {
-                    Ok(mut qs) => expanded_queries.append(&mut qs),
-                    Err(e) => {
-                        eprintln!(
-                            "[RagIndex] MQE expansion failed: {}, use base query",
-                            e
-                        );
-                        expanded_queries.push(base);
-                    }
-                }
-            }
-        }
-        None => expanded_queries = base_queries,
-    }
+    // 2. search 只负责合并两个任务返回的结果集
+    let mut all_results = Vec::new();
+    all_results.extend(hyde_results);
+    all_results.extend(mqe_results);
 
-    // 去重，避免重复检索
-    let mut seen = std::collections::HashSet::new();
-    expanded_queries.retain(|q| seen.insert(q.clone()));
-
-    // 3. 对每个查询分别检索
-    let mut all_results: Vec<(f64, RagChunk)> = Vec::new();
-    for q in expanded_queries {
-        let results = service.search_single(&q, namespace, limit).await?;
-        all_results.extend(results);
-    }
-
-    // 4. 按 chunk id 去重，保留最佳（最小）distance
+    // 3. 按 chunk id 去重，保留最大 similarity
     let mut best: HashMap<String, (f64, RagChunk)> = HashMap::new();
     for (score, chunk) in all_results {
         best.entry(chunk.id.clone())
             .and_modify(|(s, _)| {
-                if score < *s {
+                if score > *s {
                     *s = score;
                 }
             })
             .or_insert((score, chunk));
     }
 
-    // 5. 按 distance 升序排列，取 top limit
+    // 4. 按 similarity 降序排列，取 top limit
     let mut merged: Vec<(f64, RagChunk)> = best.into_values().collect();
-    merged.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    merged.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     merged.truncate(limit);
 
     Ok(merged)
+}
+
+/// HyDE 增强检索任务。
+///
+/// 生成假设文档并立即检索；未启用 HyDE 或生成失败时返回空 Vec。
+async fn hyde_search_task(
+    service: &RagService,
+    query: &str,
+    namespace: Option<&str>,
+    limit: usize,
+) -> Vec<(f64, RagChunk)> {
+    let Some(hyde) = &service.hyde_generator else {
+        return Vec::new();
+    };
+
+    let mut guard = hyde.lock().await;
+    let doc = match guard.generate(query).await {
+        Ok(doc) => doc,
+        Err(e) => {
+            eprintln!("[RagIndex] HyDE generation failed: {}, skip", e);
+            return Vec::new();
+        }
+    };
+
+    eprintln!(
+        "[RagIndex] HyDE generated: {}",
+        doc.chars().take(80).collect::<String>()
+    );
+
+    match service.search_single(&doc, namespace, limit).await {
+        Ok(results) => results,
+        Err(e) => {
+            eprintln!("[RagIndex] HyDE search failed: {}, skip", e);
+            Vec::new()
+        }
+    }
+}
+
+/// MQE 扩展检索任务。
+///
+/// 对原始 query 做扩展，连同原始 query 一起并发检索；
+/// 未启用 MQE 时只检索原始 query。
+async fn mqe_search_task(
+    service: &RagService,
+    query: &str,
+    namespace: Option<&str>,
+    limit: usize,
+) -> Vec<(f64, RagChunk)> {
+    let mut search_queries = vec![query.to_string()];
+
+    if let Some(expander) = &service.query_expander {
+        let mut guard = expander.lock().await;
+        match guard.expand(query).await {
+            Ok(qs) => search_queries.extend(qs),
+            Err(e) => {
+                eprintln!("[RagIndex] MQE expansion failed: {}, use original query", e);
+            }
+        }
+    }
+
+    // 去重，避免重复检索
+    let mut seen = HashSet::new();
+    search_queries.retain(|q| seen.insert(q.clone()));
+
+    let futures = search_queries
+        .iter()
+        .map(|q| service.search_single(q, namespace, limit));
+
+    match futures_util::future::try_join_all(futures).await {
+        Ok(results_per_query) => results_per_query.into_iter().flatten().collect(),
+        Err(e) => {
+            eprintln!("[RagIndex] MQE search failed: {}, skip", e);
+            Vec::new()
+        }
+    }
 }
