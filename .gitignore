@@ -1,3 +1,7 @@
 /target
+/target/
 .env
 node_modules
+apps/agent-lab-desktop/src-tauri/target/
+Cargo.lock
+apps/agent-lab-desktop/src-tauri/Cargo.lock
