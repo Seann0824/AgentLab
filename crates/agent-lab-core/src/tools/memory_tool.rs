@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 use crate::base::llm::AgentsLLM;
 use crate::error::AgentLabError;
 use crate::services::MemoryService;
+use crate::tools::memory::base::{MemoryWriteAction, MemoryWriteResult};
 use crate::tools::types::{Tool, ToolError};
 
 /// 记忆管理 Tool：面向 LLM 提供记忆增删改查、整合、遗忘能力。
@@ -145,7 +146,7 @@ impl Tool for MemoryTool {
                     .memory_service
                     .add_memories_from_context(context)
                     .await
-                    .map(|ids| format!("已提取并存储 {} 条记忆（IDs: {}）", ids.len(), ids.join(", ")))
+                    .map(|results| format_memory_add_results(&results))
             }
             "search" => {
                 inner
@@ -196,4 +197,34 @@ impl Tool for MemoryTool {
             }
         })
     }
+}
+
+fn format_memory_add_results(results: &[MemoryWriteResult]) -> String {
+    if results.is_empty() {
+        return "未提取到可存储的事实".to_string();
+    }
+
+    let mut lines = vec![format!("已处理 {} 条记忆：", results.len())];
+    for result in results {
+        let label = match result.action {
+            MemoryWriteAction::Added => "新增",
+            MemoryWriteAction::SkippedDuplicate => "跳过",
+            MemoryWriteAction::Merged => "合并",
+            MemoryWriteAction::InvalidatedOthers => "更新",
+        };
+        let detail = if result.invalidated_ids.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "（已失效旧记忆: {}）",
+                result.invalidated_ids.join(", ")
+            )
+        };
+        lines.push(format!(
+            "- [{}] {} (ID: {}){}",
+            label, result.fact, result.memory_id, detail
+        ));
+    }
+
+    lines.join("\n")
 }

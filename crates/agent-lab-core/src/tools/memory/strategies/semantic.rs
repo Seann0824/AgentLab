@@ -6,7 +6,8 @@ use tokio::sync::Mutex;
 use crate::base::llm::AgentsLLM;
 use crate::error::AgentLabError;
 use crate::storage::{entity_id, MemoryStore};
-use crate::tools::memory::base::{MemoryItem, RetrieveRequest};
+use crate::tools::memory::base::{ConflictResolution, MemoryItem, RetrieveRequest};
+use crate::tools::memory::conflict_resolver::{ConflictCheckRequest, MemoryConflictResolver};
 use crate::tools::memory::extractor::EntityExtractorAgent;
 use crate::tools::memory::strategy::{MemoryStrategy, StorageScope};
 
@@ -15,15 +16,46 @@ use crate::tools::memory::strategy::{MemoryStrategy, StorageScope};
 /// - 持久化到 PG + Neo4j 实体引用图。
 /// - add 时抽取实体/关系，写图。
 /// - retrieve 时融合向量相似度和图相关度。
+/// - 可选支持冲突裁决：新增前会查重、合并互补事实、失效被覆盖的旧记忆。
 pub struct SemanticStrategy {
     extractor: Arc<Mutex<EntityExtractorAgent>>,
+    resolver: Option<Arc<Mutex<MemoryConflictResolver>>>,
 }
 
 impl SemanticStrategy {
+    /// 启用冲突裁决的语义记忆策略。
     pub fn new(llm: AgentsLLM) -> Self {
         Self {
-            extractor: Arc::new(Mutex::new(EntityExtractorAgent::new(llm))),
+            extractor: Arc::new(Mutex::new(EntityExtractorAgent::new(llm.clone()))),
+            resolver: Some(Arc::new(Mutex::new(MemoryConflictResolver::new(llm)))),
         }
+    }
+
+    /// 不启用冲突裁决的语义记忆策略（测试或低资源场景使用）。
+    pub fn new_without_conflict_resolution(llm: AgentsLLM) -> Self {
+        Self {
+            extractor: Arc::new(Mutex::new(EntityExtractorAgent::new(llm))),
+            resolver: None,
+        }
+    }
+
+    /// 启发式快速去重：如果候选与新增事实足够相似，直接判为重复。
+    fn heuristic_duplicate(fact: &str, candidates: &[(MemoryItem, Option<f64>)]) -> Option<String> {
+        let fact_lower = fact.to_lowercase();
+        for (item, score) in candidates.iter().take(3) {
+            if let Some(sim) = score {
+                if *sim >= 0.92 {
+                    let len_ratio = item.content.len() as f64 / fact.len().max(1) as f64;
+                    if len_ratio >= 0.7 && len_ratio <= 1.43 {
+                        return Some(item.id.clone());
+                    }
+                }
+            }
+            if item.content.to_lowercase().trim() == fact_lower.trim() {
+                return Some(item.id.clone());
+            }
+        }
+        None
     }
 }
 
@@ -35,6 +67,88 @@ impl MemoryStrategy for SemanticStrategy {
 
     fn storage_scope(&self) -> StorageScope {
         StorageScope::PersistentWithGraph
+    }
+
+    fn supports_conflict_resolution(&self) -> bool {
+        self.resolver.is_some()
+    }
+
+    async fn resolve_conflicts(
+        &self,
+        new_item: &MemoryItem,
+        store: &MemoryStore,
+    ) -> Result<ConflictResolution, AgentLabError> {
+        let results = self.resolve_conflicts_batch(std::slice::from_ref(new_item), store).await?;
+        results
+            .into_iter()
+            .next()
+            .ok_or_else(|| AgentLabError::Service(crate::services::ServiceError::invalid_argument(
+                "resolve_conflicts_batch returned empty results",
+            )))
+    }
+
+    async fn resolve_conflicts_batch(
+        &self,
+        items: &[MemoryItem],
+        store: &MemoryStore,
+    ) -> Result<Vec<ConflictResolution>, AgentLabError> {
+        let resolver = match self.resolver.as_ref() {
+            Some(r) => r,
+            None => return Ok(vec![ConflictResolution::add_new(); items.len()]),
+        };
+
+        let mut fast_results: std::collections::HashMap<usize, ConflictResolution> =
+            std::collections::HashMap::new();
+        let mut llm_requests: Vec<ConflictCheckRequest> = Vec::new();
+
+        for (idx, item) in items.iter().enumerate() {
+            let request = RetrieveRequest {
+                query: item.content.clone(),
+                limit: Some(5),
+                user_id: Some(item.user_id.clone()),
+                session_id: item.session_id.clone(),
+                importance_threshold: Some(0.0),
+                ..Default::default()
+            };
+
+            let candidates = self.retrieve_candidates(&request, store, &[]).await;
+            let candidates: Vec<(MemoryItem, Option<f64>)> = candidates
+                .into_iter()
+                .filter(|(c, _)| c.is_active())
+                .collect();
+
+            if let Some(duplicate_id) = Self::heuristic_duplicate(&item.content, &candidates) {
+                fast_results.insert(idx, ConflictResolution::duplicate(duplicate_id));
+            } else {
+                llm_requests.push(ConflictCheckRequest {
+                    fact_index: idx,
+                    fact_content: item.content.clone(),
+                    candidates: candidates.into_iter().map(|(item, _)| item).collect(),
+                });
+            }
+        }
+
+        if !llm_requests.is_empty() {
+            let index_map: Vec<usize> = llm_requests.iter().map(|r| r.fact_index).collect();
+            let mut resolver = resolver.lock().await;
+            let llm_results = resolver
+                .resolve_batch(llm_requests)
+                .await
+                .map_err(|e| AgentLabError::Service(crate::services::ServiceError::llm(e)))?;
+            for (idx, resolution) in llm_results.into_iter().enumerate() {
+                let original_idx = index_map[idx];
+                fast_results.insert(original_idx, resolution);
+            }
+        }
+
+        Ok((0..items.len())
+            .map(|idx| {
+                fast_results
+                    .get(&idx)
+                    .cloned()
+                    .unwrap_or_else(ConflictResolution::add_new)
+            })
+            .collect())
     }
 
     async fn enrich_and_store(

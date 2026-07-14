@@ -1,6 +1,6 @@
 use crate::error::AgentLabError;
 
-use super::base::{MemoryItem, RetrieveRequest};
+use super::base::{ConflictResolution, MemoryItem, RetrieveRequest};
 use crate::storage::MemoryStore;
 
 /// 记忆存储范围。
@@ -73,5 +73,42 @@ pub trait MemoryStrategy: Send + Sync {
     /// 返回 `None` 表示不限制。用于 `capacity_based` 遗忘策略。
     fn capacity(&self) -> Option<usize> {
         None
+    }
+
+    /// 该策略是否支持冲突裁决（查重 / 变更 / 失效）。
+    ///
+    /// 默认返回 false，保持现有策略行为不变。
+    fn supports_conflict_resolution(&self) -> bool {
+        false
+    }
+
+    /// 在新增记忆前进行冲突裁决。
+    ///
+    /// 返回 `ConflictResolution` 告诉引擎：
+    /// - 新事实是直接新增、跳过，还是合并到已有记忆；
+    /// - 每条候选已有记忆应该保留、更新、失效还是删除。
+    ///
+    /// 默认实现直接返回 `Add`，即不处理冲突。
+    async fn resolve_conflicts(
+        &self,
+        _new_item: &MemoryItem,
+        _store: &MemoryStore,
+    ) -> Result<ConflictResolution, AgentLabError> {
+        Ok(ConflictResolution::add_new())
+    }
+
+    /// 批量冲突裁决。
+    ///
+    /// 默认实现逐条调用 `resolve_conflicts`；支持批量 LLM 的策略应覆盖此方法。
+    async fn resolve_conflicts_batch(
+        &self,
+        items: &[MemoryItem],
+        store: &MemoryStore,
+    ) -> Result<Vec<ConflictResolution>, AgentLabError> {
+        let mut results = Vec::with_capacity(items.len());
+        for item in items {
+            results.push(self.resolve_conflicts(item, store).await?);
+        }
+        Ok(results)
     }
 }

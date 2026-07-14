@@ -32,39 +32,35 @@ async fn create_test_store() -> MemoryStore {
     MemoryStore::new(config, pg_store, neo4j_store, embedder)
 }
 
-async fn cleanup_episodes(store: &MemoryStore) {
-    let _ = store.clear_by_type("episodic").await;
-}
-
 /// 该测试需要本地 PG 和 Neo4j 服务，默认不自动运行。
 /// 运行前请确保 `.env` 中 DATABASE_URL / NEO4J_URL 等配置正确。
 #[tokio::test]
 async fn test_episodic_memory_add_and_retrieve() {
     let store = create_test_store().await;
-    cleanup_episodes(&store).await;
 
     let mut engine = MemoryEngine::new(
         store.clone(),
         MemoryConfig::new(),
-        vec![Box::new(EpisodicStrategy::new())],
+        vec![Box::new(EpisodicStrategy::new_without_conflict_resolution())],
     );
 
+    let user_id = "test_user_episodic_add_retrieve";
     let item1 = MemoryItem::new(
-        "test_user".to_string(),
+        user_id.to_string(),
         "episodic".to_string(),
         "上周去了杭州西湖，天气很好".to_string(),
         0.8,
         serde_json::json!({"session_id": "session_1"}),
     );
     let item2 = MemoryItem::new(
-        "test_user".to_string(),
+        user_id.to_string(),
         "episodic".to_string(),
         "昨天和同事讨论了 Q4 产品规划".to_string(),
         0.7,
         serde_json::json!({"session_id": "session_1"}),
     );
     let item3 = MemoryItem::new(
-        "test_user".to_string(),
+        user_id.to_string(),
         "episodic".to_string(),
         " unrelated semantic fact".to_string(),
         0.5,
@@ -73,12 +69,12 @@ async fn test_episodic_memory_add_and_retrieve() {
 
     let id1 = engine.add(item1).await;
     let id2 = engine.add(item2).await;
-    let _id3 = engine.add(item3).await;
+    let id3 = engine.add(item3).await;
 
     let request = RetrieveRequest {
         query: "西湖".to_string(),
         limit: Some(5),
-        user_id: Some("test_user".to_string()),
+        user_id: Some(user_id.to_string()),
         ..Default::default()
     };
     let results = engine.retrieve_by_type("episodic", request).await;
@@ -92,7 +88,7 @@ async fn test_episodic_memory_add_and_retrieve() {
     let request2 = RetrieveRequest {
         query: "Q4 产品规划".to_string(),
         limit: Some(5),
-        user_id: Some("test_user".to_string()),
+        user_id: Some(user_id.to_string()),
         ..Default::default()
     };
     let results2 = engine.retrieve_by_type("episodic", request2).await;
@@ -101,5 +97,55 @@ async fn test_episodic_memory_add_and_retrieve() {
         "检索结果应包含 Q4 产品规划那条记忆"
     );
 
-    cleanup_episodes(&store).await;
+    // 只清理本测试创建的数据，避免并行测试互相影响。
+    for id in [&id1, &id2, &id3] {
+        let _ = store.delete(id).await;
+    }
+}
+
+#[tokio::test]
+async fn test_retrieve_filters_invalidated_memories() {
+    let store = create_test_store().await;
+
+    let mut engine = MemoryEngine::new(
+        store.clone(),
+        MemoryConfig::new(),
+        vec![Box::new(EpisodicStrategy::new_without_conflict_resolution())],
+    );
+
+    let user_id = "test_user_invalidated_filter";
+    let item = MemoryItem::new(
+        user_id.to_string(),
+        "episodic".to_string(),
+        "我的英文名是 Sean".to_string(),
+        0.8,
+        serde_json::json!({"session_id": "session_1"}),
+    );
+    let id = engine.add(item.clone()).await;
+
+    // 手动标记为失效（模拟冲突裁决后的结果）。
+    let mut invalidated = item.clone();
+    invalidated.id = id.clone();
+    invalidated.user_id = user_id.to_string();
+    invalidated.mark_invalidated("new_id", "name changed");
+    store
+        .update(&id, None, None, Some(&invalidated.metadata))
+        .await
+        .expect("update metadata failed");
+
+    let request = RetrieveRequest {
+        query: "英文名".to_string(),
+        limit: Some(5),
+        user_id: Some(user_id.to_string()),
+        ..Default::default()
+    };
+    let results = engine.retrieve_by_type("episodic", request).await;
+
+    assert!(
+        !results.iter().any(|item| item.id == id),
+        "已失效的记忆不应出现在检索结果中"
+    );
+
+    // 只清理本测试创建的数据。
+    let _ = store.delete(&id).await;
 }

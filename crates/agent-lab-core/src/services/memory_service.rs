@@ -7,7 +7,7 @@ use crate::db::get_db_client;
 use crate::error::AgentLabError;
 use crate::services::ServiceError;
 use crate::storage::{MemoryStore, Neo4jStore, OllamaEmbedder, PgStore};
-use crate::tools::memory::base::{MemoryConfig, MemoryItem, RetrieveRequest};
+use crate::tools::memory::base::{MemoryConfig, MemoryItem, MemoryWriteResult, RetrieveRequest};
 use crate::tools::memory::engine::MemoryEngine;
 use crate::tools::memory::fact_extractor::MemoryFactExtractor;
 use crate::tools::memory::strategies::{
@@ -60,7 +60,7 @@ impl MemoryService {
             strategies.push(Box::new(WorkingStrategy::new(config.clone())));
         }
         if enable_episodic {
-            strategies.push(Box::new(EpisodicStrategy::new()));
+            strategies.push(Box::new(EpisodicStrategy::new(llm.clone())));
         }
         if enable_semantic {
             strategies.push(Box::new(SemanticStrategy::new(llm.clone())));
@@ -89,24 +89,38 @@ impl MemoryService {
         importance: f32,
         metadata: Option<Value>,
     ) -> Result<String, AgentLabError> {
-        if self.current_session_id.is_none() {
-            self.current_session_id =
-                Some(format!("session_{}", Local::now().format("%Y%m%d_%H%M%S")));
-        }
+        Ok(self
+            .add_memory_with_result(content, memory_type, importance, metadata)
+            .await?
+            .memory_id)
+    }
 
-        let mut metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
-        metadata["session_id"] = Value::from(self.current_session_id.clone());
-        metadata["timestamp"] = Value::from(Local::now().to_string());
+    /// 添加一条记忆并返回详细的写入结果（含冲突裁决信息）。
+    pub async fn add_memory_with_result(
+        &mut self,
+        content: String,
+        memory_type: String,
+        importance: f32,
+        metadata: Option<Value>,
+    ) -> Result<MemoryWriteResult, AgentLabError> {
+        let mut metadata = metadata.unwrap_or_else(|| self.build_memory_metadata());
+        // 若调用方传入 metadata，仍补全 session_id / timestamp。
+        if metadata.get("session_id").is_none() {
+            metadata["session_id"] = Value::from(self.current_session_id.clone());
+        }
+        if metadata.get("timestamp").is_none() {
+            metadata["timestamp"] = Value::from(Local::now().to_string());
+        }
 
         let memory_item = MemoryItem::new(
             self.user_id.clone(),
             memory_type.clone(),
-            content.clone(),
+            content,
             importance as f64,
             metadata,
         );
 
-        Ok(self.engine.add(memory_item).await)
+        Ok(self.engine.add_with_result(memory_item).await)
     }
 
     pub async fn search_memories(
@@ -152,10 +166,12 @@ impl MemoryService {
     ///
     /// 这是给 `MemoryTool` 使用的“智能 add”入口：外部 AI 不再直接决定
     /// content / memory_type / importance，只提供原始上下文。
+    ///
+    /// 返回每条事实的写入结果，包含最终 memory_id 与冲突裁决动作。
     pub async fn add_memories_from_context(
         &mut self,
         context: &str,
-    ) -> Result<Vec<String>, AgentLabError> {
+    ) -> Result<Vec<MemoryWriteResult>, AgentLabError> {
         let facts = match self.fact_extractor.extract(context).await {
             Ok(facts) => facts,
             Err(e) => {
@@ -167,17 +183,29 @@ impl MemoryService {
             }
         };
 
-        let mut ids = Vec::new();
+        // 统一构造 MemoryItem，再交给引擎做批量冲突裁决与存储。
+        let mut items = Vec::with_capacity(facts.len());
         for fact in facts {
             let memory_type = route_memory_type(&fact);
             let importance = estimate_importance(&fact);
-            let id = self
-                .add_memory(fact, memory_type.to_string(), importance, None)
-                .await?;
-            ids.push(id);
+            let metadata = self.build_memory_metadata();
+            items.push(MemoryItem::new(
+                self.user_id.clone(),
+                memory_type.to_string(),
+                fact,
+                importance as f64,
+                metadata,
+            ));
         }
 
-        Ok(ids)
+        Ok(self.engine.add_batch(items).await)
+    }
+
+    fn build_memory_metadata(&self) -> serde_json::Value {
+        let mut metadata = serde_json::json!({});
+        metadata["session_id"] = Value::from(self.current_session_id.clone());
+        metadata["timestamp"] = Value::from(Local::now().to_string());
+        metadata
     }
 
     pub async fn forget_by_type(
@@ -235,7 +263,7 @@ impl MemoryService {
     ) -> Result<String, AgentLabError> {
         let items = self
             .engine
-            .list_by_type(memory_type, Some(&self.user_id), Some(limit as i64))
+            .list_by_type(memory_type, Some(&self.user_id), Some(limit as i64), false)
             .await?;
 
         if items.is_empty() {

@@ -7,7 +7,10 @@ use crate::error::AgentLabError;
 use crate::services::ServiceError;
 use crate::storage::MemoryStore;
 
-use super::base::{MemoryConfig, MemoryItem, RetrieveRequest};
+use super::base::{
+    ExistingAction, MemoryConfig, MemoryItem, MemoryWriteAction, MemoryWriteResult, NewFactAction,
+    RetrieveRequest,
+};
 use super::strategy::{MemoryStrategy, StorageScope};
 
 /// 统一记忆引擎。
@@ -50,33 +53,227 @@ impl MemoryEngine {
     /// 新增记忆。
     ///
     /// 根据策略的 `storage_scope` 决定写入持久化存储还是进程内缓存。
+    /// 若策略支持冲突裁决，会先在存储层执行查重 / 变更 / 失效闭环，
+    /// 再决定是否真正写入新记忆。
     pub async fn add(&mut self, item: MemoryItem) -> String {
-        let memory_type = item.memory_type.clone();
-        let strategy = if self.strategies.contains_key(&memory_type) {
-            self.strategies.get(&memory_type).unwrap()
-        } else {
-            self.strategies.get("perceptual").expect("至少应注册 perceptual 策略")
-        };
+        self.add_with_result(item).await.memory_id
+    }
 
-        match strategy.storage_scope() {
-            StorageScope::InMemory => {
-                self.in_memory
-                    .entry(memory_type)
-                    .or_default()
-                    .push(item.clone());
-            }
-            _ => {
-                if let Err(e) = strategy.enrich_and_store(item.clone(), &mut self.store).await {
-                    tracing::error!(
-                        "[MemoryEngine] enrich_and_store failed for {}: {}",
-                        memory_type,
-                        e
-                    );
+    /// 新增记忆并返回详细的写入结果。
+    pub async fn add_with_result(&mut self, item: MemoryItem) -> MemoryWriteResult {
+        self.add_batch(vec![item])
+            .await
+            .into_iter()
+            .next()
+            .expect("add_batch with one item should return one result")
+    }
+
+    /// 批量新增记忆并返回每条事实的写入结果。
+    ///
+    /// 同一 memory_type 的事实会聚合后一次性走策略的批量冲突裁决，
+    /// 减少 LLM 调用次数。
+    pub async fn add_batch(&mut self, items: Vec<MemoryItem>) -> Vec<MemoryWriteResult> {
+        if items.is_empty() {
+            return Vec::new();
+        }
+
+        // 按 memory_type 分组，同时记录原始索引。
+        let mut groups: HashMap<String, Vec<(usize, MemoryItem)>> = HashMap::new();
+        let mut results: Vec<Option<MemoryWriteResult>> = vec![None; items.len()];
+
+        for (idx, item) in items.into_iter().enumerate() {
+            let memory_type = item.memory_type.clone();
+            groups.entry(memory_type).or_default().push((idx, item));
+        }
+
+        for (memory_type, group_items) in groups {
+            let (scope, supports_conflict) = {
+                let strategy = if self.strategies.contains_key(&memory_type) {
+                    self.strategies.get(&memory_type).unwrap()
+                } else {
+                    self.strategies.get("perceptual").expect("至少应注册 perceptual 策略")
+                };
+                (strategy.storage_scope(), strategy.supports_conflict_resolution())
+            };
+
+            match scope {
+                StorageScope::InMemory => {
+                    let list = self.in_memory.entry(memory_type).or_default();
+                    for (original_idx, item) in group_items {
+                        let id = item.id.clone();
+                        list.push(item);
+                        results[original_idx] = Some(MemoryWriteResult::added("", id));
+                    }
+                }
+                _ => {
+                    if supports_conflict {
+                        match self
+                            .apply_conflict_resolution_batch(&memory_type, &group_items)
+                            .await
+                        {
+                            Ok(batch_results) => {
+                                for (original_idx, result) in group_items
+                                    .into_iter()
+                                    .map(|(idx, _)| idx)
+                                    .zip(batch_results.into_iter())
+                                {
+                                    results[original_idx] = Some(result);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "[MemoryEngine] batch conflict resolution failed for {}: {}, fallback to direct store",
+                                    memory_type,
+                                    e
+                                );
+                                let strategy = self.strategies.get(&memory_type).unwrap_or_else(|| {
+                                    self.strategies.get("perceptual").expect("至少应注册 perceptual 策略")
+                                });
+                                for (original_idx, item) in group_items {
+                                    if let Err(e) = strategy.enrich_and_store(item.clone(), &mut self.store).await {
+                                        tracing::error!(
+                                            "[MemoryEngine] enrich_and_store failed for {}: {}",
+                                            memory_type,
+                                            e
+                                        );
+                                    }
+                                    results[original_idx] =
+                                        Some(MemoryWriteResult::added(item.content, item.id));
+                                }
+                            }
+                        }
+                    } else {
+                        let strategy = self.strategies.get(&memory_type).unwrap_or_else(|| {
+                            self.strategies.get("perceptual").expect("至少应注册 perceptual 策略")
+                        });
+                        for (original_idx, item) in group_items {
+                            if let Err(e) = strategy.enrich_and_store(item.clone(), &mut self.store).await {
+                                tracing::error!(
+                                    "[MemoryEngine] enrich_and_store failed for {}: {}",
+                                    memory_type,
+                                    e
+                                );
+                            }
+                            results[original_idx] =
+                                Some(MemoryWriteResult::added(item.content, item.id));
+                        }
+                    }
                 }
             }
         }
 
-        item.id
+        results.into_iter().flatten().collect()
+    }
+
+    /// 批量执行冲突裁决并应用结果。
+    async fn apply_conflict_resolution_batch(
+        &mut self,
+        memory_type: &str,
+        items: &[(usize, MemoryItem)],
+    ) -> Result<Vec<MemoryWriteResult>, AgentLabError> {
+        // 1. 批量裁决。
+        let item_refs: Vec<MemoryItem> = items.iter().map(|(_, item)| item.clone()).collect();
+        let resolutions = {
+            let strategy = self
+                .strategies
+                .get(memory_type)
+                .ok_or_else(|| ServiceError::invalid_argument(format!("记忆类型 {} 不存在", memory_type)))?;
+            strategy.resolve_conflicts_batch(&item_refs, &self.store).await?
+        };
+
+        // 2. 应用对已有记忆的裁决（按顺序执行，同一旧记忆被多次更新时后者覆盖）。
+        let mut per_item_invalidated: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut per_item_updated: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+        for (item_idx, resolution) in resolutions.iter().enumerate() {
+            for decision in &resolution.existing_memories {
+                match decision.action {
+                    ExistingAction::Keep => {}
+                    ExistingAction::Update => {
+                        let mut updated_item = self
+                            .store
+                            .get(&decision.memory_id)
+                            .await?
+                            .ok_or_else(|| ServiceError::not_found(decision.memory_id.clone()))?;
+                        if let Some(ref merged) = decision.merged_content {
+                            updated_item.content = merged.clone();
+                        }
+                        updated_item.mark_updated();
+                        self.store
+                            .update(
+                                &updated_item.id,
+                                Some(&updated_item.content),
+                                Some(updated_item.importance),
+                                Some(&updated_item.metadata),
+                            )
+                            .await?;
+                        per_item_updated.insert(item_idx);
+                    }
+                    ExistingAction::Invalidate => {
+                        if let Some(mut existing) = self.store.get(&decision.memory_id).await? {
+                            let new_id = items[item_idx].1.id.clone();
+                            existing.mark_invalidated(&new_id, &decision.reason);
+                            self.store
+                                .update(&existing.id, None, None, Some(&existing.metadata))
+                                .await?;
+                            per_item_invalidated
+                                .entry(item_idx)
+                                .or_default()
+                                .push(existing.id.clone());
+                        }
+                    }
+                    ExistingAction::Delete => {
+                        let _ = self.store.delete(&decision.memory_id).await;
+                    }
+                }
+            }
+        }
+
+        // 3. 根据每条新事实的裁决决定新增或跳过，并构造结果。
+        let mut batch_results = Vec::with_capacity(items.len());
+        for (item_idx, (_, item)) in items.iter().enumerate() {
+            let resolution = &resolutions[item_idx];
+            let invalidated_ids = per_item_invalidated.get(&item_idx).cloned().unwrap_or_default();
+            let updated_existing = per_item_updated.contains(&item_idx);
+
+            let result = match &resolution.new_fact_action {
+                NewFactAction::Add => {
+                    let strategy = self
+                        .strategies
+                        .get(memory_type)
+                        .ok_or_else(|| ServiceError::invalid_argument(format!("记忆类型 {} 不存在", memory_type)))?;
+                    if let Err(e) = strategy.enrich_and_store(item.clone(), &mut self.store).await {
+                        return Err(e);
+                    }
+                    if invalidated_ids.is_empty() {
+                        MemoryWriteResult::added(item.content.clone(), item.id.clone())
+                    } else {
+                        MemoryWriteResult::invalidated_others(
+                            item.content.clone(),
+                            item.id.clone(),
+                            invalidated_ids,
+                        )
+                    }
+                }
+                NewFactAction::Skip { merged_into } => {
+                    let final_id = merged_into.clone().unwrap_or_else(|| item.id.clone());
+                    let action = if updated_existing {
+                        MemoryWriteAction::Merged
+                    } else {
+                        MemoryWriteAction::SkippedDuplicate
+                    };
+                    MemoryWriteResult {
+                        fact: item.content.clone(),
+                        memory_id: final_id,
+                        action,
+                        invalidated_ids,
+                    }
+                }
+            };
+            batch_results.push(result);
+        }
+
+        Ok(batch_results)
     }
 
     /// 按类型检索记忆。
@@ -105,12 +302,13 @@ impl MemoryEngine {
         let mut scored: Vec<(f64, MemoryItem)> = candidates
             .into_iter()
             .filter(|(item, _)| {
-                // 跳过已标记遗忘的记忆
+                // 跳过已标记遗忘、失效或合并的记忆
                 !item
                     .metadata
                     .get("forgotten")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false)
+                    && item.is_retrievable()
                     && item.importance >= importance_threshold
             })
             .map(|(mut item, raw_score)| {
@@ -143,7 +341,7 @@ impl MemoryEngine {
         })?;
 
         let now_ts = Local::now().timestamp();
-        let items = self.list_by_type(memory_type, None, None).await?;
+        let items = self.list_by_type(memory_type, None, None, false).await?;
 
         let to_remove: Vec<String> = if strategy_name == "capacity_based" {
             self.forget_by_capacity(strategy, memory_type, &items, now_ts)
@@ -244,11 +442,15 @@ impl MemoryEngine {
     }
 
     /// 按类型列出记忆。
+    ///
+    /// 默认只返回 active 记忆；传入 `include_inactive = true` 可查看
+    /// 已失效/已合并等全部记录。
     pub async fn list_by_type(
         &self,
         memory_type: &str,
         user_id: Option<&str>,
         limit: Option<i64>,
+        include_inactive: bool,
     ) -> Result<Vec<MemoryItem>, AgentLabError> {
         let strategy = self.strategies.get(memory_type).ok_or_else(|| {
             ServiceError::invalid_argument(format!("记忆类型 {} 不存在", memory_type))
@@ -263,6 +465,7 @@ impl MemoryEngine {
                         list.iter()
                             .filter(|item| {
                                 user_id.map(|uid| item.user_id == uid).unwrap_or(true)
+                                    && (include_inactive || item.is_active())
                             })
                             .cloned()
                             .collect()
@@ -280,6 +483,10 @@ impl MemoryEngine {
                     .store
                     .list_by_type(memory_type, user_id, limit)
                     .await?;
+                let items: Vec<MemoryItem> = items
+                    .into_iter()
+                    .filter(|item| include_inactive || item.is_active())
+                    .collect();
                 Ok(items)
             }
         }
