@@ -12,7 +12,7 @@ use crate::storage::OllamaEmbedder;
 use crate::tools::rag::chunking::{self, Paragraph};
 use crate::tools::rag::hyde::HydeAgent;
 use crate::tools::rag::markdown::preprocess_markdown_for_embedding;
-use crate::tools::rag::query_expansion::QueryExpansionAgent;
+use crate::tools::rag::mqe::QueryExpansionAgent;
 use crate::tools::rag::retrieval;
 
 /// 文档索引结果。

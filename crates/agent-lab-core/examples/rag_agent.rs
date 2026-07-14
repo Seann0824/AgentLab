@@ -1,12 +1,14 @@
 use agent_lab_core::{
     agent::Agent,
-    base::{agent::Agent as _, config::Config, llm::AgentsLLM},
+    base::{agent::Agent as _, config::Config, llm::AgentsLLM, logging::init_tracing},
     db::get_db_client,
     tools::rag_tool::RagTool,
 };
 
 #[tokio::main]
 async fn main() {
+    let _guard = init_tracing(None);
+
     if let Err(e) = run_rag_agent_loop().await {
         eprintln!("\n❌ RAG Agent 失败: {}", e);
         std::process::exit(1);

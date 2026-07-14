@@ -1,10 +1,12 @@
 use agent_lab_core::agent::group_chat::{RoundRobinGroupChat, TextMentionTermination};
 use agent_lab_core::agent::simple_agent::SimpleAgent;
-use agent_lab_core::base::llm::AgentsLLM;
+use agent_lab_core::base::{llm::AgentsLLM, logging::init_tracing};
 use agent_lab_core::tools::{ToolManager, web_search::WebSearch};
 
 #[tokio::main]
 async fn main() {
+    let _guard = init_tracing(None);
+
     dotenvy::dotenv().ok();
 
     let mut novel_team = RoundRobinGroupChat::new(

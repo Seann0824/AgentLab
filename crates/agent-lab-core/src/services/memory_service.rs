@@ -366,10 +366,11 @@ impl MemoryService {
         for (i, memory) in results.iter().enumerate() {
             let label = memory_type_label(&memory.memory_type);
             formatted.push(format!(
-                "{}. [{}] {} (重要性: {})",
+                "{}. [{}] {} (ID: {}, 重要性: {})",
                 i + 1,
                 label,
                 memory.content,
+                memory.id,
                 memory.importance
             ));
         }

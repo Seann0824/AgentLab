@@ -3,6 +3,8 @@ mod services;
 mod state;
 
 use agent_lab_core::base::llm::AgentsLLM;
+#[cfg(not(debug_assertions))]
+use agent_lab_core::base::logging::init_tracing;
 use agent_lab_core::base::provider_config::{ModelSelection, ProviderConfig};
 use agent_lab_core::db::get_db_client;
 use agent_lab_core::services::{ChatService, MessageService, RagService, SessionService};
@@ -128,6 +130,12 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            #[cfg(not(debug_assertions))]
+            {
+                let log_dir = app.path().app_data_dir().map(|dir| dir.join("logs"));
+                let _guard = init_tracing(log_dir);
+            }
+
             let providers = init_providers(&app.handle())?;
             let default_model = init_default_model(&app.handle())?;
             let llm = build_default_llm(&providers, &default_model)

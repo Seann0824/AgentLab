@@ -45,7 +45,11 @@ impl QueryExpansionAgent {
     /// 把 `query` 扩展成多个等价查询句。
     pub async fn expand(&mut self, query: &str) -> Result<Vec<String>, String> {
         let result = self.inner.run(query).await?;
-        println!("{:?}", result);
+        tracing::debug!(
+            query = %query,
+            expanded = ?result.queries,
+            "[QueryExpansionAgent] expanded query"
+        );
 
         Ok(result.queries)
     }

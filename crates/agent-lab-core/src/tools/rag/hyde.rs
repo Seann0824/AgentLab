@@ -47,6 +47,11 @@ impl HydeAgent {
     /// 根据 query 生成假设答案文档。
     pub async fn generate(&mut self, query: &str) -> Result<String, String> {
         let result = self.inner.run(query).await?;
+        tracing::debug!(
+            query = %query,
+            hypothetical_document = %result.hypothetical_document,
+            "[HydeAgent] generated hypothetical document"
+        );
         Ok(result.hypothetical_document)
     }
 }
@@ -83,13 +88,11 @@ impl Tool for GenerateHypotheticalDocumentTool {
     }
 
     async fn execute(&self, args: Value) -> Result<String, ToolError> {
-        let a = serde_json::to_string(&args).map_err(|e| {
+        serde_json::to_string(&args).map_err(|e| {
             ToolError::Internal(format!(
                 "[GenerateHypotheticalDocumentTool] serialize args failed: {}",
                 e
             ))
-        });
-        println!("{:?}", a);
-        a
+        })
     }
 }

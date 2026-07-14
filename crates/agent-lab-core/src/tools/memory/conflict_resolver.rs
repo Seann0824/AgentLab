@@ -64,10 +64,16 @@ Output must call the resolve_conflicts_batch tool with a resolutions array, one 
             candidates: candidates.to_vec(),
         }];
         let results = self.resolve_batch(requests).await?;
-        results
+        let resolution = results
             .into_iter()
             .next()
-            .ok_or_else(|| "[MemoryConflictResolver] batch returned empty results".to_string())
+            .ok_or_else(|| "[MemoryConflictResolver] batch returned empty results".to_string())?;
+        tracing::debug!(
+            new_fact = %new_fact,
+            ?resolution,
+            "[MemoryConflictResolver] single resolution"
+        );
+        Ok(resolution)
     }
 
     /// 批量冲突裁决。
@@ -95,12 +101,22 @@ Output must call the resolve_conflicts_batch tool with a resolutions array, one 
 
         let original_count = fast_results.len() + llm_requests.len();
 
+        tracing::debug!(
+            llm_request_count = llm_requests.len(),
+            fast_path_count = fast_results.len(),
+            "[MemoryConflictResolver] starting batch resolution"
+        );
+
         if llm_requests.is_empty() {
             return Ok(restore_order(original_count, &fast_results));
         }
 
         let input = build_batch_resolution_prompt(&llm_requests);
         let result = self.inner.run(&input).await?;
+        tracing::debug!(
+            resolution_count = result.resolutions.len(),
+            "[MemoryConflictResolver] batch resolution finished"
+        );
         let mut result_map: HashMap<usize, ConflictResolution> = result
             .resolutions
             .into_iter()

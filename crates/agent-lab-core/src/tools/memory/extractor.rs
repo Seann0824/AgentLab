@@ -53,6 +53,13 @@ impl EntityExtractorAgent {
         content: &str,
     ) -> Result<(Vec<EntityInput>, Vec<RelationInput>), String> {
         let result = self.inner.run(content).await?;
+        tracing::debug!(
+            entity_count = result.entities.len(),
+            relation_count = result.relations.len(),
+            entities = ?result.entities,
+            relations = ?result.relations,
+            "[EntityExtractorAgent] extracted entities and relations"
+        );
         Ok((result.entities, result.relations))
     }
 }

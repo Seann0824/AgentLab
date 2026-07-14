@@ -79,6 +79,11 @@ Rules:
             today, context
         );
         let result = self.inner.run(&input).await?;
+        tracing::debug!(
+            fact_count = result.facts.len(),
+            facts = ?result.facts,
+            "[MemoryFactExtractor] extracted facts"
+        );
         Ok(result.facts)
     }
 }

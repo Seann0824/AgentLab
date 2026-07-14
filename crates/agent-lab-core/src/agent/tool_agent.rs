@@ -42,6 +42,13 @@ impl<T: DeserializeOwned> ToolAgent<T> {
     ///
     /// 工具失败或结果无法解析时，会把错误信息加入对话历史并重新调用 LLM，最多重试 3 次。
     pub async fn run(&mut self, input: &str) -> Result<T, String> {
+        let name = self.base.name.clone();
+        tracing::debug!(
+            agent = %name,
+            input = %input,
+            "[ToolAgent] starting tool-based sub-agent run"
+        );
+
         let mut messages = vec![
             system_message(self.base.system_prompt.clone().unwrap_or_default()),
             user_message(input),
@@ -57,23 +64,43 @@ impl<T: DeserializeOwned> ToolAgent<T> {
                 .llm
                 .chat_completion(messages.clone(), tools.clone(), ToolChoiceType::Auto)
                 .await
-                .map_err(|e| format!("[ToolAgent] LLM call failed: {}", e))?;
+                .map_err(|e| {
+                    tracing::error!(agent = %name, attempt, "[ToolAgent] LLM call failed: {}", e);
+                    format!("[ToolAgent] LLM call failed: {}", e)
+                })?;
 
             let choice = resp
                 .choices
                 .into_iter()
                 .next()
-                .ok_or_else(|| "[ToolAgent] LLM returned no choice".to_string())?;
+                .ok_or_else(|| {
+                    tracing::error!(agent = %name, attempt, "[ToolAgent] LLM returned no choice");
+                    "[ToolAgent] LLM returned no choice".to_string()
+                })?;
 
             let tool_calls = choice
                 .message
                 .tool_calls
-                .ok_or_else(|| "[ToolAgent] LLM did not call the required tool".to_string())?;
+                .ok_or_else(|| {
+                    tracing::error!(agent = %name, attempt, "[ToolAgent] LLM did not call the required tool");
+                    "[ToolAgent] LLM did not call the required tool".to_string()
+                })?;
 
             let first_call = tool_calls
                 .into_iter()
                 .next()
-                .ok_or_else(|| "[ToolAgent] empty tool calls".to_string())?;
+                .ok_or_else(|| {
+                    tracing::error!(agent = %name, attempt, "[ToolAgent] empty tool calls");
+                    "[ToolAgent] empty tool calls".to_string()
+                })?;
+
+            tracing::debug!(
+                agent = %name,
+                attempt,
+                tool_name = %first_call.function.name.as_deref().unwrap_or("unknown"),
+                tool_arguments = %first_call.function.arguments.as_deref().unwrap_or("{}"),
+                "[ToolAgent] LLM issued tool call"
+            );
 
             // 把 assistant 的工具调用请求加入历史。
             messages.push(assistant_message_with_tools("", vec![first_call.clone()]));
@@ -85,13 +112,34 @@ impl<T: DeserializeOwned> ToolAgent<T> {
                 Err(error_msg) => error_msg.clone(),
             };
 
+            tracing::debug!(
+                agent = %name,
+                attempt,
+                tool_result = %response_text,
+                "[ToolAgent] tool execution finished"
+            );
+
             // 把工具执行结果加入历史。
             messages.push(tool_message(tool_call_id, response_text.clone()));
 
             match tool_result {
                 Ok(content) => match serde_json::from_str::<T>(&content) {
-                    Ok(value) => return Ok(value),
+                    Ok(value) => {
+                        tracing::debug!(
+                            agent = %name,
+                            output = %content,
+                            "[ToolAgent] successfully deserialized tool output"
+                        );
+                        return Ok(value);
+                    }
                     Err(e) => {
+                        tracing::warn!(
+                            agent = %name,
+                            attempt,
+                            error = %e,
+                            content = %content,
+                            "[ToolAgent] failed to deserialize tool output, will retry"
+                        );
                         if attempt + 1 == MAX_RETRIES {
                             return Err(format!(
                                 "[ToolAgent] failed to deserialize tool output after {} attempts: {}",
@@ -105,6 +153,12 @@ impl<T: DeserializeOwned> ToolAgent<T> {
                     }
                 },
                 Err(e) => {
+                    tracing::warn!(
+                        agent = %name,
+                        attempt,
+                        error = %e,
+                        "[ToolAgent] tool execution failed, will retry"
+                    );
                     if attempt + 1 == MAX_RETRIES {
                         return Err(format!(
                             "[ToolAgent] tool execution failed after {} attempts: {}",
@@ -119,6 +173,7 @@ impl<T: DeserializeOwned> ToolAgent<T> {
             }
         }
 
+        tracing::error!(agent = %name, "[ToolAgent] exceeded max retries");
         Err("[ToolAgent] exceeded max retries".to_string())
     }
 }
