@@ -1,28 +1,26 @@
 use chrono::Local;
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use crate::base::llm::AgentsLLM;
 use crate::db::get_db_client;
 use crate::error::AgentLabError;
 use crate::services::ServiceError;
 use crate::storage::{MemoryStore, Neo4jStore, OllamaEmbedder, PgStore};
-use crate::tools::memory::base::Memory as MemoryTrait;
 use crate::tools::memory::base::{MemoryConfig, MemoryItem, RetrieveRequest};
-use crate::tools::memory::episodic_memory::EpisodicMemory;
-use crate::tools::memory::extractor::EntityExtractorAgent;
-use crate::tools::memory::perceptual_memory::PerceptualMemory;
-use crate::tools::memory::semantic_memory::SemanticMemory;
-use crate::tools::memory::working_memory::WorkingMemory;
+use crate::tools::memory::engine::MemoryEngine;
+use crate::tools::memory::fact_extractor::MemoryFactExtractor;
+use crate::tools::memory::strategies::{
+    EpisodicStrategy, PerceptualStrategy, SemanticStrategy, WorkingStrategy,
+};
 
 /// 记忆业务服务：面向应用层提供记忆 CRUD、搜索、统计、整合等能力。
 pub struct MemoryService {
     #[allow(dead_code)]
     config: MemoryConfig,
     user_id: String,
-    store: MemoryStore,
-    memory_types: HashMap<String, Box<dyn MemoryTrait>>,
-    extractor: EntityExtractorAgent,
+    engine: MemoryEngine,
+    fact_extractor: MemoryFactExtractor,
     current_session_id: Option<String>,
 }
 
@@ -55,46 +53,29 @@ impl MemoryService {
 
         let embedder = OllamaEmbedder::new(None, None);
         let store = MemoryStore::new(config.clone(), pg_store, neo4j_store, Arc::new(embedder));
-        let extractor = EntityExtractorAgent::new(llm.clone());
-        let semantic_extractor = EntityExtractorAgent::new(llm);
+        let fact_extractor = MemoryFactExtractor::new(llm.clone());
 
-        let mut memory_types: HashMap<String, Box<dyn MemoryTrait>> = HashMap::new();
-
+        let mut strategies: Vec<Box<dyn crate::tools::memory::strategy::MemoryStrategy>> = Vec::new();
         if enable_working {
-            memory_types.insert(
-                "working".into(),
-                Box::new(WorkingMemory::new(config.clone(), store.clone())),
-            );
+            strategies.push(Box::new(WorkingStrategy::new(config.clone())));
         }
         if enable_episodic {
-            memory_types.insert(
-                "episodic".into(),
-                Box::new(EpisodicMemory::new(config.clone(), store.clone())),
-            );
+            strategies.push(Box::new(EpisodicStrategy::new()));
         }
         if enable_semantic {
-            memory_types.insert(
-                "semantic".into(),
-                Box::new(SemanticMemory::new(
-                    config.clone(),
-                    store.clone(),
-                    semantic_extractor,
-                )),
-            );
+            strategies.push(Box::new(SemanticStrategy::new(llm.clone())));
         }
         if enable_perceptual {
-            memory_types.insert(
-                "perceptual".into(),
-                Box::new(PerceptualMemory::new(config.clone(), store.clone())),
-            );
+            strategies.push(Box::new(PerceptualStrategy::new()));
         }
+
+        let engine = MemoryEngine::new(store, config.clone(), strategies);
 
         Ok(Self {
             config,
             user_id,
-            store,
-            memory_types,
-            extractor,
+            engine,
+            fact_extractor,
             current_session_id: None,
         })
     }
@@ -124,41 +105,8 @@ impl MemoryService {
             importance as f64,
             metadata,
         );
-        let memory_id = memory_item.id.clone();
 
-        let Some(memory_store) = self.memory_types.get_mut(&memory_type) else {
-            return Err(ServiceError::invalid_argument(format!(
-                "记忆类型 {} 不存在",
-                memory_type
-            )))?;
-        };
-
-        if memory_type == "semantic" {
-            // 语义记忆自己负责实体抽取、metadata 标记和 Neo4j 引用图写入。
-            memory_store.add(memory_item).await;
-            return Ok(memory_id);
-        }
-
-        // 其他类型：统一抽取实体/关系，抽成功且非空则写 Neo4j 引用图。
-        match self.extractor.extract(&content).await {
-            Ok((entities, relations)) if !entities.is_empty() => {
-                self.store
-                    .add_with_reference_graph(memory_item, entities, relations)
-                    .await?;
-            }
-            Ok(_) => {
-                self.store.add(memory_item).await?;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "[MemoryService] entity extraction failed: {}, fallback to pg only",
-                    e
-                );
-                self.store.add(memory_item).await?;
-            }
-        }
-
-        Ok(memory_id)
+        Ok(self.engine.add(memory_item).await)
     }
 
     pub async fn search_memories(
@@ -172,15 +120,12 @@ impl MemoryService {
         let mut all_results = vec![];
 
         let types_to_search: Vec<String> = if memory_types.is_empty() {
-            self.memory_types.keys().cloned().collect()
+            self.engine.memory_types()
         } else {
             memory_types.to_vec()
         };
 
         for memory_type in &types_to_search {
-            let Some(memory_store) = self.memory_types.get_mut(memory_type) else {
-                continue;
-            };
             let request = RetrieveRequest {
                 query: query_owned.clone(),
                 limit: Some(limit),
@@ -188,34 +133,63 @@ impl MemoryService {
                 importance_threshold: Some(min_importance as f64),
                 ..Default::default()
             };
-            let results = memory_store.retrieve(request).await;
+            let results = self.engine.retrieve_by_type(memory_type, request).await;
             all_results.extend(results);
         }
 
-        let min_importance = min_importance as f64;
-        all_results.retain(|m| m.importance >= min_importance);
-        all_results.sort_by(|a, b| b.importance.total_cmp(&a.importance));
+        // 跨类型统一排序：使用各类型自身计算的 relevance_score，再乘以类型优先级。
+        all_results.sort_by(|a, b| {
+            let score_a = combined_search_score(a);
+            let score_b = combined_search_score(b);
+            score_b.total_cmp(&score_a)
+        });
         all_results.truncate(limit);
 
         Ok(all_results)
     }
 
+    /// 从对话上下文中提取事实，并内部决定记忆类型与重要性后批量存储。
+    ///
+    /// 这是给 `MemoryTool` 使用的“智能 add”入口：外部 AI 不再直接决定
+    /// content / memory_type / importance，只提供原始上下文。
+    pub async fn add_memories_from_context(
+        &mut self,
+        context: &str,
+    ) -> Result<Vec<String>, AgentLabError> {
+        let facts = match self.fact_extractor.extract(context).await {
+            Ok(facts) => facts,
+            Err(e) => {
+                tracing::warn!(
+                    "[MemoryService] fact extraction failed: {}, fallback to store raw context",
+                    e
+                );
+                vec![context.to_string()]
+            }
+        };
+
+        let mut ids = Vec::new();
+        for fact in facts {
+            let memory_type = route_memory_type(&fact);
+            let importance = estimate_importance(&fact);
+            let id = self
+                .add_memory(fact, memory_type.to_string(), importance, None)
+                .await?;
+            ids.push(id);
+        }
+
+        Ok(ids)
+    }
+
     pub async fn forget_by_type(
-        &self,
+        &mut self,
         memory_type: &str,
         strategy: &str,
         threshold: f32,
         max_age_days: i64,
     ) -> Result<usize, AgentLabError> {
-        let Some(memory_store) = self.memory_types.get(memory_type) else {
-            return Err(ServiceError::invalid_argument(format!(
-                "记忆类型 {} 不存在",
-                memory_type
-            )))?;
-        };
-
-        let count = memory_store
-            .forget(strategy, threshold as f64, max_age_days)
+        let count = self
+            .engine
+            .forget(memory_type, strategy, threshold as f64, max_age_days)
             .await?;
         Ok(count)
     }
@@ -231,14 +205,14 @@ impl MemoryService {
     }
 
     pub async fn update_memory(
-        &mut self,
+        &self,
         memory_id: &str,
         content: Option<&str>,
         importance: Option<f32>,
         metadata: Option<Value>,
     ) -> Result<bool, AgentLabError> {
         let ok = self
-            .store
+            .engine
             .update(
                 memory_id,
                 content,
@@ -249,8 +223,8 @@ impl MemoryService {
         Ok(ok)
     }
 
-    pub async fn remove_memory(&mut self, memory_id: &str) -> Result<bool, AgentLabError> {
-        let ok = self.store.delete(memory_id).await?;
+    pub async fn remove_memory(&self, memory_id: &str) -> Result<bool, AgentLabError> {
+        let ok = self.engine.remove(memory_id).await?;
         Ok(ok)
     }
 
@@ -260,7 +234,7 @@ impl MemoryService {
         limit: usize,
     ) -> Result<String, AgentLabError> {
         let items = self
-            .store
+            .engine
             .list_by_type(memory_type, Some(&self.user_id), Some(limit as i64))
             .await?;
 
@@ -284,16 +258,16 @@ impl MemoryService {
 
     pub async fn get_stats(&self, memory_type: &str) -> Result<String, AgentLabError> {
         let count = self
-            .store
+            .engine
             .count_by_type(memory_type, Some(&self.user_id))
             .await?;
         let avg_importance = self
-            .store
+            .engine
             .avg_importance_by_type(memory_type, Some(&self.user_id))
             .await?
             .unwrap_or(0.0);
         let time_span_days = self
-            .store
+            .engine
             .time_span_days_by_type(memory_type, Some(&self.user_id))
             .await?
             .unwrap_or(0.0);
@@ -311,13 +285,13 @@ impl MemoryService {
     pub async fn clear_all(&mut self, memory_type: Option<&str>) -> Result<u64, AgentLabError> {
         match memory_type {
             Some(t) => {
-                let count = self.store.clear_by_type(t).await?;
+                let count = self.engine.clear_by_type(t).await?;
                 Ok(count)
             }
             None => {
                 let mut total = 0u64;
-                for t in self.memory_types.keys() {
-                    total += self.store.clear_by_type(t).await?;
+                for t in self.engine.memory_types() {
+                    total += self.engine.clear_by_type(&t).await?;
                 }
                 Ok(total)
             }
@@ -414,7 +388,7 @@ impl MemoryService {
     }
 
     pub async fn forget_by_type_agent(
-        &self,
+        &mut self,
         memory_type: Option<&str>,
         strategy: Option<&str>,
         threshold: Option<f32>,
@@ -483,4 +457,217 @@ fn memory_type_label(memory_type: &str) -> &'static str {
         "perceptual" => "感知记忆",
         _ => "未知类型",
     }
+}
+
+/// 跨类型搜索统一评分。
+///
+/// 优先使用各类型 `retrieve` 阶段写入 metadata 的 relevance_score；
+/// 若不存在则回退到 importance。再乘以类型优先级做微调。
+fn combined_search_score(item: &MemoryItem) -> f64 {
+    let relevance = item
+        .metadata
+        .get("relevance_score")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(item.importance);
+    let type_priority = match item.memory_type.as_str() {
+        "semantic" => 1.05,
+        "episodic" => 1.00,
+        "working" => 0.95,
+        "perceptual" => 0.90,
+        _ => 0.90,
+    };
+    relevance * type_priority
+}
+
+/// 根据事实内容路由到合适的记忆类型。
+fn route_memory_type(fact: &str) -> &'static str {
+    let lower = fact.to_lowercase();
+    if contains_time_info(&lower) {
+        "episodic"
+    } else if contains_personal_fact(&lower) {
+        "semantic"
+    } else if is_temporary(&lower) {
+        "working"
+    } else {
+        "perceptual"
+    }
+}
+
+fn contains_time_info(text: &str) -> bool {
+    const TIME_KEYWORDS: &[&str] = &[
+        "yesterday",
+        "today",
+        "tomorrow",
+        "last week",
+        "next week",
+        "last month",
+        "next month",
+        "last year",
+        "next year",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+        "昨天",
+        "今天",
+        "明天",
+        "上周",
+        "下周",
+        "上个月",
+        "下个月",
+        "去年",
+        "明年",
+        "星期一",
+        "星期二",
+        "星期三",
+        "星期四",
+        "星期五",
+        "星期六",
+        "星期日",
+        "周一",
+        "周二",
+        "周三",
+        "周四",
+        "周五",
+        "周六",
+        "周日",
+        "一月",
+        "二月",
+        "三月",
+        "四月",
+        "五月",
+        "六月",
+        "七月",
+        "八月",
+        "九月",
+        "十月",
+        "十一月",
+        "十二月",
+        "点",
+        "号",
+        "日",
+    ];
+    TIME_KEYWORDS.iter().any(|kw| text.contains(kw))
+}
+
+fn contains_personal_fact(text: &str) -> bool {
+    const PERSONAL_KEYWORDS: &[&str] = &[
+        "name is",
+        "i am",
+        "i'm",
+        "i like",
+        "i love",
+        "i hate",
+        "i prefer",
+        "my",
+        "my name",
+        "my job",
+        "my work",
+        "my hobby",
+        "my family",
+        "我叫",
+        "我是",
+        "我喜欢",
+        "我讨厌",
+        "我偏好",
+        "我的",
+        "我的名字",
+        "我的工作",
+    ];
+    PERSONAL_KEYWORDS.iter().any(|kw| text.contains(kw))
+}
+
+fn is_temporary(text: &str) -> bool {
+    const TEMP_KEYWORDS: &[&str] = &["now", "currently", "at the moment", "暂时", "目前", "当前"];
+    TEMP_KEYWORDS.iter().any(|kw| text.contains(kw))
+}
+
+/// 启发式评估事实重要性。
+fn estimate_importance(fact: &str) -> f32 {
+    let lower = fact.to_lowercase();
+    if contains_health_or_identity(&lower) {
+        0.9
+    } else if contains_intent_or_need(&lower) {
+        0.75
+    } else if contains_preference_or_plan(&lower) {
+        0.6
+    } else {
+        0.45
+    }
+}
+
+fn contains_health_or_identity(text: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "doctor",
+        "appointment",
+        "hospital",
+        "medical",
+        "symptom",
+        "treatment",
+        "cardiologist",
+        "dentist",
+        "name is",
+        "i am",
+        "i'm",
+        "我叫",
+        "我是",
+        "医生",
+        "医院",
+        "预约",
+        "症状",
+        "治疗",
+        "名字",
+    ];
+    KEYWORDS.iter().any(|kw| text.contains(kw))
+}
+
+fn contains_intent_or_need(text: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "want to",
+        "need to",
+        "plan to",
+        "book",
+        "schedule",
+        "call",
+        "appointment",
+        "想要",
+        "需要",
+        "计划",
+        "预约",
+        "打电话",
+    ];
+    KEYWORDS.iter().any(|kw| text.contains(kw))
+}
+
+fn contains_preference_or_plan(text: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "like",
+        "love",
+        "hate",
+        "prefer",
+        "enjoy",
+        "plan",
+        "goal",
+        "喜欢",
+        "讨厌",
+        "偏好",
+        "计划",
+        "目标",
+    ];
+    KEYWORDS.iter().any(|kw| text.contains(kw))
 }

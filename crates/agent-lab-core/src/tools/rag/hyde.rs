@@ -74,9 +74,7 @@ impl Tool for GenerateHypotheticalDocumentTool {
                 "hypothetical_document".to_string(),
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::String),
-                    description: Some(
-                        "200~400 字的假设答案段落，用于向量检索".to_string(),
-                    ),
+                    description: Some("200~400 字的假设答案段落，用于向量检索".to_string()),
                     ..Default::default()
                 }),
             )])),
@@ -85,11 +83,13 @@ impl Tool for GenerateHypotheticalDocumentTool {
     }
 
     async fn execute(&self, args: Value) -> Result<String, ToolError> {
-        serde_json::to_string(&args).map_err(|e| {
+        let a = serde_json::to_string(&args).map_err(|e| {
             ToolError::Internal(format!(
                 "[GenerateHypotheticalDocumentTool] serialize args failed: {}",
                 e
             ))
-        })
+        });
+        println!("{:?}", a);
+        a
     }
 }

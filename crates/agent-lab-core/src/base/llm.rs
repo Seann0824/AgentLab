@@ -112,7 +112,7 @@ impl AgentsLLM {
     ) -> impl Stream<Item = ChatCompletionStreamResponse> + use<> {
         // build request
         let req = ChatCompletionStreamRequest::new(self.model.clone(), messages)
-            .temperature(temperature.unwrap_or(1f64))
+            .temperature(temperature.unwrap_or(1.0))
             .tools(tools.unwrap_or(vec![]))
             .tool_choice(openai_api_rs::v1::chat_completion::ToolChoiceType::Auto);
 
@@ -130,7 +130,7 @@ impl AgentsLLM {
         let req = ChatCompletionRequest::new(self.model.clone(), messages)
             .tools(tools)
             .tool_choice(tool_choice)
-            .temperature(0.0);
+            .temperature(1.0);
 
         self.client
             .chat_completion(req)

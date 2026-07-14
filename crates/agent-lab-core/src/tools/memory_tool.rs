@@ -55,7 +55,7 @@ impl Tool for MemoryTool {
     }
 
     fn description(&self) -> &str {
-        "记忆管理工具。支持 add(添加记忆), search(搜索记忆), summary(获取摘要), stats(获取统计), update(更新记忆), remove(删除记忆), forget(遗忘记忆), consolidate(整合记忆), clear_all(清空所有记忆)。"
+        "记忆管理工具。当前仅向 AI 暴露 add(从对话上下文中智能提取并添加记忆), search(搜索所有类型记忆), update(更新已有记忆内容)。"
     }
 
     fn parameters_schema(&self) -> openai_api_rs::v1::types::FunctionParameters {
@@ -65,27 +65,21 @@ impl Tool for MemoryTool {
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::String),
                     description: Some(
-                        "要执行的操作: add(添加记忆), search(搜索记忆), summary(获取摘要), stats(获取统计), update(更新记忆), remove(删除记忆), forget(遗忘记忆), consolidate(整合记忆), clear_all(清空所有记忆)".to_string(),
+                        "要执行的操作: add(添加记忆), search(搜索记忆), update(更新记忆)".to_string(),
                     ),
                     enum_values: Some(vec![
                         "add".to_string(),
                         "search".to_string(),
-                        "summary".to_string(),
-                        "stats".to_string(),
                         "update".to_string(),
-                        "remove".to_string(),
-                        "forget".to_string(),
-                        "consolidate".to_string(),
-                        "clear_all".to_string(),
                     ]),
                     ..Default::default()
                 }),
             ),
             (
-                "content".to_string(),
+                "context".to_string(),
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::String),
-                    description: Some("add/update 时使用，要保存或更新的记忆内容".to_string()),
+                    description: Some("add 时使用，待提取事实的对话上下文".to_string()),
                     ..Default::default()
                 }),
             ),
@@ -98,24 +92,18 @@ impl Tool for MemoryTool {
                 }),
             ),
             (
-                "memory_type".to_string(),
+                "memory_id".to_string(),
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::String),
-                    description: Some("记忆类型：working, episodic, semantic, perceptual（默认：working）".to_string()),
-                    enum_values: Some(vec![
-                        "working".to_string(),
-                        "episodic".to_string(),
-                        "semantic".to_string(),
-                        "perceptual".to_string(),
-                    ]),
+                    description: Some("update 时必需，目标记忆ID".to_string()),
                     ..Default::default()
                 }),
             ),
             (
-                "memory_id".to_string(),
+                "content".to_string(),
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::String),
-                    description: Some("update/remove 时必需，目标记忆ID".to_string()),
+                    description: Some("update 时使用，要更新的记忆内容".to_string()),
                     ..Default::default()
                 }),
             ),
@@ -123,7 +111,7 @@ impl Tool for MemoryTool {
                 "importance".to_string(),
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::Number),
-                    description: Some("add/update 时使用，重要性 0.0-1.0，默认 0.5".to_string()),
+                    description: Some("update 时使用，重要性 0.0-1.0，默认 0.5".to_string()),
                     ..Default::default()
                 }),
             ),
@@ -131,72 +119,7 @@ impl Tool for MemoryTool {
                 "limit".to_string(),
                 Box::new(types::JSONSchemaDefine {
                     schema_type: Some(types::JSONSchemaType::Number),
-                    description: Some("search/stats 时使用，返回条数上限，默认 5".to_string()),
-                    ..Default::default()
-                }),
-            ),
-            (
-                "strategy".to_string(),
-                Box::new(types::JSONSchemaDefine {
-                    schema_type: Some(types::JSONSchemaType::String),
-                    description: Some("forget 时使用，遗忘策略：importance_based/time_based/capacity_based（默认 importance_based）".to_string()),
-                    enum_values: Some(vec![
-                        "importance_based".to_string(),
-                        "time_based".to_string(),
-                        "capacity_based".to_string(),
-                    ]),
-                    ..Default::default()
-                }),
-            ),
-            (
-                "threshold".to_string(),
-                Box::new(types::JSONSchemaDefine {
-                    schema_type: Some(types::JSONSchemaType::Number),
-                    description: Some("forget 时使用，遗忘阈值（默认 0.1）".to_string()),
-                    ..Default::default()
-                }),
-            ),
-            (
-                "max_age_days".to_string(),
-                Box::new(types::JSONSchemaDefine {
-                    schema_type: Some(types::JSONSchemaType::Number),
-                    description: Some("forget 策略为 time_based 时使用，最大保留天数（默认 30）".to_string()),
-                    ..Default::default()
-                }),
-            ),
-            (
-                "from_type".to_string(),
-                Box::new(types::JSONSchemaDefine {
-                    schema_type: Some(types::JSONSchemaType::String),
-                    description: Some("consolidate 时使用，整合来源类型（默认 working）".to_string()),
-                    enum_values: Some(vec![
-                        "working".to_string(),
-                        "episodic".to_string(),
-                        "semantic".to_string(),
-                        "perceptual".to_string(),
-                    ]),
-                    ..Default::default()
-                }),
-            ),
-            (
-                "to_type".to_string(),
-                Box::new(types::JSONSchemaDefine {
-                    schema_type: Some(types::JSONSchemaType::String),
-                    description: Some("consolidate 时使用，整合目标类型（默认 episodic）".to_string()),
-                    enum_values: Some(vec![
-                        "working".to_string(),
-                        "episodic".to_string(),
-                        "semantic".to_string(),
-                        "perceptual".to_string(),
-                    ]),
-                    ..Default::default()
-                }),
-            ),
-            (
-                "importance_threshold".to_string(),
-                Box::new(types::JSONSchemaDefine {
-                    schema_type: Some(types::JSONSchemaType::Number),
-                    description: Some("consolidate 时使用，整合重要性阈值（默认 0.7）".to_string()),
+                    description: Some("search 时使用，返回条数上限，默认 5".to_string()),
                     ..Default::default()
                 }),
             ),
@@ -214,21 +137,23 @@ impl Tool for MemoryTool {
 
         let result = match action {
             "add" => {
+                let context = args["context"].as_str().unwrap_or("");
+                if context.is_empty() {
+                    return Err(ToolError::InvalidArgument("context 不能为空".to_string()));
+                }
                 inner
                     .memory_service
-                    .add_memory_agent(
-                        args["content"].as_str(),
-                        args["memory_type"].as_str(),
-                        args["importance"].as_f64().map(|v| v as f32),
-                    )
+                    .add_memories_from_context(context)
                     .await
+                    .map(|ids| format!("已提取并存储 {} 条记忆（IDs: {}）", ids.len(), ids.join(", ")))
             }
             "search" => {
                 inner
                     .memory_service
                     .search_memories_agent(
                         args["query"].as_str(),
-                        args["memory_type"].as_str(),
+                        // 搜索不再由外部指定 memory_type，内部会搜索所有启用类型并统一排序。
+                        None,
                         args["limit"].as_u64(),
                     )
                     .await
@@ -256,40 +181,10 @@ impl Tool for MemoryTool {
                     )
                     .await
             }
-            "remove" => {
-                inner
-                    .memory_service
-                    .remove_memory_agent(args["memory_id"].as_str())
-                    .await
-            }
-            "forget" => {
-                inner
-                    .memory_service
-                    .forget_by_type_agent(
-                        args["memory_type"].as_str(),
-                        args["strategy"].as_str(),
-                        args["threshold"].as_f64().map(|v| v as f32),
-                        args["max_age_days"].as_u64(),
-                    )
-                    .await
-            }
-            "consolidate" => {
-                inner
-                    .memory_service
-                    .consolidate_memories_agent(
-                        args["from_type"].as_str(),
-                        args["to_type"].as_str(),
-                        args["importance_threshold"].as_f64().map(|v| v as f32),
-                    )
-                    .await
-            }
-            "clear_all" => {
-                inner
-                    .memory_service
-                    .clear_all_agent(args["memory_type"].as_str())
-                    .await
-            }
-            _ => return Err(ToolError::InvalidArgument(format!("不支持的 action: {}", action))),
+            _ => return Err(ToolError::InvalidArgument(format!(
+                "不支持的 action: {}。当前仅支持 add / search / update",
+                action
+            ))),
         };
 
         result.map_err(|e| {

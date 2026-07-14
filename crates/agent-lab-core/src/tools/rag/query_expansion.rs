@@ -16,7 +16,7 @@ pub struct QueryExpansionAgent {
     inner: ToolAgent<ExpansionResult>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 pub struct ExpansionResult {
     pub queries: Vec<String>,
 }
@@ -45,6 +45,8 @@ impl QueryExpansionAgent {
     /// 把 `query` 扩展成多个等价查询句。
     pub async fn expand(&mut self, query: &str) -> Result<Vec<String>, String> {
         let result = self.inner.run(query).await?;
+        println!("{:?}", result);
+
         Ok(result.queries)
     }
 }

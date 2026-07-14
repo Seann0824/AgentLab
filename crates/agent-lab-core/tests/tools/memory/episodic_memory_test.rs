@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use agent_lab_core::db::get_db_client;
 use agent_lab_core::tools::memory::base::{MemoryConfig, MemoryItem, RetrieveRequest};
-use agent_lab_core::tools::memory::episodic_memory::EpisodicMemory;
-use agent_lab_core::storage::{MemoryStore, Neo4jStore, PgStore, embedder::Embedder};
-use agent_lab_core::tools::memory::Memory;
+use agent_lab_core::storage::{embedder::Embedder, MemoryStore, Neo4jStore, PgStore};
+use agent_lab_core::tools::memory::engine::MemoryEngine;
+use agent_lab_core::tools::memory::strategies::EpisodicStrategy;
 
 struct MockEmbedder;
 
@@ -43,7 +43,11 @@ async fn test_episodic_memory_add_and_retrieve() {
     let store = create_test_store().await;
     cleanup_episodes(&store).await;
 
-    let mut episodic = EpisodicMemory::new(MemoryConfig::new(), store.clone());
+    let mut engine = MemoryEngine::new(
+        store.clone(),
+        MemoryConfig::new(),
+        vec![Box::new(EpisodicStrategy::new())],
+    );
 
     let item1 = MemoryItem::new(
         "test_user".to_string(),
@@ -67,9 +71,9 @@ async fn test_episodic_memory_add_and_retrieve() {
         serde_json::json!({"session_id": "session_2"}),
     );
 
-    let id1 = episodic.add(item1).await;
-    let id2 = episodic.add(item2).await;
-    let _id3 = episodic.add(item3).await;
+    let id1 = engine.add(item1).await;
+    let id2 = engine.add(item2).await;
+    let _id3 = engine.add(item3).await;
 
     let request = RetrieveRequest {
         query: "西湖".to_string(),
@@ -77,7 +81,7 @@ async fn test_episodic_memory_add_and_retrieve() {
         user_id: Some("test_user".to_string()),
         ..Default::default()
     };
-    let results = episodic.retrieve(request).await;
+    let results = engine.retrieve_by_type("episodic", request).await;
 
     assert!(!results.is_empty(), "应该能检索到西湖相关记忆");
     assert!(
@@ -91,7 +95,7 @@ async fn test_episodic_memory_add_and_retrieve() {
         user_id: Some("test_user".to_string()),
         ..Default::default()
     };
-    let results2 = episodic.retrieve(request2).await;
+    let results2 = engine.retrieve_by_type("episodic", request2).await;
     assert!(
         results2.iter().any(|item| item.id == id2),
         "检索结果应包含 Q4 产品规划那条记忆"
