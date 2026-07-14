@@ -60,12 +60,8 @@ pub fn split_paragraphs_with_headings(text: String) -> Vec<Paragraph> {
             );
             buf.clear();
 
-            let mut level = raw.len() - raw.trim_start_matches("#").len();
+            let level = raw.len() - raw.trim_start_matches("#").len();
             let title = raw.trim_start_matches("#").trim().to_string();
-
-            if level <= 0 {
-                level = 1;
-            }
 
             // 层级小了说明前面的文本内容都处理完成了，把处理完的标题弹出
             while level <= heading_stack.len() {
