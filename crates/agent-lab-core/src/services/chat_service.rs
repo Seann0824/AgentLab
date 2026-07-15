@@ -13,9 +13,10 @@ use crate::base::provider_config::ModelSelection;
 use crate::error::AgentLabError;
 use crate::services::chat_dto::{ChatMessage, SessionSummary};
 use crate::services::{MessageService, ProviderResolver, RagService, SessionService};
-use crate::tools::memory_tool::MemoryTool;
-use crate::tools::rag_tool::RagTool;
-use crate::tools::time_tool::TimeTool;
+use crate::tools::memory::MemoryTool;
+use crate::tools::rag::RagTool;
+use crate::tools::shell::ShellTool;
+use crate::tools::time::TimeTool;
 use crate::tools::web_search::WebSearch;
 use openai_api_rs::v1::chat_completion::ChatCompletionMessage;
 
@@ -86,6 +87,7 @@ impl ChatService {
         let search_tool = Box::new(WebSearch::serpapi(
             std::env::var("SERPAPI_API_KEY").expect("SERPAPI_API_KEY missing"),
         ));
+        let shell_tool = Box::new(ShellTool::new());
 
         let mut builder = AgentBuilder::new()
             .name("chat agent")
@@ -94,6 +96,7 @@ impl ChatService {
             .system_prompt(system_prompt)
             .tool(time_tool)
             .tool(search_tool)
+            .tool(shell_tool)
             .enable_tool_calling(true);
 
         if let Some(rag_service) = &self.rag_service {
@@ -357,4 +360,3 @@ impl ChatService {
         Ok(session_id)
     }
 }
-

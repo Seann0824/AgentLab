@@ -1,5 +1,5 @@
 use agent_lab_core::tools::rag::Paragraph;
-use agent_lab_core::tools::rag_tool::RagTool;
+use agent_lab_core::tools::rag::RagTool;
 
 fn tool() -> RagTool {
     RagTool::new()
@@ -70,7 +70,10 @@ fn test_split_heading_hierarchy() {
 
     assert_eq!(ps.len(), 3);
     assert_eq!(ps[0].heading_path, Some("Chapter 1".to_string()));
-    assert_eq!(ps[1].heading_path, Some("Chapter 1 > Section 1.1".to_string()));
+    assert_eq!(
+        ps[1].heading_path,
+        Some("Chapter 1 > Section 1.1".to_string())
+    );
     assert_eq!(ps[2].heading_path, Some("Chapter 2".to_string()));
 }
 
@@ -302,10 +305,7 @@ fn test_preprocess_italic_underscore() {
 fn test_preprocess_bold_underscore_not_eaten_by_italic() {
     let rag = tool();
     // __text__ 应该整体变成 text，而不是被 _text_ 截断
-    assert_eq!(
-        rag.preprocess_markdown_for_embedding("__text__"),
-        "text"
-    );
+    assert_eq!(rag.preprocess_markdown_for_embedding("__text__"), "text");
 }
 
 #[test]

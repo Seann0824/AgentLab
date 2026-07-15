@@ -37,7 +37,8 @@ impl Tool for TimeTool {
             Box::new(types::JSONSchemaDefine {
                 schema_type: Some(types::JSONSchemaType::String),
                 description: Some(
-                    "时间格式，可选 'iso'（ISO 8601）、'readable'（可读格式）。默认为 'readable'。".to_string(),
+                    "时间格式，可选 'iso'（ISO 8601）、'readable'（可读格式）。默认为 'readable'。"
+                        .to_string(),
                 ),
                 ..Default::default()
             }),

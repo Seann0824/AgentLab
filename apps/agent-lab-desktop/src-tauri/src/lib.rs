@@ -9,7 +9,7 @@ use agent_lab_core::base::provider_config::{ModelSelection, ProviderConfig};
 use agent_lab_core::db::get_db_client;
 use agent_lab_core::services::{ChatService, MessageService, RagService, SessionService};
 use agent_lab_core::storage::ChatStore;
-use agent_lab_core::tools::memory_tool::MemoryTool;
+use agent_lab_core::tools::memory::MemoryTool;
 use state::AppState;
 use tauri::Manager;
 use tauri_plugin_store::StoreExt;
@@ -141,9 +141,9 @@ pub fn run() {
             let llm = build_default_llm(&providers, &default_model)
                 .map_err(|e| format!("构建默认 LLM 失败: {}", e))?;
 
-            let database_url =
-                std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
-            let neo4j_url = std::env::var("NEO4J_URL").unwrap_or_else(|_| "neo4j://127.0.0.1:7687".into());
+            let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
+            let neo4j_url =
+                std::env::var("NEO4J_URL").unwrap_or_else(|_| "neo4j://127.0.0.1:7687".into());
             let neo4j_user = std::env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".into());
             let neo4j_password = std::env::var("NEO4J_PASSWORD").unwrap_or_default();
 
@@ -178,14 +178,10 @@ pub fn run() {
                 }
             });
 
-            let mut chat_service = ChatService::new(
-                llm,
-                session_service,
-                message_service,
-                "default_user",
-            )
-            .with_resolver(resolver)
-            .with_rag_service(rag_service.clone());
+            let mut chat_service =
+                ChatService::new(llm, session_service, message_service, "default_user")
+                    .with_resolver(resolver)
+                    .with_rag_service(rag_service.clone());
             if let Some(tool) = memory_tool {
                 chat_service = chat_service.with_memory_tool(tool);
             }
